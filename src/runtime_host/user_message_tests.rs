@@ -75,21 +75,35 @@ async fn test_host() -> (RuntimeHost, String, TempDir) {
     )
 }
 
-fn turn_context(request_id: &str, agent_id: &str, tool: &str) -> OperationContext {
+fn turn_context(
+    request_id: &str,
+    agent_id: &str,
+    tool: &str,
+    turn_id: &str,
+    conversation_scope: &str,
+) -> OperationContext {
     let mut context = OperationContext::new(request_id, agent_id, tool);
-    context.turn_id = Some("turn-user-message-sync".to_owned());
-    context.conversation_scope_id = Some("conversation-user-message-sync".to_owned());
+    context.turn_id = Some(turn_id.to_owned());
+    context.conversation_scope_id = Some(conversation_scope.to_owned());
     context
 }
 
 #[tokio::test]
 async fn user_message_is_required_first_and_is_idempotent_per_turn() {
     let (host, agent_id, _directory) = test_host().await;
+    let scope = "conversation-user-message-sync";
+    let turn = "turn-user-message-sync";
 
     let error = host
         .call_persisted(
             "agent_progress",
-            turn_context("progress-before-user", &agent_id, "agent_progress"),
+            turn_context(
+                "progress-before-user",
+                &agent_id,
+                "agent_progress",
+                turn,
+                scope,
+            ),
             json!({"message":"should be rejected"}),
         )
         .await
@@ -99,19 +113,32 @@ async fn user_message_is_required_first_and_is_idempotent_per_turn() {
     let accepted = host
         .call_persisted(
             "agent_user_message",
-            turn_context("user-message-first", &agent_id, "agent_user_message"),
+            turn_context(
+                "user-message-first",
+                &agent_id,
+                "agent_user_message",
+                turn,
+                scope,
+            ),
             json!({"content":"Nguyên văn tin nhắn người dùng"}),
         )
         .await
         .expect("sync user message");
     assert_eq!(accepted["userMessageSynced"], true);
     assert_eq!(accepted["duplicate"], false);
+    assert_eq!(accepted["isFirstMessage"], true);
     let task_id = accepted["taskId"].as_str().expect("task ID").to_owned();
     let turn_id = accepted["turnId"].as_str().expect("turn ID").to_owned();
 
     host.call_persisted(
         "agent_progress",
-        turn_context("progress-after-user", &agent_id, "agent_progress"),
+        turn_context(
+            "progress-after-user",
+            &agent_id,
+            "agent_progress",
+            turn,
+            scope,
+        ),
         json!({"message":"now accepted"}),
     )
     .await
@@ -120,17 +147,30 @@ async fn user_message_is_required_first_and_is_idempotent_per_turn() {
     let duplicate = host
         .call_persisted(
             "agent_user_message",
-            turn_context("user-message-retry", &agent_id, "agent_user_message"),
+            turn_context(
+                "user-message-retry",
+                &agent_id,
+                "agent_user_message",
+                turn,
+                scope,
+            ),
             json!({"content":"Nguyên văn tin nhắn người dùng"}),
         )
         .await
         .expect("idempotent retry");
     assert_eq!(duplicate["duplicate"], true);
+    assert_eq!(duplicate["isFirstMessage"], true);
 
     let conflict = host
         .call_persisted(
             "agent_user_message",
-            turn_context("user-message-conflict", &agent_id, "agent_user_message"),
+            turn_context(
+                "user-message-conflict",
+                &agent_id,
+                "agent_user_message",
+                turn,
+                scope,
+            ),
             json!({"content":"Nội dung khác"}),
         )
         .await
@@ -150,4 +190,97 @@ async fn user_message_is_required_first_and_is_idempotent_per_turn() {
         .expect("stored user message payload");
     assert_eq!(payload["role"], "user");
     assert_eq!(payload["content"], "Nguyên văn tin nhắn người dùng");
+}
+
+#[tokio::test]
+async fn first_message_seeds_task_id_and_only_first_final_can_name_chat() {
+    let (host, agent_id, _directory) = test_host().await;
+    let scope = "conversation-first-message-identity";
+    let first_turn = "turn-first";
+    let first_text = "Khắc phục lỗi git diff stat trong dự án";
+
+    let first = host
+        .call_persisted(
+            "agent_user_message",
+            turn_context(
+                "first-user",
+                &agent_id,
+                "agent_user_message",
+                first_turn,
+                scope,
+            ),
+            json!({"content":first_text}),
+        )
+        .await
+        .expect("first user message");
+    assert_eq!(first["isFirstMessage"], true);
+    assert_eq!(first["suggestedTitleRequired"], true);
+    assert_eq!(first["provisionalTitle"], first_text);
+    let task_id = first["taskId"].as_str().expect("task id").to_owned();
+    assert!(task_id.starts_with("task-chat-"));
+
+    let provisional_title = sqlx::query_scalar::<_, String>("SELECT title FROM tasks WHERE id=?")
+        .bind(&task_id)
+        .fetch_one(host.repository.pool())
+        .await
+        .expect("provisional title");
+    assert_eq!(provisional_title, first_text);
+
+    let completed = host
+        .call_persisted(
+            "agent_turn_complete",
+            turn_context(
+                "first-complete",
+                &agent_id,
+                "agent_turn_complete",
+                first_turn,
+                scope,
+            ),
+            json!({"content":"Đã xử lý xong.", "suggestedTitle":"Sửa lỗi Git diff stat"}),
+        )
+        .await
+        .expect("first completion");
+    assert_eq!(completed["titleUpdated"], true);
+
+    let second_turn = "turn-second";
+    let second = host
+        .call_persisted(
+            "agent_user_message",
+            turn_context(
+                "second-user",
+                &agent_id,
+                "agent_user_message",
+                second_turn,
+                scope,
+            ),
+            json!({"content":"Commit thay đổi"}),
+        )
+        .await
+        .expect("second user message");
+    assert_eq!(second["taskId"], task_id);
+    assert_eq!(second["isFirstMessage"], false);
+    assert_eq!(second["suggestedTitleRequired"], false);
+
+    let second_completed = host
+        .call_persisted(
+            "agent_turn_complete",
+            turn_context(
+                "second-complete",
+                &agent_id,
+                "agent_turn_complete",
+                second_turn,
+                scope,
+            ),
+            json!({"content":"Đã commit.", "suggestedTitle":"Tên này không được áp dụng"}),
+        )
+        .await
+        .expect("second completion");
+    assert_eq!(second_completed["titleUpdated"], false);
+
+    let final_title = sqlx::query_scalar::<_, String>("SELECT title FROM tasks WHERE id=?")
+        .bind(&task_id)
+        .fetch_one(host.repository.pool())
+        .await
+        .expect("final title");
+    assert_eq!(final_title, "Sửa lỗi Git diff stat");
 }

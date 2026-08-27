@@ -362,8 +362,13 @@ impl RuntimeHost {
             }
             "agent_turn_complete" => {
                 let input: CompleteInput = parse(arguments)?;
-                self.save_agent_event(&context, "completed", &input.content, None)
-                    .await
+                self.save_agent_event(
+                    &context,
+                    "completed",
+                    &input.content,
+                    input.suggested_title.as_deref(),
+                )
+                .await
             }
             _ => Err(RuntimeError::new("tool_not_found", "unknown MCP tool")),
         }

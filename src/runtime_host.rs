@@ -1,4 +1,5 @@
 mod dispatch;
+mod identity;
 mod inputs;
 mod persistence;
 mod user_message;

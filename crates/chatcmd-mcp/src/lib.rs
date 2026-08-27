@@ -196,7 +196,7 @@ tool_methods!(
     (task_artifact_read, "Read a task artifact"),
     (
         agent_user_message,
-        "MANDATORY FIRST TOOL: call this exactly once at the start of every user turn before any other ChatCMD tool. Pass the exact current user message text in content without summarizing or rewriting it. Reuse the same turnId for all later tools in this turn. Retries are idempotent."
+        "MANDATORY FIRST TOOL: call this exactly once at the start of every user turn before any other ChatCMD tool. Pass the exact current user message text in content without summarizing or rewriting it. Reuse the same turnId for all later tools in this turn. On a brand-new chat, ChatCMD uses this exact first message together with the private conversation scope as the stable task identity seed and returns isFirstMessage=true. Retries are idempotent."
     ),
     (
         agent_progress,
@@ -204,7 +204,7 @@ tool_methods!(
     ),
     (
         agent_turn_complete,
-        "MANDATORY FINALIZATION: if any ChatCMD tool was used in this user turn, call this exactly once immediately before replying to the user, after every other tool call has finished. Pass the exact final user-facing response text in the content field. Do not call another tool afterward."
+        "MANDATORY FINALIZATION: if any ChatCMD tool was used in this user turn, call this exactly once immediately before replying to the user, after every other tool call has finished. Pass the exact final user-facing response text in content. If agent_user_message returned isFirstMessage=true, also pass one concise conversation title in suggestedTitle; do this only for that first turn. Do not call another tool afterward."
     ),
 );
 

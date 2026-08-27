@@ -78,6 +78,8 @@ pub(super) struct ProgressInput {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct CompleteInput {
     pub(super) content: String,
+    #[serde(default)]
+    pub(super) suggested_title: Option<String>,
 }
 
 #[derive(Deserialize)]

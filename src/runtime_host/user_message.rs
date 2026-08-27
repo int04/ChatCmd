@@ -1,6 +1,6 @@
 use chatcmd_core::{
-    ActorKind, EventId, EventKind, SessionId, TaskId, TerminalEventStore as _, TimelineEvent,
-    TurnId,
+    ActorKind, EventId, EventKind, SessionId, TaskId, TaskStore as _, TerminalEventStore as _,
+    TimelineEvent, TurnId,
 };
 use chatcmd_runtime::{OperationContext, RuntimeError, RuntimeResult};
 use serde_json::{Value, json};
@@ -47,6 +47,9 @@ impl RuntimeHost {
         let task_id = required_task_id(context)?;
         let turn_id = required_turn_id(context)?;
         let session_id = required_session_id(context)?;
+        let first_turn_before = self.first_user_turn(&task_id).await?;
+        let provisional_title = compact_task_title(content);
+        let is_first_candidate = first_turn_before.is_none();
         let key = safe_id(
             "user-message",
             &context.agent_id,
@@ -55,7 +58,8 @@ impl RuntimeHost {
         let payload = json!({
             "tool": context.tool_name,
             "role": "user",
-            "content": content
+            "content": content,
+            "title": is_first_candidate.then_some(provisional_title.as_str())
         });
         let inserted = self
             .repository
@@ -91,6 +95,13 @@ impl RuntimeHost {
                 ));
             }
         }
+
+        let first_turn = first_turn_before.or_else(|| Some(turn_id.as_str().to_owned()));
+        let is_first_message = first_turn.as_deref() == Some(turn_id.as_str());
+        if is_first_message {
+            self.apply_initial_task_title(&task_id, &provisional_title)
+                .await?;
+        }
         if inserted > 0 {
             self.publish_event(
                 key,
@@ -105,9 +116,56 @@ impl RuntimeHost {
             "accepted": true,
             "duplicate": inserted == 0,
             "userMessageSynced": true,
+            "isFirstMessage": is_first_message,
+            "suggestedTitleRequired": is_first_message,
+            "provisionalTitle": is_first_message.then_some(provisional_title),
             "taskId": task_id.as_str(),
             "turnId": turn_id.as_str()
         }))
+    }
+
+    pub(super) async fn is_first_user_turn(
+        &self,
+        task_id: &TaskId,
+        turn_id: &TurnId,
+    ) -> RuntimeResult<bool> {
+        Ok(self.first_user_turn(task_id).await?.as_deref() == Some(turn_id.as_str()))
+    }
+
+    async fn first_user_turn(&self, task_id: &TaskId) -> RuntimeResult<Option<String>> {
+        sqlx::query_scalar::<_, String>(
+            "SELECT turn_id FROM timeline_events WHERE task_id=? AND actor='user' AND kind='message' AND turn_id IS NOT NULL ORDER BY created_at_ms,event_id LIMIT 1",
+        )
+        .bind(task_id.as_str())
+        .fetch_optional(self.repository.pool())
+        .await
+        .map_err(|_| RuntimeError::new("storage_error", "first user turn lookup failed"))
+    }
+
+    async fn apply_initial_task_title(&self, task_id: &TaskId, title: &str) -> RuntimeResult<()> {
+        let Some(mut task) = self.repository.task(task_id).await.map_err(storage_error)? else {
+            return Err(RuntimeError::new("not_found", "task missing"));
+        };
+        if task.title.as_deref().is_none_or(str::is_empty) {
+            task.title = Some(title.to_owned());
+            task.updated_at_ms = now_ms();
+            self.repository
+                .upsert_task(&task)
+                .await
+                .map_err(storage_error)?;
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn compact_task_title(value: &str) -> String {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut chars = normalized.chars();
+    let title = chars.by_ref().take(77).collect::<String>();
+    if chars.next().is_some() {
+        format!("{title}…")
+    } else {
+        title
     }
 }
 
@@ -162,5 +220,14 @@ mod tests {
         let first = safe_id("user-message", "agent", "task-a\0turn-a");
         assert_eq!(first, safe_id("user-message", "agent", "task-a\0turn-a"));
         assert_ne!(first, safe_id("user-message", "agent", "task-a\0turn-b"));
+    }
+
+    #[test]
+    fn first_message_title_is_compact_and_bounded() {
+        assert_eq!(
+            compact_task_title("  sửa   lỗi git diff  "),
+            "sửa lỗi git diff"
+        );
+        assert!(compact_task_title(&"x".repeat(100)).chars().count() <= 78);
     }
 }
