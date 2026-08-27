@@ -219,6 +219,8 @@ pub(super) struct GitDiff {
     #[serde(default)]
     pub(super) staged: bool,
     #[serde(default)]
+    pub(super) stat: bool,
+    #[serde(default)]
     pub(super) path: Option<String>,
 }
 
@@ -234,4 +236,21 @@ pub(super) struct GitLog {
 
 const fn default_git_count() -> usize {
     20
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GitDiff;
+
+    #[test]
+    fn git_diff_accepts_stat_flag() {
+        let input: GitDiff = serde_json::from_value(serde_json::json!({
+            "cwd": ".",
+            "stat": true
+        }))
+        .expect("git diff stat input");
+        assert!(input.stat);
+        assert!(!input.staged);
+        assert!(input.path.is_none());
+    }
 }

@@ -257,7 +257,7 @@ impl RuntimeHost {
                 let input: GitDiff = parse(arguments)?;
                 value(
                     self.git
-                        .diff(&input.cwd, input.staged, input.path.as_deref())
+                        .diff(&input.cwd, input.staged, input.stat, input.path.as_deref())
                         .await?,
                 )
             }

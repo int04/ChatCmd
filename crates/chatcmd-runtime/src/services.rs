@@ -31,15 +31,10 @@ impl GitService {
         &self,
         cwd: &Path,
         staged: bool,
+        stat: bool,
         path: Option<&str>,
     ) -> RuntimeResult<CommandOutput> {
-        let mut args = vec!["diff"];
-        if staged {
-            args.push("--cached");
-        }
-        if let Some(path) = path {
-            args.extend(["--", path]);
-        }
+        let args = git_diff_args(staged, stat, path);
         self.run(cwd, &args).await
     }
     pub async fn log(
@@ -102,6 +97,19 @@ impl GitService {
     }
 }
 
+fn git_diff_args(staged: bool, stat: bool, path: Option<&str>) -> Vec<&str> {
+    let mut args = vec!["diff"];
+    if staged {
+        args.push("--cached");
+    }
+    if stat {
+        args.push("--stat");
+    }
+    if let Some(path) = path {
+        args.extend(["--", path]);
+    }
+    args
+}
 fn validate_revision(value: &str) -> RuntimeResult<()> {
     if value.is_empty() || value.starts_with('-') || value.contains(['\0', '\n', '\r']) {
         Err(RuntimeError::new(
@@ -357,4 +365,18 @@ fn io_error(error: std::io::Error) -> RuntimeError {
 }
 fn join_error(error: tokio::task::JoinError) -> RuntimeError {
     RuntimeError::new("worker_failed", error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::git_diff_args;
+
+    #[test]
+    fn git_diff_args_support_stat() {
+        assert_eq!(git_diff_args(false, true, None), vec!["diff", "--stat"]);
+        assert_eq!(
+            git_diff_args(true, true, Some("src/main.rs")),
+            vec!["diff", "--cached", "--stat", "--", "src/main.rs"]
+        );
+    }
 }

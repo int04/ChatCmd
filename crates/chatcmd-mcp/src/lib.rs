@@ -173,7 +173,10 @@ tool_methods!(
         "Delete within canonical workspace scope under policy"
     ),
     (git_status, "Get Git working tree status"),
-    (git_diff, "Get argument-safe Git diff output"),
+    (
+        git_diff,
+        "Get argument-safe Git diff output with optional stat summary"
+    ),
     (git_log, "Get bounded Git history"),
     (git_branch, "List Git branches"),
     (git_show, "Show a validated Git revision"),
