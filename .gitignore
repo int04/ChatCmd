@@ -1,4 +1,5 @@
 /target
+/.smoke/
 .idea/
 web/node_modules/
 web/dist/

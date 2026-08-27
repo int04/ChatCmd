@@ -3,13 +3,35 @@ name = "chat-cmd-client"
 version = "0.1.0"
 edition = "2024"
 
+[workspace]
+members = [
+    ".",
+    "crates/chatcmd-core",
+    "crates/chatcmd-storage",
+    "crates/chatcmd-runtime",
+    "crates/chatcmd-mcp",
+]
+resolver = "3"
+
 [dependencies]
+anyhow = "1"
 axum = { version = "0.8", features = ["ws"] }
+chatcmd-core = { path = "crates/chatcmd-core" }
+chatcmd-mcp = { path = "crates/chatcmd-mcp" }
+chatcmd-runtime = { path = "crates/chatcmd-runtime" }
+chatcmd-storage = { path = "crates/chatcmd-storage" }
 futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite"] }
+time = { version = "0.3", features = ["formatting"] }
 tokio = { version = "1", features = ["full"] }
-tower-http = { version = "0.6", features = ["cors", "fs", "trace"] }
+tower-http = { version = "0.6", features = ["fs", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+http-body-util = "0.1"
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }

@@ -1,187 +1,24 @@
-import { Activity, Braces, Radio, Send, Server, Wifi, WifiOff } from 'lucide-react';
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { Bot, Braces, LayoutDashboard, Menu, Settings, Sparkles, TerminalSquare, Wrench, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { NavLink, Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom';
+import { AgentsPage } from './pages/AgentsPage';
+import { DashboardPage } from './pages/DashboardPage';
+import { SessionsPage, SessionDetailPage } from './pages/SessionsPage';
+import { SettingsPage } from './pages/SettingsPage';
+import { SkillsPage } from './pages/SkillsPage';
+import { TaskDetailPage, TasksPage } from './pages/TasksPage';
 
-type ServerInfo = {
-  name: string;
-  version: string;
-  api: string;
-  websocket: string;
-  connectedClients: number;
-};
-
-type EventItem = {
-  id?: string;
-  type: string;
-  payload: unknown;
-  receivedAt: string;
-};
-
-const initialInfo: ServerInfo = {
-  name: 'ChatCmdClient',
-  version: '-',
-  api: '/api',
-  websocket: '/ws',
-  connectedClients: 0,
-};
-
-function App() {
-  const [info, setInfo] = useState<ServerInfo>(initialInfo);
-  const [apiOnline, setApiOnline] = useState(false);
-  const [wsOnline, setWsOnline] = useState(false);
-  const [events, setEvents] = useState<EventItem[]>([]);
-  const [message, setMessage] = useState('Hello from dashboard');
-  const socketRef = useRef<WebSocket | null>(null);
-
-  useEffect(() => {
-    const loadInfo = async () => {
-      try {
-        const health = await fetch('/api/health');
-        if (!health.ok) throw new Error('API unavailable');
-        setApiOnline(true);
-        const response = await fetch('/api/info');
-        if (response.ok) setInfo(await response.json());
-      } catch {
-        setApiOnline(false);
-      }
-    };
-
-    void loadInfo();
-    const timer = window.setInterval(loadInfo, 5000);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  useEffect(() => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const socket = new WebSocket(`${protocol}//${window.location.host}/ws`);
-    socketRef.current = socket;
-
-    socket.onopen = () => setWsOnline(true);
-    socket.onclose = () => setWsOnline(false);
-    socket.onerror = () => setWsOnline(false);
-    socket.onmessage = (event) => {
-      try {
-        const parsed = JSON.parse(event.data) as Omit<EventItem, 'receivedAt'>;
-        setEvents((current) => [
-          { ...parsed, receivedAt: new Date().toLocaleTimeString() },
-          ...current,
-        ].slice(0, 100));
-      } catch {
-        setEvents((current) => [
-          { type: 'raw.message', payload: event.data, receivedAt: new Date().toLocaleTimeString() },
-          ...current,
-        ].slice(0, 100));
-      }
-    };
-
-    return () => socket.close();
-  }, []);
-
-  const statusText = useMemo(
-    () => (apiOnline && wsOnline ? 'All systems operational' : 'Connection degraded'),
-    [apiOnline, wsOnline],
-  );
-
-  const sendEvent = async (event: FormEvent) => {
-    event.preventDefault();
-    const payload = { source: 'dashboard', message };
-
-    await fetch('/api/events', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ event_type: 'dashboard.message', payload }),
-    });
-  };
-
-  const sendSocketMessage = () => {
-    if (socketRef.current?.readyState === WebSocket.OPEN) {
-      socketRef.current.send(message);
-    }
-  };
-
-  return (
-    <main className="app-shell">
-      <header className="topbar">
-        <div className="brand">
-          <div className="brand-mark"><Braces size={22} /></div>
-          <div>
-            <strong>ChatCmdClient</strong>
-            <span>MCP communication console</span>
-          </div>
-        </div>
-        <div className={`system-pill ${apiOnline && wsOnline ? 'online' : 'warning'}`}>
-          <span className="pulse" />
-          {statusText}
-        </div>
-      </header>
-
-      <section className="hero">
-        <div>
-          <span className="eyebrow">RUST MCP GATEWAY</span>
-          <h1>API & realtime WebSocket control plane</h1>
-          <p>Monitor the service, publish events, and observe live communication between AI agents and ChatCmdClient.</p>
-        </div>
-        <div className="hero-code">v{info.version}</div>
-      </section>
-
-      <section className="metrics-grid" aria-label="Service status">
-        <article className="metric-card">
-          <div className="metric-icon"><Server size={20} /></div>
-          <div><span>REST API</span><strong>{apiOnline ? 'Online' : 'Offline'}</strong><small>{info.api}</small></div>
-        </article>
-        <article className="metric-card">
-          <div className="metric-icon"><Radio size={20} /></div>
-          <div><span>WebSocket</span><strong>{wsOnline ? 'Connected' : 'Disconnected'}</strong><small>{info.websocket}</small></div>
-        </article>
-        <article className="metric-card">
-          <div className="metric-icon"><Activity size={20} /></div>
-          <div><span>Connected clients</span><strong>{info.connectedClients}</strong><small>reported by API</small></div>
-        </article>
-        <article className="metric-card">
-          <div className="metric-icon">{wsOnline ? <Wifi size={20} /> : <WifiOff size={20} />}</div>
-          <div><span>Events captured</span><strong>{events.length}</strong><small>latest 100 retained</small></div>
-        </article>
-      </section>
-
-      <section className="workspace-grid">
-        <article className="panel composer-panel">
-          <div className="panel-heading">
-            <div><span className="eyebrow">EVENT TESTER</span><h2>Publish a message</h2></div>
-          </div>
-          <form onSubmit={sendEvent}>
-            <label htmlFor="message">Payload message</label>
-            <textarea id="message" value={message} onChange={(e) => setMessage(e.target.value)} rows={7} />
-            <div className="actions">
-              <button className="primary-button" type="submit"><Send size={17} /> POST /api/events</button>
-              <button className="secondary-button" type="button" onClick={sendSocketMessage} disabled={!wsOnline}><Radio size={17} /> Send via WS</button>
-            </div>
-          </form>
-          <div className="endpoint-list">
-            <code>GET /api/health</code>
-            <code>GET /api/info</code>
-            <code>POST /api/events</code>
-            <code>WS /ws</code>
-          </div>
-        </article>
-
-        <article className="panel event-panel">
-          <div className="panel-heading">
-            <div><span className="eyebrow">REALTIME STREAM</span><h2>WebSocket events</h2></div>
-            <span className={`connection-badge ${wsOnline ? 'connected' : ''}`}>{wsOnline ? 'LIVE' : 'OFFLINE'}</span>
-          </div>
-          <div className="event-list">
-            {events.length === 0 ? (
-              <div className="empty-state"><Radio size={28} /><strong>No events yet</strong><span>Publish an event to see it appear here.</span></div>
-            ) : events.map((event, index) => (
-              <div className="event-row" key={`${event.id ?? 'event'}-${index}`}>
-                <div className="event-meta"><strong>{event.type}</strong><time>{event.receivedAt}</time></div>
-                <pre>{JSON.stringify(event.payload, null, 2)}</pre>
-              </div>
-            ))}
-          </div>
-        </article>
-      </section>
-    </main>
-  );
+const legacyPaths = ['/login', '/register', '/plans', '/account', '/payment', '/payments', '/purchase', '/checkout'];
+const nav = [
+  { to: '/', end: true, label: 'Overview', icon: LayoutDashboard },
+  { to: '/tasks', label: 'Tasks', icon: Sparkles },
+  { to: '/sessions', label: 'Sessions', icon: TerminalSquare },
+  { to: '/agents', label: 'Agents', icon: Bot },
+  { to: '/skills', label: 'Skills', icon: Wrench },
+  { to: '/settings', label: 'Settings', icon: Settings },
+];
+export default function App() { return <Routes><Route element={<Shell />}><Route index element={<DashboardPage />} /><Route path="tasks" element={<TasksPage />} /><Route path="tasks/:taskId" element={<TaskDetailPage />} /><Route path="sessions" element={<SessionsPage />} /><Route path="sessions/:sessionId" element={<SessionDetailPage />} /><Route path="agents" element={<AgentsPage />} /><Route path="skills" element={<SkillsPage />} /><Route path="settings" element={<SettingsPage />} />{legacyPaths.map((path) => <Route key={path} path={path} element={<Navigate replace to="/" />} />)}<Route path="*" element={<NotFound />} /></Route></Routes>; }
+function Shell() { const [open, setOpen] = useState(false); const location = useLocation(); useEffect(() => { setOpen(false); requestAnimationFrame(() => document.getElementById('main-content')?.focus({ preventScroll: true })); }, [location.pathname]); useEffect(() => { try { const saved = JSON.parse(localStorage.getItem('chatcmd.preferences') ?? '{}') as { theme?: string }; if (saved.theme) document.documentElement.dataset.theme = saved.theme; } catch { /* invalid local preference */ } }, []);
+  return <div className="shell"><a className="skip-link" href="#main-content">Skip to content</a><aside className={`sidebar ${open ? 'open' : ''}`}><header className="brand"><span className="brand-mark"><Braces /></span><span><strong>ChatCMD</strong><small>Local MCP Console</small></span><button className="icon-button mobile-only" aria-label="Close navigation" onClick={() => setOpen(false)}><X /></button></header><nav aria-label="Primary navigation">{nav.map(({ to, end, label, icon: Icon }) => <NavLink to={to} end={end} key={to}><Icon /><span>{label}</span></NavLink>)}</nav><footer><span className="local-device"><i />This machine</span><small>Single-user local runtime</small></footer></aside>{open && <button className="scrim" aria-label="Close navigation" onClick={() => setOpen(false)} />}<div className="content-shell"><header className="mobile-topbar"><button className="icon-button" aria-label="Open navigation" onClick={() => setOpen(true)}><Menu /></button><strong>ChatCMD</strong><span>Local</span></header><main id="main-content" tabIndex={-1}><Outlet /></main></div><nav className="mobile-nav" aria-label="Mobile navigation">{nav.slice(0, 4).map(({ to, end, label, icon: Icon }) => <NavLink to={to} end={end} key={to}><Icon /><span>{label}</span></NavLink>)}<button aria-label="Open more navigation" onClick={() => setOpen(true)}><Menu /><span>More</span></button></nav></div>;
 }
-
-export default App;
+function NotFound() { return <div className="state-panel"><Sparkles /><strong>Page not found</strong><span>This local route does not exist.</span><NavLink className="button primary" to="/">Open overview</NavLink></div>; }
