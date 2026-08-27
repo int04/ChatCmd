@@ -62,6 +62,12 @@ input!(ProcessKill {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct UserMessageInput {
+    pub(super) content: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct ProgressInput {
     pub(super) message: String,
     #[serde(default)]

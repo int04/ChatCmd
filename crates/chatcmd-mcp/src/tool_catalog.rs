@@ -39,6 +39,7 @@ pub const TOOL_NAMES: &[&str] = &[
     "task_set_execution_mode",
     "task_artifact_list",
     "task_artifact_read",
+    "agent_user_message",
     "agent_progress",
     "agent_turn_complete",
 ];

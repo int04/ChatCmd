@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TimelineEvent } from '../types';
-import { activityCodeView, activityOutput, type ToolActivity, upsertTaskEvent } from '../tasks/taskTimeline';
+import { activityCodeView, activityOutput, buildProcessBlocks, findUserMessage, type ToolActivity, upsertTaskEvent } from '../tasks/taskTimeline';
 
 describe('task realtime list updates', () => {
   it('adds a brand new conversation when its first websocket event arrives', () => {
@@ -74,5 +74,21 @@ describe('git activity editor output', () => {
     const diff = gitActivity('git_diff', 'diff --git a/file.rs b/file.rs\n+new line');
     expect(activityCodeView(status)).toMatchObject({ code: '## main\n M file.rs', language: 'plain' });
     expect(activityCodeView(diff)).toMatchObject({ code: 'diff --git a/file.rs b/file.rs\n+new line', language: 'diff' });
+  });
+});
+describe('user message synchronization rendering', () => {
+  it('extracts the user message and keeps it out of agent progress blocks', () => {
+    const user: TimelineEvent = {
+      id: 'user-message-1', type: 'message', occurredAt: '2026-08-27T08:00:00.000Z',
+      taskId: 'task-1', turnId: 'turn-1', payload: { role: 'user', content: 'Hãy kiểm tra repo này' },
+    };
+    const progress: TimelineEvent = {
+      id: 'progress-1', type: 'progress', occurredAt: '2026-08-27T08:00:01.000Z',
+      taskId: 'task-1', turnId: 'turn-1', payload: { content: 'Đang kiểm tra.' },
+    };
+    expect(findUserMessage([user, progress])?.text).toBe('Hãy kiểm tra repo này');
+    const blocks = buildProcessBlocks([user, progress]);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({ type: 'progress' });
   });
 });

@@ -192,12 +192,16 @@ tool_methods!(
     (task_artifact_list, "List task artifacts"),
     (task_artifact_read, "Read a task artifact"),
     (
+        agent_user_message,
+        "MANDATORY FIRST TOOL: call this exactly once at the start of every user turn before any other ChatCMD tool. Pass the exact current user message text in content without summarizing or rewriting it. Reuse the same turnId for all later tools in this turn. Retries are idempotent."
+    ),
+    (
         agent_progress,
         "Publish one concise progress milestone during non-trivial work. Do not call it after agent_turn_complete."
     ),
     (
         agent_turn_complete,
-        "MANDATORY FINALIZATION: if any ChatCMD shell/workspace tool was used in this user turn, call this exactly once immediately before replying to the user, after every other tool call has finished. Pass the exact final user-facing response text in the content field. Do not call another tool afterward."
+        "MANDATORY FINALIZATION: if any ChatCMD tool was used in this user turn, call this exactly once immediately before replying to the user, after every other tool call has finished. Pass the exact final user-facing response text in the content field. Do not call another tool afterward."
     ),
 );
 
@@ -389,6 +393,7 @@ mod tests {
         assert_eq!(names.len(), TOOL_NAMES.len());
         assert_eq!(TOOL_NAMES.first(), Some(&"device_list"));
         assert_eq!(TOOL_NAMES.last(), Some(&"agent_turn_complete"));
+        assert!(TOOL_NAMES.contains(&"agent_user_message"));
     }
 
     #[test]

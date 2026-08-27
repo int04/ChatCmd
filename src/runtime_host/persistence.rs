@@ -18,6 +18,9 @@ impl RuntimeHost {
     ) -> RuntimeResult<Value> {
         self.authorize_tool(&context.agent_id, tool).await?;
         self.ensure_call_identity(&mut context).await?;
+        if tool != "agent_user_message" {
+            self.ensure_user_message_synced(&context).await?;
+        }
         self.append_call_event(&context, tool, "started", Some(&arguments), None, None)
             .await?;
 

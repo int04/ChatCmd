@@ -110,12 +110,26 @@ export function buildProcessBlocks(events: TimelineEvent[]): ProcessBlock[] {
       latest.output = appendOutput(latest.output, eventText(event));
       continue;
     }
+    const payload = payloadObject(event);
+    if (event.type === 'message' && stringValue(payload.role) === 'user') {
+      currentActivities = null; continue;
+    }
     if (isVisibleAgentMessage(event)) {
       currentActivities = null;
       blocks.push({ type: 'progress', key: event.id, event });
     }
   }
   return blocks.filter((block) => block.type === 'progress' || block.activities.length > 0);
+}
+
+export function findUserMessage(events: TimelineEvent[]) {
+  for (const event of events) {
+    const payload = payloadObject(event);
+    if (event.type !== 'message' || stringValue(payload.role) !== 'user') continue;
+    const text = eventText(event);
+    if (text) return { event, text };
+  }
+  return null;
 }
 
 export function findFinalResponse(events: TimelineEvent[]) {
@@ -143,6 +157,8 @@ export function eventText(event?: TimelineEvent) {
 
 export function latestMessage(events: TimelineEvent[]) {
   for (let index = events.length - 1; index >= 0; index--) {
+    const payload = payloadObject(events[index]);
+    if (events[index].type === 'message' && stringValue(payload.role) === 'user') continue;
     const text = eventText(events[index]);
     if (text) return text;
   }
@@ -329,15 +345,19 @@ export function mergeLiveDetail(detail: TaskDetail, liveEvents: TimelineEvent[])
   return { ...detail, task, turns: undefined, events };
 }
 
+function isUserMessage(event: TimelineEvent) {
+  const payload = payloadObject(event);
+  return event.type === 'message' && stringValue(payload.role) === 'user';
+}
 function isVisibleAgentMessage(event: TimelineEvent) {
-  if (!['progress', 'message', 'warning', 'status'].includes(event.type)) return false;
+  if (isUserMessage(event) || !['progress', 'message', 'warning', 'status'].includes(event.type)) return false;
   const payload = payloadObject(event);
   return !(event.type === 'status' && stringValue(payload.status) === 'completed') && Boolean(eventText(event));
 }
 function payloadObject(event: TimelineEvent): Record<string, unknown> { return asObject(event.payload); }
 function stringValue(value: unknown) { return typeof value === 'string' && value.trim() ? value.trim() : ''; }
 function asObject(value: unknown): Record<string, unknown> { return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
-function isHousekeepingTool(tool: string) { return tool === 'agent_progress' || tool === 'agent_turn_complete'; }
+function isHousekeepingTool(tool: string) { return tool === 'agent_user_message' || tool === 'agent_progress' || tool === 'agent_turn_complete'; }
 function toolKind(tool: string): ActivityKind {
   if (/^(?:fs_read_text|fs_list|fs_stat|fs_directory_sizes|view_image|file_download|skill_read)$/i.test(tool)) return 'read';
   if (tool === 'fs_search' || tool === 'fs_find') return 'search';

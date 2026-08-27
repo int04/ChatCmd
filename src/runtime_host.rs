@@ -1,6 +1,9 @@
 mod dispatch;
 mod inputs;
 mod persistence;
+mod user_message;
+#[cfg(test)]
+mod user_message_tests;
 
 use chatcmd_core::{LocalDevice, Task};
 use chatcmd_mcp::RuntimeApi;

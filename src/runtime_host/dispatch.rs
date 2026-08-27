@@ -24,6 +24,12 @@ impl RuntimeHost {
             .map_err(storage_error)?
             .filter(|agent| agent.enabled)
             .ok_or_else(|| RuntimeError::new("unauthorized", "agent is disabled or missing"))?;
+        if matches!(
+            tool,
+            "agent_user_message" | "agent_progress" | "agent_turn_complete"
+        ) {
+            return Ok(());
+        }
         let allowed = self
             .repository
             .agent_allowed_tool_ids(&id)
@@ -340,6 +346,10 @@ impl RuntimeHost {
             }
             "task_artifact_list" => self.list_artifacts(arguments).await,
             "task_artifact_read" => self.read_artifact(arguments).await,
+            "agent_user_message" => {
+                let input: UserMessageInput = parse(arguments)?;
+                self.save_user_message(&context, &input.content).await
+            }
             "agent_progress" => {
                 let input: ProgressInput = parse(arguments)?;
                 self.save_agent_event(

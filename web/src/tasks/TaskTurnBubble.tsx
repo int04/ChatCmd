@@ -14,6 +14,7 @@ import {
   duration,
   eventText,
   findFinalResponse,
+  findUserMessage,
   formatClockTime,
   latestMessage,
   summarizeActivities,
@@ -25,7 +26,8 @@ const TaskCodeViewer = lazy(async () => ({ default: (await import('../TaskCodeVi
 export function TaskTurnBubble({ turn, now }: { turn: TaskTurn; now: string }) {
   const events = turn.events ?? [];
   const response = findFinalResponse(events);
-  const processEvents = response ? events.filter((event) => event !== response.event) : events;
+  const userMessage = findUserMessage(events);
+  const processEvents = events.filter((event) => event !== response?.event && event !== userMessage?.event);
   const blocks = buildProcessBlocks(processEvents);
   const activities = blocks.flatMap((block) => block.type === 'activities' ? block.activities : []);
   const status = turn.status ?? 'incomplete';
@@ -36,6 +38,10 @@ export function TaskTurnBubble({ turn, now }: { turn: TaskTurn; now: string }) {
   const headingId = `turn-${turn.id}`;
 
   return <div className="turn-item">
+    {userMessage && <article className="turn-user-message">
+      <header><strong>Bạn</strong><time dateTime={userMessage.event.occurredAt}>{formatClockTime(userMessage.event.occurredAt)}</time></header>
+      <div className="turn-user-content"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>{userMessage.text}</ReactMarkdown></div>
+    </article>}
     <div className={`turn-end-status ${status}`} role={status === 'running' ? 'status' : undefined}>
       {status === 'running'
         ? <><LoaderCircle className="spin" /><span>Đang xử lý trong {duration(startedAt, now)}</span></>

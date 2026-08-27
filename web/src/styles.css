@@ -98,6 +98,15 @@
   .tasks-workspace .task-stop-card{margin-top:auto}
 }
 
+.turn-user-message{grid-column:1/-1;justify-self:end;width:min(78%,760px);margin:0 0 14px;padding:11px 14px;background:color-mix(in srgb,var(--accent) 14%,var(--surface));border:1px solid color-mix(in srgb,var(--accent) 30%,var(--border));border-radius:14px 14px 4px 14px}
+.turn-user-message header{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:6px}
+.turn-user-message header strong{font-size:10px}.turn-user-message header time{color:var(--subtle);font-size:8px}
+.turn-user-content{font-size:11px;line-height:1.55;color:var(--text);overflow-wrap:anywhere}
+.turn-user-content>:first-child{margin-top:0}.turn-user-content>:last-child{margin-bottom:0}
+.turn-user-content p{margin:0 0 8px}.turn-user-content pre{max-width:100%;overflow:auto}
+.turn-user-content code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+@media(max-width:820px){.turn-user-message{width:min(92%,760px);margin-bottom:10px}}
+
 /* Bubble parity with ChatCMD.Client TerminalSessionPanel */
 .tasks-workspace .task-chat-column{--primary:#8b5cf6;--primary-2:color-mix(in srgb,var(--primary),white 14%);--primary-soft:color-mix(in srgb,var(--primary),transparent 76%);--border-2:#3a3a43;--green:#34d399;--red:#f87171;--focus:color-mix(in srgb,var(--primary),white 30%)}
 .tasks-workspace .task-bubble-timeline{display:block;max-width:none;margin:0}
