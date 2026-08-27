@@ -191,9 +191,9 @@ async fn task_detail(state: &Arc<AppState>, id: &str) -> Result<Json<Value>, Pro
         .await
         .map_err(storage_problem)?
         .ok_or_else(not_found)?;
-    let rows = sqlx::query("SELECT event_id,turn_id,session_id,kind,payload_json,created_at_ms FROM timeline_events WHERE task_id=? ORDER BY created_at_ms,event_id LIMIT 1000")
+    let rows = sqlx::query("SELECT event_id,turn_id,session_id,kind,payload_json,created_at_ms FROM timeline_events WHERE task_id=? ORDER BY created_at_ms DESC,event_id DESC LIMIT 1000")
         .bind(id).fetch_all(state.repository.pool()).await.map_err(db_problem)?;
-    let terminal_rows = sqlx::query("SELECT event_id,turn_id,session_id,kind,stream,payload,payload_encoding,created_at_ms FROM terminal_event_chunks WHERE task_id=? ORDER BY created_at_ms,event_id LIMIT 5000")
+    let terminal_rows = sqlx::query("SELECT event_id,turn_id,session_id,kind,stream,payload,payload_encoding,created_at_ms FROM terminal_event_chunks WHERE task_id=? ORDER BY created_at_ms DESC,event_id DESC LIMIT 5000")
         .bind(id).fetch_all(state.repository.pool()).await.map_err(db_problem)?;
     let mut ordered_events = rows
         .iter()

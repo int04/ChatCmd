@@ -1,6 +1,8 @@
 //! Official `rmcp` server surface for direct local ChatCMD execution.
 
 mod request_identity;
+mod server_contract;
+mod tool_catalog;
 
 use axum::{
     Router,
@@ -24,50 +26,9 @@ use serde_json::Value;
 use std::{collections::BTreeMap, sync::Arc};
 use tower::ServiceExt;
 
-/// Stable ordered tool names exposed by this server.
-pub const TOOL_NAMES: &[&str] = &[
-    "device_list",
-    "device_get",
-    "shell_create",
-    "shell_write",
-    "shell_wait",
-    "shell_read",
-    "shell_signal",
-    "shell_resize",
-    "shell_close",
-    "shell_list",
-    "shell_inspect",
-    "workspace_roots",
-    "fs_list",
-    "fs_search",
-    "fs_find",
-    "fs_read_text",
-    "fs_write_text",
-    "fs_write_raw",
-    "fs_stat",
-    "fs_create_directory",
-    "fs_copy",
-    "fs_move",
-    "fs_delete",
-    "git_status",
-    "git_diff",
-    "git_log",
-    "git_branch",
-    "git_show",
-    "git_commit",
-    "process_list",
-    "process_inspect",
-    "process_kill",
-    "skills_list",
-    "skill_read",
-    "task_get",
-    "task_list",
-    "task_set_execution_mode",
-    "task_artifact_list",
-    "task_artifact_read",
-    "agent_progress",
-    "agent_turn_complete",
-];
+use server_contract::error_value;
+
+pub use tool_catalog::TOOL_NAMES;
 
 /// Path-token authentication dependency injected by the HTTP host.
 pub trait AuthProvider: Send + Sync {
@@ -115,6 +76,10 @@ pub struct ToolArguments {
     #[serde(default, rename = "__chatcmdMcpSessionId")]
     #[schemars(skip)]
     pub(crate) authenticated_session_id: Option<String>,
+    /// HTTP-bound private conversation identity. Hidden from MCP input schema.
+    #[serde(default, rename = "__chatcmdConversationScopeId")]
+    #[schemars(skip)]
+    pub(crate) conversation_scope_id: Option<String>,
     /// Tool-specific typed JSON fields.
     #[serde(flatten)]
     pub fields: BTreeMap<String, Value>,
@@ -145,6 +110,7 @@ impl McpServer {
         context.task_id = arguments.task_id;
         context.turn_id = arguments.turn_id;
         context.mcp_session_id = arguments.authenticated_session_id;
+        context.conversation_scope_id = arguments.conversation_scope_id;
         let value = Value::Object(arguments.fields.into_iter().collect());
         match self.runtime.call(tool_name, context, value).await {
             Ok(value) => CallToolResult::structured(value),
@@ -155,7 +121,7 @@ impl McpServer {
 
 macro_rules! tool_methods {
     ($(($method:ident, $description:literal)),+ $(,)?) => {
-        #[tool_router(server_handler)]
+        #[tool_router]
         impl McpServer {
             $(
                 #[tool(description = $description)]
@@ -225,33 +191,15 @@ tool_methods!(
     (task_set_execution_mode, "Set task execution mode"),
     (task_artifact_list, "List task artifacts"),
     (task_artifact_read, "Read a task artifact"),
-    (agent_progress, "Publish structured agent progress"),
-    (agent_turn_complete, "Publish agent turn completion"),
+    (
+        agent_progress,
+        "Publish one concise progress milestone during non-trivial work. Do not call it after agent_turn_complete."
+    ),
+    (
+        agent_turn_complete,
+        "MANDATORY FINALIZATION: if any ChatCMD shell/workspace tool was used in this user turn, call this exactly once immediately before replying to the user, after every other tool call has finished. Pass the exact final user-facing response text in the content field. Do not call another tool afterward."
+    ),
 );
-
-fn error_value(error: &RuntimeError) -> Value {
-    serde_json::json!({
-        "error": {
-            "code": error.code,
-            "message": redact(&error.message),
-            "retryable": error.retryable,
-            "approvalRequired": error.approval_required
-        }
-    })
-}
-
-fn redact(value: &str) -> String {
-    let lower = value.to_ascii_lowercase();
-    if lower.contains("authorization")
-        || lower.contains("bearer ")
-        || lower.contains("token=")
-        || lower.contains("/mcp/")
-    {
-        "[REDACTED]".to_owned()
-    } else {
-        value.to_owned()
-    }
-}
 
 /// Fail-closed HTTP security state.
 #[derive(Clone)]

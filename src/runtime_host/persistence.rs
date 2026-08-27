@@ -22,34 +22,40 @@ impl RuntimeHost {
             .await?;
 
         let result = self.dispatch(tool, context.clone(), arguments).await;
-        match &result {
+        match result {
             Ok(output) => {
-                self.append_call_event(&context, tool, "succeeded", None, Some(output), None)
+                self.append_call_event(&context, tool, "succeeded", None, Some(&output), None)
                     .await?;
+                Ok(enrich_tool_result(output, &context, tool))
             }
             Err(error) => {
-                self.append_call_event(&context, tool, "failed", None, None, Some(error))
+                self.append_call_event(&context, tool, "failed", None, None, Some(&error))
                     .await?;
+                Err(error)
             }
         }
-        result
     }
 
     async fn ensure_call_identity(&self, context: &mut OperationContext) -> RuntimeResult<()> {
-        let scope = context
-            .mcp_session_id
-            .as_deref()
-            .unwrap_or(&context.request_id);
-        let logical_session = safe_id("mcp-session", &context.agent_id, scope);
-        let task = context
-            .task_id
-            .clone()
-            .unwrap_or_else(|| safe_id("task", &context.agent_id, scope));
+        let conversation_scope = context.conversation_scope_id.clone();
+        let bound_task = if conversation_scope.is_none() && context.task_id.is_none() {
+            self.bound_task_for_turn(context).await?
+        } else {
+            None
+        };
+        let task = select_task_identity(
+            &context.agent_id,
+            conversation_scope.as_deref(),
+            context.task_id.as_deref(),
+            bound_task.as_deref(),
+            &context.request_id,
+        );
+        let logical_session = safe_id("mcp-session", &context.agent_id, &task);
         let turn = context.turn_id.clone().unwrap_or_else(|| {
             safe_id(
                 "turn",
                 &context.agent_id,
-                &format!("{scope}\0{}", context.request_id),
+                &format!("{task}\0{}", context.request_id),
             )
         });
         context.task_id = Some(task.clone());
@@ -71,9 +77,11 @@ impl RuntimeHost {
                 id: task_id.clone(),
                 agent_id: chatcmd_core::AgentId::new(&context.agent_id).ok(),
                 device_id: self.device.id.clone(),
-                conversation_scope_hash: current
-                    .as_ref()
-                    .and_then(|task| task.conversation_scope_hash.clone()),
+                conversation_scope_hash: conversation_scope.or_else(|| {
+                    current
+                        .as_ref()
+                        .and_then(|task| task.conversation_scope_hash.clone())
+                }),
                 title: current.as_ref().and_then(|task| task.title.clone()),
                 source: Some("mcp".to_owned()),
                 status: TaskStatus::Running,
@@ -111,6 +119,30 @@ impl RuntimeHost {
             })
             .await
             .map_err(storage_error)
+    }
+
+    async fn bound_task_for_turn(
+        &self,
+        context: &OperationContext,
+    ) -> RuntimeResult<Option<String>> {
+        let Some(turn_id) = context
+            .turn_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        else {
+            return Ok(None);
+        };
+        let cutoff = now_ms().saturating_sub(2 * 60 * 60 * 1000);
+        sqlx::query_scalar::<_, String>(
+            "SELECT task_id FROM turn_bindings WHERE agent_id=? AND device_id=? AND turn_id=? AND last_used_at_ms>=? LIMIT 1",
+        )
+        .bind(&context.agent_id)
+        .bind(self.device.id.as_str())
+        .bind(turn_id)
+        .bind(cutoff)
+        .fetch_optional(self.repository.pool())
+        .await
+        .map_err(|_| RuntimeError::new("storage_error", "turn binding lookup failed"))
     }
 
     async fn append_call_event(
@@ -274,6 +306,12 @@ impl RuntimeHost {
         title: Option<&str>,
     ) -> RuntimeResult<Value> {
         let task_id = required_task_id(context)?;
+        if status == "completed" && content.trim().is_empty() {
+            return Err(RuntimeError::new(
+                "final_response_required",
+                "agent_turn_complete content must contain the exact final user-facing response",
+            ));
+        }
         let now = now_ms();
         let current = self
             .repository
@@ -340,6 +378,63 @@ impl RuntimeHost {
     }
 }
 
+fn enrich_tool_result(value: Value, context: &OperationContext, tool: &str) -> Value {
+    let mut object = match value {
+        Value::Object(object) => object,
+        other => {
+            let mut object = serde_json::Map::new();
+            object.insert("result".to_owned(), other);
+            object
+        }
+    };
+    if let Some(task_id) = context.task_id.as_deref() {
+        object.insert("taskId".to_owned(), Value::String(task_id.to_owned()));
+    }
+    if let Some(turn_id) = context.turn_id.as_deref() {
+        object.insert("turnId".to_owned(), Value::String(turn_id.to_owned()));
+    }
+    if let Some(session_id) = context.mcp_session_id.as_deref() {
+        object.insert("sessionId".to_owned(), Value::String(session_id.to_owned()));
+    }
+    let completed = tool == "agent_turn_complete";
+    object.insert("requiresFinalization".to_owned(), Value::Bool(!completed));
+    if completed {
+        object.insert("completed".to_owned(), Value::Bool(true));
+        object.insert(
+            "continuationInstruction".to_owned(),
+            Value::String(
+                "Reply to the user with the exact content passed to agent_turn_complete. Reuse this taskId on later turns in the same chat."
+                    .to_owned(),
+            ),
+        );
+    } else {
+        object.insert(
+            "finalizer".to_owned(),
+            Value::String("agent_turn_complete".to_owned()),
+        );
+    }
+    Value::Object(object)
+}
+
+fn select_task_identity(
+    agent_id: &str,
+    conversation_scope: Option<&str>,
+    explicit_task_id: Option<&str>,
+    bound_task_id: Option<&str>,
+    request_id: &str,
+) -> String {
+    if let Some(scope) = conversation_scope.filter(|value| !value.trim().is_empty()) {
+        return safe_id("task-chat", agent_id, scope);
+    }
+    if let Some(task_id) = explicit_task_id.filter(|value| !value.trim().is_empty()) {
+        return task_id.trim().to_owned();
+    }
+    if let Some(task_id) = bound_task_id.filter(|value| !value.trim().is_empty()) {
+        return task_id.trim().to_owned();
+    }
+    safe_id("task", agent_id, request_id)
+}
+
 fn required_task_id(context: &OperationContext) -> RuntimeResult<TaskId> {
     TaskId::new(context.task_id.as_deref().unwrap_or_default())
         .map_err(|error| invalid("taskId", error))
@@ -361,4 +456,36 @@ fn safe_id(prefix: &str, agent_id: &str, scope: &str) -> String {
         "{prefix}-{}",
         Uuid::new_v5(&Uuid::NAMESPACE_OID, material.as_bytes())
     )
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::select_task_identity;
+
+    #[test]
+    fn conversation_scope_overrides_stale_explicit_task() {
+        let first =
+            select_task_identity("agent", Some("openai:chat-a"), Some("old-task"), None, "r1");
+        let second =
+            select_task_identity("agent", Some("openai:chat-b"), Some("old-task"), None, "r2");
+        assert_ne!(first, "old-task");
+        assert_ne!(second, "old-task");
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn explicit_task_and_turn_binding_are_safe_fallbacks_without_private_scope() {
+        assert_eq!(
+            select_task_identity("agent", None, Some("task-known"), Some("task-bound"), "r1"),
+            "task-known"
+        );
+        assert_eq!(
+            select_task_identity("agent", None, None, Some("task-bound"), "r1"),
+            "task-bound"
+        );
+        assert_ne!(
+            select_task_identity("agent", None, None, None, "r1"),
+            select_task_identity("agent", None, None, None, "r2")
+        );
+    }
 }
