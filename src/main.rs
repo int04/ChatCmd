@@ -120,8 +120,9 @@ async fn main() -> Result<()> {
         skills,
         event_tx,
     ));
-    let frontend =
-        ServeDir::new("web/dist").not_found_service(ServeFile::new("web/dist/index.html"));
+    let frontend_dir = resolve_frontend_dir();
+    let frontend_index = frontend_dir.join("index.html");
+    let frontend = ServeDir::new(&frontend_dir).not_found_service(ServeFile::new(frontend_index));
     let management = Router::new()
         .nest("/api", api::router())
         .route("/ws", get(ws_handler))
@@ -146,6 +147,29 @@ async fn main() -> Result<()> {
     axum::serve(listener, app)
         .await
         .context("serve local application")
+}
+
+fn resolve_frontend_dir() -> PathBuf {
+    if let Some(configured) = std::env::var_os("CHATCMD_WEB_DIST") {
+        return PathBuf::from(configured);
+    }
+
+    let working_dir = PathBuf::from("web/dist");
+    if working_dir.join("index.html").is_file() {
+        return working_dir;
+    }
+
+    if let Ok(executable) = std::env::current_exe()
+        && let Some(executable_dir) = executable.parent()
+    {
+        for candidate in [executable_dir.join("web/dist"), executable_dir.join("dist")] {
+            if candidate.join("index.html").is_file() {
+                return candidate;
+            }
+        }
+    }
+
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web/dist")
 }
 
 async fn seed_catalog(repository: &SqliteRepository) -> Result<(), chatcmd_core::StorageError> {
