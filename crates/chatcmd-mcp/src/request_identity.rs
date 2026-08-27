@@ -36,10 +36,10 @@ fn bind_agent_value(value: &mut Value, agent_id: &str) {
                 bind_agent_value(item, agent_id);
             }
         }
-        Value::Object(object) => {
-            if object.get("method").and_then(Value::as_str) == Some("tools/call") {
-                bind_tool_arguments(object, agent_id);
-            }
+        Value::Object(object)
+            if object.get("method").and_then(Value::as_str) == Some("tools/call") =>
+        {
+            bind_tool_arguments(object, agent_id);
         }
         _ => {}
     }
