@@ -1,14 +1,14 @@
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
-/// SHA-256 digest of an MCP bearer secret. Raw bearer values are never stored here.
+/// SHA-256 digest of an MCP access token. Raw token values are never stored here.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct SecretHash([u8; 32]);
 
 impl SecretHash {
-    /// Hashes a raw bearer secret at the trust boundary.
+    /// Hashes a raw MCP access token at the trust boundary.
     #[must_use]
-    pub fn from_bearer(secret: &str) -> Self {
+    pub fn from_token(secret: &str) -> Self {
         Self(Sha256::digest(secret.as_bytes()).into())
     }
 
@@ -20,7 +20,7 @@ impl SecretHash {
         Ok(Self(digest))
     }
 
-    /// Returns digest bytes for persistence. These bytes are not the bearer secret.
+    /// Returns digest bytes for persistence. These bytes are not the raw token.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
@@ -39,7 +39,7 @@ impl std::fmt::Debug for SecretHash {
     }
 }
 
-/// Generated bearer secret returned only by create/rotate operations.
+/// Generated MCP access token returned only by create/rotate operations.
 pub struct GeneratedSecret {
     raw: String,
     last4: String,
@@ -66,7 +66,7 @@ impl GeneratedSecret {
         &self.last4
     }
 
-    /// Consumes the wrapper and reveals the raw bearer exactly once.
+    /// Consumes the wrapper and reveals the raw token exactly once.
     #[must_use]
     pub fn expose_once(self) -> String {
         self.raw

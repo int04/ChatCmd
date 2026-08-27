@@ -16,7 +16,7 @@ export interface McpStatus { state: HealthState; endpoint?: string; connectedCli
 export interface TimelineEvent { id: Id; type: string; occurredAt: string; taskId?: Id; sessionId?: Id; turnId?: Id; payload?: unknown }
 export interface Agent { id: Id; name: string; enabled: boolean; projectFolder: string; presetId?: Id; toolIds: Id[]; secretLast4?: string; updatedAtUtc?: string }
 export interface AgentInput { name: string; enabled: boolean; projectFolder: string; presetId?: Id; toolIds: Id[] }
-export interface SecretResult { agent?: Agent; secret: string }
+export interface SecretResult { agent?: Agent; endpoint: string }
 export interface Tool { id: Id; name: string; description?: string; group?: string; dangerous?: boolean }
 export interface ToolPreset { id: Id; name: string; description?: string; toolIds: Id[] }
 export interface Task { id: Id; title?: string; status: string; updatedAtUtc: string; createdAtUtc?: string; generation?: number; turnCount?: number; activeSessionId?: Id; outputPreview?: string; approvalPending?: boolean }

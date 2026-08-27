@@ -1,12 +1,14 @@
 //! Official `rmcp` server surface for direct local ChatCMD execution.
 
+mod request_identity;
+
 use axum::{
     Router,
     body::Body,
-    extract::{Request, State},
-    http::{HeaderMap, StatusCode},
-    middleware::{self, Next},
-    response::Response,
+    extract::{Path, Request, State},
+    http::{HeaderMap, StatusCode, Uri},
+    response::{IntoResponse, Response},
+    routing::any,
 };
 use chatcmd_runtime::{BoxFuture, DeviceDescriptor, OperationContext, RuntimeError, RuntimeResult};
 use rmcp::{
@@ -20,6 +22,7 @@ use rmcp::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::BTreeMap, sync::Arc};
+use tower::ServiceExt;
 
 /// Stable ordered tool names exposed by this server.
 pub const TOOL_NAMES: &[&str] = &[
@@ -66,9 +69,9 @@ pub const TOOL_NAMES: &[&str] = &[
     "agent_turn_complete",
 ];
 
-/// Authentication dependency injected by the HTTP host.
+/// Path-token authentication dependency injected by the HTTP host.
 pub trait AuthProvider: Send + Sync {
-    fn authorize<'a>(&'a self, bearer_token: &'a str) -> BoxFuture<'a, RuntimeResult<String>>;
+    fn authorize<'a>(&'a self, token: &'a str) -> BoxFuture<'a, RuntimeResult<String>>;
 }
 
 tokio::task_local! {
@@ -234,7 +237,11 @@ fn error_value(error: &RuntimeError) -> Value {
 
 fn redact(value: &str) -> String {
     let lower = value.to_ascii_lowercase();
-    if lower.contains("authorization") || lower.contains("bearer ") || lower.contains("token=") {
+    if lower.contains("authorization")
+        || lower.contains("bearer ")
+        || lower.contains("token=")
+        || lower.contains("/mcp/")
+    {
         "[REDACTED]".to_owned()
     } else {
         value.to_owned()
@@ -254,20 +261,24 @@ impl HttpSecurity {
         Self { auth, origins }
     }
 
-    async fn authorize(&self, headers: &HeaderMap, query: Option<&str>) -> RuntimeResult<String> {
+    async fn authorize(
+        &self,
+        token: &str,
+        headers: &HeaderMap,
+        query: Option<&str>,
+    ) -> RuntimeResult<String> {
         if query.is_some_and(has_query_token) {
             return Err(RuntimeError::new(
                 "query_token_rejected",
                 "authentication token in query is forbidden",
             ));
         }
-        let authorization = header(headers, "authorization")?;
-        let token = authorization
-            .strip_prefix("Bearer ")
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                RuntimeError::new("unauthorized", "valid Bearer authorization is required")
-            })?;
+        if token.is_empty() || token.len() > 512 {
+            return Err(RuntimeError::new(
+                "unauthorized",
+                "valid MCP path token is required",
+            ));
+        }
         let agent_id = self.auth.authorize(token).await?;
         self.origins
             .authorize(
@@ -281,18 +292,6 @@ impl HttpSecurity {
     }
 }
 
-fn header<'a>(headers: &'a HeaderMap, name: &str) -> RuntimeResult<&'a str> {
-    headers
-        .get(name)
-        .and_then(|value| value.to_str().ok())
-        .ok_or_else(|| {
-            RuntimeError::new(
-                "unauthorized",
-                format!("required {name} header is missing or invalid"),
-            )
-        })
-}
-
 fn has_query_token(query: &str) -> bool {
     query.split('&').any(|pair| {
         let name = pair.split_once('=').map_or(pair, |(name, _)| name);
@@ -303,39 +302,90 @@ fn has_query_token(query: &str) -> bool {
     })
 }
 
-async fn security_middleware(
-    State(security): State<HttpSecurity>,
-    request: Request<Body>,
-    next: Next,
-) -> Result<Response, StatusCode> {
-    let agent_id = security
-        .authorize(request.headers(), request.uri().query())
+#[derive(Clone)]
+struct McpHttpState {
+    security: HttpSecurity,
+    service: StreamableHttpService<McpServer, LocalSessionManager>,
+}
+
+async fn mcp_handler(
+    State(state): State<McpHttpState>,
+    Path(token): Path<String>,
+    mut request: Request<Body>,
+) -> Response {
+    let agent_id = match state
+        .security
+        .authorize(&token, request.headers(), request.uri().query())
         .await
-        .map_err(|_| StatusCode::UNAUTHORIZED)?;
-    Ok(AUTHENTICATED_AGENT_ID
-        .scope(agent_id, next.run(request))
-        .await)
+    {
+        Ok(agent_id) => agent_id,
+        Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
+    };
+
+    // Bind tool identity to the URL token before rmcp moves work into its session task.
+    // Client-provided `agent_id` values (for example a ChatGPT connector name) never win.
+    request = match request_identity::bind_authenticated_agent(request, &agent_id).await {
+        Ok(request) => request,
+        Err(status) => return status.into_response(),
+    };
+
+    // Keep the credential at the HTTP boundary. Downstream rmcp handlers receive
+    // a stable credential-free URI and the authenticated agent identity only.
+    *request.uri_mut() = Uri::from_static("/mcp");
+    match AUTHENTICATED_AGENT_ID
+        .scope(agent_id, state.service.clone().oneshot(request))
+        .await
+    {
+        Ok(response) => response.into_response(),
+        Err(infallible) => match infallible {},
+    }
 }
 
 /// Build reusable Streamable HTTP service with local rmcp session management.
 pub fn streamable_http_service(
     server: McpServer,
 ) -> StreamableHttpService<McpServer, LocalSessionManager> {
+    streamable_http_service_with_config(server, StreamableHttpServerConfig::default())
+}
+
+fn streamable_http_service_with_config(
+    server: McpServer,
+    config: StreamableHttpServerConfig,
+) -> StreamableHttpService<McpServer, LocalSessionManager> {
     StreamableHttpService::new(
         move || Ok(server.clone()),
         LocalSessionManager::default().into(),
-        StreamableHttpServerConfig::default(),
+        config,
     )
 }
 
-/// Build an Axum/Tower router protected by mandatory Bearer and Origin checks.
+/// Build an Axum router protected by a token path segment and Origin checks.
 pub fn axum_router(server: McpServer, security: HttpSecurity) -> Router {
+    axum_router_with_host_validation(server, security, true)
+}
+
+/// Build an Axum router while optionally disabling rmcp Host validation.
+///
+/// Host validation should only be disabled when the listener itself is loopback-only
+/// and an external reverse proxy is the sole public ingress. Token and Origin checks
+/// remain active at the ChatCmdClient boundary.
+pub fn axum_router_with_host_validation(
+    server: McpServer,
+    security: HttpSecurity,
+    validate_host: bool,
+) -> Router {
+    let config = if validate_host {
+        StreamableHttpServerConfig::default()
+    } else {
+        StreamableHttpServerConfig::default().disable_allowed_hosts()
+    };
+    let state = McpHttpState {
+        security,
+        service: streamable_http_service_with_config(server, config),
+    };
     Router::new()
-        .nest_service("/mcp", streamable_http_service(server))
-        .layer(middleware::from_fn_with_state(
-            security,
-            security_middleware,
-        ))
+        .route("/mcp/{token}", any(mcp_handler))
+        .with_state(state)
 }
 
 #[cfg(test)]
@@ -345,7 +395,7 @@ mod tests {
     struct Accept;
 
     impl AuthProvider for Accept {
-        fn authorize<'a>(&'a self, _bearer_token: &'a str) -> BoxFuture<'a, RuntimeResult<String>> {
+        fn authorize<'a>(&'a self, _token: &'a str) -> BoxFuture<'a, RuntimeResult<String>> {
             Box::pin(async { Ok("agent-test".to_owned()) })
         }
     }
@@ -379,39 +429,57 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn bearer_and_origin_fail_closed() {
+    async fn path_token_and_origin_fail_closed() {
         let security = HttpSecurity::new(Arc::new(Accept), Arc::new(Accept));
-        let empty = HeaderMap::new();
+        let mut legacy_header = HeaderMap::new();
+        legacy_header.insert("authorization", "Bearer secret".parse().expect("header"));
+        legacy_header.insert("origin", "https://allowed.example".parse().expect("header"));
         assert_eq!(
             security
-                .authorize(&empty, None)
+                .authorize("", &legacy_header, None)
                 .await
-                .expect_err("missing bearer")
+                .expect_err("authorization header must not replace the path token")
                 .code,
             "unauthorized"
         );
 
         let mut denied = HeaderMap::new();
-        denied.insert("authorization", "Bearer secret".parse().expect("header"));
         denied.insert("origin", "https://denied.example".parse().expect("header"));
         assert_eq!(
             security
-                .authorize(&denied, None)
+                .authorize("secret", &denied, None)
                 .await
                 .expect_err("denied origin")
                 .code,
             "origin_denied"
         );
 
-        let mut no_origin = HeaderMap::new();
-        no_origin.insert("authorization", "Bearer secret".parse().expect("header"));
+        let no_origin = HeaderMap::new();
         assert_eq!(
             security
-                .authorize(&no_origin, None)
+                .authorize("secret", &no_origin, None)
                 .await
                 .expect_err("missing origin must be decided by policy")
                 .code,
             "origin_denied"
+        );
+
+        let mut allowed = HeaderMap::new();
+        allowed.insert("origin", "https://allowed.example".parse().expect("header"));
+        assert_eq!(
+            security
+                .authorize("secret", &allowed, None)
+                .await
+                .expect("path token and origin are valid"),
+            "agent-test"
+        );
+        assert_eq!(
+            security
+                .authorize("secret", &allowed, Some("access_token=other"))
+                .await
+                .expect_err("query credentials stay unsupported")
+                .code,
+            "query_token_rejected"
         );
     }
 }

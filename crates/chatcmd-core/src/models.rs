@@ -161,7 +161,7 @@ pub struct LocalDevice {
     pub updated_at_ms: i64,
 }
 
-/// Persisted MCP agent profile. Contains only hash metadata, never raw bearer material.
+/// Persisted MCP agent profile. Contains only hash metadata, never raw token material.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(
     feature = "serde",
@@ -188,7 +188,7 @@ pub struct NewMcpAgent {
     pub project_folder: Option<String>,
 }
 
-/// Resolved MCP policy for a secret-authenticated request.
+/// Resolved MCP policy for a path-token-authenticated request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct McpAgentPolicy {
     pub agent: McpAgent,

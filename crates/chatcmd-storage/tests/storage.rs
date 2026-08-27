@@ -82,7 +82,7 @@ async fn secret_rotation_invalidates_old_token_and_database_stores_only_hash() {
     let old = created.secret.expose_once();
     assert!(
         repository
-            .lookup_policy_by_bearer(&old)
+            .lookup_policy_by_token(&old)
             .await
             .expect("old lookup")
             .is_some()
@@ -96,14 +96,14 @@ async fn secret_rotation_invalidates_old_token_and_database_stores_only_hash() {
     assert_ne!(old, new);
     assert!(
         repository
-            .lookup_policy_by_bearer(&old)
+            .lookup_policy_by_token(&old)
             .await
             .expect("stale lookup")
             .is_none()
     );
     assert!(
         repository
-            .lookup_policy_by_bearer(&new)
+            .lookup_policy_by_token(&new)
             .await
             .expect("new lookup")
             .is_some()
@@ -344,7 +344,7 @@ async fn importer_is_idempotent_and_continues_after_corrupt_jsonl_line() {
     assert!(first.warnings[0].contains(":2: malformed JSONL"));
     assert!(
         repository
-            .lookup_policy_by_bearer("legacy-secret-token")
+            .lookup_policy_by_token("legacy-secret-token")
             .await
             .expect("imported secret")
             .is_some()

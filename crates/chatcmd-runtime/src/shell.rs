@@ -600,7 +600,11 @@ fn pty_error(error: anyhow::Error) -> RuntimeError {
 }
 fn redact(value: &str) -> String {
     let lower = value.to_ascii_lowercase();
-    if lower.contains("bearer ") || lower.contains("authorization") || lower.contains("token=") {
+    if lower.contains("bearer ")
+        || lower.contains("authorization")
+        || lower.contains("token=")
+        || lower.contains("/mcp/")
+    {
         "[REDACTED]".into()
     } else {
         value.into()

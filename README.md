@@ -26,16 +26,15 @@ Startup is idempotent. Stale running tasks and terminal sessions become `interru
 
 ## MCP
 
-Endpoint: `http://127.0.0.1:8080/mcp`
+Endpoint format: `http://127.0.0.1:8080/mcp/{token}`
 
-Create an agent in the UI, select its allowed tools, then save the returned secret immediately. Raw secrets appear only after create or rotate and are never returned by list/get APIs.
+Create an agent in the UI, select its allowed tools, then save the returned MCP URL immediately. The generated token is embedded as the final path segment. No `Authorization` header is used or required. The complete tokenized URL appears only after create or rotate and is never returned by list/get APIs.
 
 ```text
-Authorization: Bearer <one-time-secret>
-Origin: http://localhost:8080
+http://127.0.0.1:8080/mcp/<one-time-token>
 ```
 
-Browser origins are restricted to `localhost` or `127.0.0.1` on the configured port. Native MCP clients may omit `Origin` only while the server is bound to a loopback address. Query-string tokens (`token`, `access_token`, `bearer_token`) are rejected.
+Browser origins are restricted to `localhost` or `127.0.0.1` on the configured port. Native MCP clients may omit `Origin` only while the server is bound to a loopback address. Query-string tokens (`token`, `access_token`, `bearer_token`) are rejected. The built-in HTTP trace masks `/mcp/{token}`, but client history and external proxy logs may still expose a URL token, so keep the endpoint local and private.
 
 Management API requests require `X-ChatCmdClient: local-ui`. Static files, WebSocket, health/info, and MCP do not require this UI marker. No permissive CORS layer is enabled.
 

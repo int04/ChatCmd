@@ -143,7 +143,7 @@ impl LegacyImporter {
                 .and_then(Value::as_bool)
                 .unwrap_or(true);
             let project_folder = string_field(object, &["projectFolder", "project_folder"]);
-            let digest = SecretHash::from_bearer(&secret);
+            let digest = SecretHash::from_token(&secret);
             let last4 = suffix4(&secret);
             if last4.chars().count() != 4 {
                 warnings.push(format!(

@@ -327,7 +327,7 @@ impl LocalDeviceStore for SqliteRepository {
 impl McpAgentStore for SqliteRepository {
     async fn create_agent(&self, input: NewMcpAgent) -> Result<AgentSecretResult, StorageError> {
         let raw = generate_secret();
-        let digest = SecretHash::from_bearer(&raw);
+        let digest = SecretHash::from_token(&raw);
         let generated = GeneratedSecret::new(raw);
         let id = input.id.unwrap_or_else(|| {
             AgentId::new(uuid::Uuid::new_v4().to_string()).expect("UUID is non-empty")
@@ -370,7 +370,7 @@ impl McpAgentStore for SqliteRepository {
 
     async fn rotate_agent_secret(&self, id: &AgentId) -> Result<AgentSecretResult, StorageError> {
         let raw = generate_secret();
-        let digest = SecretHash::from_bearer(&raw);
+        let digest = SecretHash::from_token(&raw);
         let generated = GeneratedSecret::new(raw);
         let now = now_ms()?;
         let affected = sqlx::query(
@@ -452,14 +452,14 @@ impl McpAgentStore for SqliteRepository {
 }
 
 impl PolicyLookup for SqliteRepository {
-    async fn lookup_policy_by_bearer(
+    async fn lookup_policy_by_token(
         &self,
-        raw_bearer: &str,
+        raw_token: &str,
     ) -> Result<Option<McpAgentPolicy>, StorageError> {
-        let candidate = SecretHash::from_bearer(raw_bearer);
+        let candidate = SecretHash::from_token(raw_token);
         let row = sqlx::query("SELECT id,name,enabled,project_folder,secret_last4,secret_hash,created_at_ms,updated_at_ms,last_used_at_ms FROM mcp_agents WHERE secret_hash=? AND enabled=1")
             .bind(candidate.as_bytes().as_slice()).fetch_optional(&self.pool).await
-            .map_err(|error| backend("lookup MCP bearer", error))?;
+            .map_err(|error| backend("lookup MCP path token", error))?;
         let Some(row) = row else {
             return Ok(None);
         };

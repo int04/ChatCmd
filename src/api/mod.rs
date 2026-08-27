@@ -66,7 +66,7 @@ async fn health() -> Json<Value> {
 async fn info(State(state): State<Arc<AppState>>) -> Json<Value> {
     Json(json!({
         "name": "ChatCmdClient", "version": env!("CARGO_PKG_VERSION"),
-        "api": "/api", "mcp": "/mcp", "websocket": "/ws",
+        "api": "/api", "mcp": "/mcp/{token}", "websocket": "/ws",
         "connectedClients": state.connected_clients()
     }))
 }
@@ -91,7 +91,7 @@ async fn overview(State(state): State<Arc<AppState>>) -> Result<Json<Value>, Pro
     Ok(Json(json!({
         "app": { "version": env!("CARGO_PKG_VERSION"), "startedAtUtc": state.started_at, "state": "ready" },
         "device": { "id": state.device.id.as_str(), "name": state.device.name, "platform": state.device.platform, "osVersion": state.device.os_version, "architecture": state.device.architecture },
-        "mcp": { "state": "listening", "endpoint": format!("http://{}:{}/mcp", state.bind_address, state.port), "connectedClients": state.connected_clients() },
+        "mcp": { "state": "listening", "endpoint": mcp_endpoint_template(&state), "connectedClients": state.connected_clients() },
         "database": { "state": "ready", "path": state.database_path, "schemaVersion": chatcmd_storage::CURRENT_SCHEMA_VERSION.to_string() },
         "terminal": { "defaultShell": default_shell(), "activeSessions": count_active(&terminal), "totalSessions": total(&terminal), "failedSessions": *terminal.get("failed").unwrap_or(&0) },
         "tasks": { "running": *tasks.get("running").unwrap_or(&0), "completed": *tasks.get("completed").unwrap_or(&0), "failed": *tasks.get("failed").unwrap_or(&0), "approvals": approval_count },
@@ -101,7 +101,7 @@ async fn overview(State(state): State<Arc<AppState>>) -> Result<Json<Value>, Pro
 
 async fn mcp_status(State(state): State<Arc<AppState>>) -> Json<Value> {
     Json(
-        json!({ "state": "listening", "endpoint": format!("http://{}:{}/mcp", state.bind_address, state.port), "connectedClients": state.connected_clients() }),
+        json!({ "state": "listening", "endpoint": mcp_endpoint_template(&state), "connectedClients": state.connected_clients() }),
     )
 }
 
@@ -162,13 +162,14 @@ async fn create_agent(
         .map_err(storage_problem)?;
     let agent = agent_value(&state, result.agent).await?;
     let secret = result.secret.expose_once();
+    let endpoint = mcp_endpoint(&state, &secret);
     state.publish(AppEvent::new(
         "agent.created",
         json!({ "agentId": agent["id"] }),
     ));
     Ok((
         StatusCode::CREATED,
-        Json(json!({ "agent": agent, "secret": secret })),
+        Json(json!({ "agent": agent, "endpoint": endpoint })),
     ))
 }
 
@@ -223,9 +224,12 @@ async fn rotate_secret(
         .await
         .map_err(storage_problem)?;
     let agent = agent_value(&state, result.agent).await?;
-    Ok(Json(
-        json!({ "agent": agent, "secret": result.secret.expose_once() }),
-    ))
+    let secret = result.secret.expose_once();
+    let endpoint = mcp_endpoint(&state, &secret);
+    Ok(Json(json!({
+        "agent": agent,
+        "endpoint": endpoint
+    })))
 }
 
 #[derive(Deserialize)]
@@ -473,8 +477,16 @@ async fn save_settings(
     Ok(Json(settings_value(&state).await?))
 }
 
+fn mcp_endpoint_template(state: &AppState) -> String {
+    format!("http://{}:{}/mcp/{{token}}", state.bind_address, state.port)
+}
+
+fn mcp_endpoint(state: &AppState, token: &str) -> String {
+    format!("http://{}:{}/mcp/{token}", state.bind_address, state.port)
+}
+
 async fn settings_value(state: &Arc<AppState>) -> Result<Value, Problem> {
-    let defaults = json!({ "bindAddress": state.bind_address, "port": state.port, "mcpEndpoint": format!("http://{}:{}/mcp",state.bind_address,state.port), "databasePath": state.database_path, "databaseState": "ready", "executionMode": "approval", "workspaceRoots": [std::env::current_dir().unwrap_or_default()], "terminalExecutable": default_shell(), "taskConcurrency": 4, "sessionConcurrency": 8, "theme": "system", "language": "en", "sound": false });
+    let defaults = json!({ "bindAddress": state.bind_address, "port": state.port, "mcpEndpoint": mcp_endpoint_template(state), "databasePath": state.database_path, "databaseState": "ready", "executionMode": "approval", "workspaceRoots": [std::env::current_dir().unwrap_or_default()], "terminalExecutable": default_shell(), "taskConcurrency": 4, "sessionConcurrency": 8, "theme": "system", "language": "en", "sound": false });
     let mut object = defaults.as_object().cloned().unwrap_or_default();
     for key in [
         "executionMode",

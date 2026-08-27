@@ -52,11 +52,11 @@ pub trait McpAgentStore: Send + Sync {
     async fn delete_agent(&self, id: &AgentId) -> Result<(), StorageError>;
 }
 
-/// Secret-authenticated policy lookup used by MCP request middleware.
+/// Path-token-authenticated policy lookup used by the MCP HTTP boundary.
 pub trait PolicyLookup: Send + Sync {
-    async fn lookup_policy_by_bearer(
+    async fn lookup_policy_by_token(
         &self,
-        raw_bearer: &str,
+        raw_token: &str,
     ) -> Result<Option<McpAgentPolicy>, StorageError>;
 }
 

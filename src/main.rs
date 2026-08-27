@@ -105,7 +105,11 @@ async fn main() -> Result<()> {
             allow_missing: ip.is_loopback(),
         }),
     );
-    let mcp = chatcmd_mcp::axum_router(McpServer::new(runtime), security);
+    let mcp = chatcmd_mcp::axum_router_with_host_validation(
+        McpServer::new(runtime),
+        security,
+        !ip.is_loopback(),
+    );
     let state = Arc::new(AppState::new(
         repository,
         database_path.display().to_string(),
@@ -123,7 +127,17 @@ async fn main() -> Result<()> {
         .route("/ws", get(ws_handler))
         .fallback_service(frontend)
         .with_state(state);
-    let app = mcp.merge(management).layer(TraceLayer::new_for_http());
+    let app = mcp
+        .merge(management)
+        .layer(TraceLayer::new_for_http().make_span_with(
+            |request: &axum::http::Request<axum::body::Body>| {
+                tracing::info_span!(
+                    "http.request",
+                    method = %request.method(),
+                    route = %trace_route(request.uri().path())
+                )
+            },
+        ));
     let address = SocketAddr::new(ip, port);
     let listener = tokio::net::TcpListener::bind(address)
         .await
@@ -196,14 +210,14 @@ fn seeded_tool_id(name: &str) -> String {
 
 struct DatabaseAuth(SqliteRepository);
 impl AuthProvider for DatabaseAuth {
-    fn authorize<'a>(&'a self, bearer: &'a str) -> BoxFuture<'a, RuntimeResult<String>> {
+    fn authorize<'a>(&'a self, token: &'a str) -> BoxFuture<'a, RuntimeResult<String>> {
         Box::pin(async move {
             self.0
-                .lookup_policy_by_bearer(bearer)
+                .lookup_policy_by_token(token)
                 .await
-                .map_err(|_| RuntimeError::new("unauthorized", "authorization failed"))?
+                .map_err(|_| RuntimeError::new("unauthorized", "MCP token validation failed"))?
                 .map(|policy| policy.agent.id.into_string())
-                .ok_or_else(|| RuntimeError::new("unauthorized", "invalid bearer token"))
+                .ok_or_else(|| RuntimeError::new("unauthorized", "invalid MCP path token"))
         })
     }
 }
@@ -259,6 +273,14 @@ impl EventSink for BroadcastEvents {
     }
 }
 
+fn trace_route(path: &str) -> &str {
+    if path.starts_with("/mcp/") {
+        "/mcp/{token}"
+    } else {
+        path
+    }
+}
+
 fn user_home() -> Option<PathBuf> {
     std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from)
 }
@@ -280,5 +302,11 @@ mod tests {
         assert!(remote.authorize("").await.is_err());
         assert!(local.authorize("http://localhost:8080").await.is_ok());
         assert!(local.authorize("http://evil.example").await.is_err());
+    }
+
+    #[test]
+    fn trace_route_never_logs_mcp_tokens() {
+        assert_eq!(trace_route("/mcp/super-secret-token"), "/mcp/{token}");
+        assert_eq!(trace_route("/api/health"), "/api/health");
     }
 }

@@ -16,9 +16,9 @@ fn identifiers_preserve_unsafe_json_integers_as_strings() {
 
 #[test]
 fn secret_hash_comparison_and_one_time_exposure_work() {
-    let first = SecretHash::from_bearer("secret-one");
-    let same = SecretHash::from_bearer("secret-one");
-    let other = SecretHash::from_bearer("secret-two");
+    let first = SecretHash::from_token("secret-one");
+    let same = SecretHash::from_token("secret-one");
+    let other = SecretHash::from_token("secret-two");
     assert!(first.constant_time_eq(&same));
     assert!(!first.constant_time_eq(&other));
 
