@@ -22,7 +22,17 @@ impl RuntimeHost {
         let delegated_task = self
             .delegated_subagent_task_id(context, first_user_message)
             .await?;
-        let mapped_scope_task = if delegated_task.is_none() {
+        let chatgpt_bridge_task = if delegated_task.is_none() {
+            if let Some(message) = first_user_message {
+                self.chatgpt_bridge_task_for_message(&context.agent_id, message)
+                    .await?
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let mapped_scope_task = if delegated_task.is_none() && chatgpt_bridge_task.is_none() {
             if let Some(scope) = conversation_scope.as_deref() {
                 self.bound_task_for_conversation_scope(&context.agent_id, scope)
                     .await?
@@ -33,20 +43,22 @@ impl RuntimeHost {
             None
         };
         let task = delegated_task.unwrap_or_else(|| {
-            mapped_scope_task.unwrap_or_else(|| {
-                if let (Some(scope), Some(message)) =
-                    (conversation_scope.as_deref(), first_user_message)
-                {
-                    task_identity_from_first_message(&context.agent_id, scope, message)
-                } else {
-                    select_task_identity(
-                        &context.agent_id,
-                        conversation_scope.as_deref(),
-                        context.task_id.as_deref(),
-                        bound_task.as_deref(),
-                        &context.request_id,
-                    )
-                }
+            chatgpt_bridge_task.unwrap_or_else(|| {
+                mapped_scope_task.unwrap_or_else(|| {
+                    if let (Some(scope), Some(message)) =
+                        (conversation_scope.as_deref(), first_user_message)
+                    {
+                        task_identity_from_first_message(&context.agent_id, scope, message)
+                    } else {
+                        select_task_identity(
+                            &context.agent_id,
+                            conversation_scope.as_deref(),
+                            context.task_id.as_deref(),
+                            bound_task.as_deref(),
+                            &context.request_id,
+                        )
+                    }
+                })
             })
         });
         let logical_session = safe_id("mcp-session", &context.agent_id, &task);
@@ -91,7 +103,10 @@ impl RuntimeHost {
                         .and_then(|task| task.conversation_scope_hash.clone())
                 }),
                 title: current.as_ref().and_then(|task| task.title.clone()),
-                source: Some("mcp".to_owned()),
+                source: current
+                    .as_ref()
+                    .and_then(|task| task.source.clone())
+                    .or_else(|| Some("mcp".to_owned())),
                 status: TaskStatus::Running,
                 active_session_id: Some(session_id.clone()),
                 generation,
@@ -144,6 +159,34 @@ impl RuntimeHost {
         .fetch_optional(self.repository.pool())
         .await
         .map_err(|_| RuntimeError::new("storage_error", "conversation task binding lookup failed"))
+    }
+
+    async fn chatgpt_bridge_task_for_message(
+        &self,
+        agent_id: &str,
+        message: &str,
+    ) -> RuntimeResult<Option<String>> {
+        let cutoff = now_ms().saturating_sub(5 * 60 * 1000);
+        sqlx::query_scalar::<_, String>(
+            r#"SELECT c.task_id
+               FROM chatgpt_conversations c
+               JOIN chatgpt_bridge_requests r ON r.id=c.active_request_id
+               JOIN tasks t ON t.id=c.task_id
+               WHERE t.agent_id=? AND t.source='chatgpt_web'
+                 AND r.submitted_content=?
+                 AND r.status IN ('queued','running','stop_requested')
+                 AND r.updated_at_ms>=?
+               ORDER BY r.updated_at_ms DESC,r.id DESC
+               LIMIT 1"#,
+        )
+        .bind(agent_id)
+        .bind(message)
+        .bind(cutoff)
+        .fetch_optional(self.repository.pool())
+        .await
+        .map_err(|_| {
+            RuntimeError::new("storage_error", "ChatGPT bridge task binding lookup failed")
+        })
     }
 
     async fn bound_task_for_turn(

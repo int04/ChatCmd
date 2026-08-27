@@ -1,10 +1,13 @@
 mod agents;
+mod chatgpt;
+mod chatgpt_support;
 mod sessions;
 mod settings;
 mod subagents;
 mod task_controls;
 
 use agents::*;
+use chatgpt::*;
 use sessions::*;
 use settings::*;
 use subagents::*;
@@ -42,6 +45,13 @@ pub(crate) fn router() -> Router<Arc<AppState>> {
         .route("/mcp/agents/{id}/enabled", patch(set_enabled))
         .route("/mcp/tools", get(tools))
         .route("/mcp/tool-presets", get(presets))
+        .route("/chatgpt/requests", post(create_request))
+        .route("/chatgpt/requests/{id}", get(request))
+        .route("/chatgpt/tasks/{task_id}", get(task_bridge))
+        .route("/chatgpt/tasks/{task_id}/messages", post(continue_message))
+        .route("/chatgpt/tasks/{task_id}/stop", post(stop_message))
+        .route("/chatgpt/bridge/{request_id}/started", post(bridge_started))
+        .route("/chatgpt/bridge/{request_id}/result", post(bridge_result))
         .route("/tasks", get(tasks))
         .route("/tasks/{id}", get(task))
         .route(
@@ -71,7 +81,10 @@ pub(crate) fn router() -> Router<Arc<AppState>> {
 }
 
 async fn management_header(request: Request, next: Next) -> Result<Response, Problem> {
-    if request.headers().get("x-chatcmdclient") == Some(&HeaderValue::from_static("local-ui")) {
+    let caller = request.headers().get("x-chatcmdclient");
+    if caller == Some(&HeaderValue::from_static("local-ui"))
+        || caller == Some(&HeaderValue::from_static("chatgpt-extension"))
+    {
         Ok(next.run(request).await)
     } else {
         Err(Problem::new(
@@ -299,7 +312,7 @@ fn compact_preview(value: &str) -> String {
 }
 
 fn task_value(task: chatcmd_core::Task) -> Value {
-    json!({"id":task.id.as_str(),"title":task.title,"status":task.status.as_str(),"updatedAtUtc":iso_ms(task.updated_at_ms),"createdAtUtc":iso_ms(task.created_at_ms),"generation":task.generation,"activeSessionId":task.active_session_id.map(|id|id.into_string())})
+    json!({"id":task.id.as_str(),"title":task.title,"source":task.source,"status":task.status.as_str(),"updatedAtUtc":iso_ms(task.updated_at_ms),"createdAtUtc":iso_ms(task.created_at_ms),"generation":task.generation,"activeSessionId":task.active_session_id.map(|id|id.into_string())})
 }
 pub(super) fn timeline_row(row: &sqlx::sqlite::SqliteRow) -> Value {
     json!({"id":row.get::<String,_>("event_id"),"type":row.get::<String,_>("kind"),"occurredAt":iso_ms(row.get("created_at_ms")),"turnId":row.get::<Option<String>,_>("turn_id"),"sessionId":row.get::<Option<String>,_>("session_id"),"payload":serde_json::from_str::<Value>(&row.get::<String,_>("payload_json")).unwrap_or(Value::Null)})

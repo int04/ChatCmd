@@ -1,8 +1,9 @@
-import { CheckCircle2, CircleAlert, Clock3, LoaderCircle, MessageSquareText, Search, TerminalSquare } from 'lucide-react';
+import { CheckCircle2, CircleAlert, Clock3, LoaderCircle, MessageSquareText, Plus, Search, TerminalSquare } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
 import { api } from '../api';
+import { ChatGptTaskCard, ChatGptTaskComposer, NewChatGptConversation } from '../chatgpt/ChatGptConversation';
 import { Empty, ErrorState, Loading, StatusBadge, formatTime } from '../components';
 import { useRealtime } from '../realtime';
 import { TaskAccessCard } from '../tasks/TaskAccessCard';
@@ -85,14 +86,14 @@ function TasksWorkspace() {
 
   return <div className="tasks-workspace">
     <aside className="tasks-conversation-pane" aria-label="Công việc gần đây">
-      <header className="tasks-conversation-header"><div><span className="eyebrow">TASKS</span><h1>Công việc gần đây</h1></div><small>{tasks.length}</small></header>
+      <header className="tasks-conversation-header"><div><span className="eyebrow">TASKS</span><h1>Công việc gần đây</h1></div><div className="tasks-header-actions"><small>{tasks.length}</small><Link className="tasks-new-message" to="/tasks/new"><Plus /><span>Tin nhắn mới</span></Link></div></header>
       <label className="tasks-conversation-search"><Search /><span className="sr-only">Tìm công việc</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Tìm công việc" /></label>
       <div className="tasks-conversation-list">
         {result.loading ? <Loading label="Loading tasks" /> : result.error ? <ErrorState message={result.error} retry={() => void result.reload()} /> : !tasks.length ? <Empty title="Chưa có công việc" body="Task từ Agent sẽ xuất hiện tại đây." /> : tasks.map((task) => <ConversationRow task={task} selected={task.id === taskId} unread={Math.max(0, (task.finalResponseCount ?? 0) - (readFinalCounts[task.id] ?? 0))} key={task.id} />)}
       </div>
     </aside>
     <section className="tasks-detail-pane" aria-label="Nội dung công việc">
-      {taskId ? <TaskConversationDetail taskId={taskId} refreshVersion={detailVersion} realtime={realtime} liveEvents={liveEvents} onSubagentTask={hideSubagentTask} /> : <div className="tasks-select-empty"><MessageSquareText /><strong>Chọn một cuộc trò chuyện</strong><span>Nội dung xử lý của Agent, tool và kết luận sẽ hiển thị tại đây.</span></div>}
+      {taskId === 'new' ? <NewChatGptConversation /> : taskId ? <TaskConversationDetail taskId={taskId} refreshVersion={detailVersion} realtime={realtime} liveEvents={liveEvents} onSubagentTask={hideSubagentTask} /> : <div className="tasks-select-empty"><MessageSquareText /><strong>Chọn một cuộc trò chuyện</strong><span>Nội dung xử lý của Agent, tool và kết luận sẽ hiển thị tại đây.</span></div>}
     </section>
   </div>;
 }
@@ -120,6 +121,7 @@ function TaskConversationDetail({ taskId, refreshVersion, realtime, liveEvents, 
 
 function TaskDetailContent({ detail, realtime, onTaskChanged }: { detail: TaskDetail; realtime: string; onTaskChanged: (detail: TaskDetail) => void }) {
   const { task, events = [] } = detail;
+  const chatGpt = task.source === 'chatgpt_web';
   const turns = useMemo(() => detail.turns?.length ? detail.turns : buildTaskTurns(events, task), [detail.turns, events, task]);
   const [now, setNow] = useState(0);
   useEffect(() => {
@@ -156,14 +158,15 @@ function TaskDetailContent({ detail, realtime, onTaskChanged }: { detail: TaskDe
     <header className="task-detail-topbar"><div><h1>{conversationName(task)}</h1><p>{turns.length} agent turns · generation {task.generation ?? 1} · {realtime === 'online' ? 'realtime' : realtime} · updated {formatTime(task.updatedAtUtc)}</p></div><StatusBadge state={task.status} /></header>
     <div className="task-detail-body">
       <main ref={chatRef} className="task-chat-column" onScroll={updateChatScrollPosition}><h2 className="sr-only">Activity timeline</h2><section className="task-bubble-timeline turn-timeline" aria-label="Conversation activity">
-        {turns.length ? turns.map((turn) => <TaskTurnBubble turn={turn} now={turnNow} subagents={(detail.subagents ?? []).filter((agent) => agent.parentTurnId === turn.id)} key={turn.id} />) : <Empty title="Chưa có hoạt động" body="Agent chưa ghi nhận nội dung cho task này." />}
-      </section></main>
+        {turns.length ? turns.map((turn) => <TaskTurnBubble turn={turn} now={turnNow} agentLabel={chatGpt ? 'ChatGPT' : 'Codex Agent'} subagents={(detail.subagents ?? []).filter((agent) => agent.parentTurnId === turn.id)} key={turn.id} />) : <Empty title="Chưa có hoạt động" body="Agent chưa ghi nhận nội dung cho task này." />}
+      </section>{chatGpt && <ChatGptTaskComposer taskId={task.id} />}</main>
       <aside className="task-detail-sidebar" aria-label="Task information">
         <header className="task-info-header"><span className={`task-info-state ${task.status}`}>{task.status === 'running' ? <LoaderCircle className="spin" /> : task.status === 'failed' ? <CircleAlert /> : <CheckCircle2 />}</span><div><h2>{conversationName(task)}</h2><p><code>#{task.id}</code> · {task.status} · {turns.length} lượt agent</p></div></header>
         <div className="task-info-duration"><Clock3 /><span>{formatTime(startedAt)} → {formatTime(task.updatedAtUtc)}</span></div>
         <section className="task-info-section"><strong>Terminal / Task</strong><div className="task-info-generation"><TerminalSquare /><div><code>Generation {task.generation ?? 1}</code><small>{task.activeSessionId ? `#${task.activeSessionId}` : 'No active terminal'}</small></div></div></section>
+        {chatGpt && <ChatGptTaskCard taskId={task.id} />}
         <TaskAccessCard taskId={task.id} defaultMode={detail.executionMode ?? 'allowAll'} />
-        <TaskConversationStopCard taskId={task.id} taskStatus={task.status} onStopped={onTaskChanged} />
+        {!chatGpt && <TaskConversationStopCard taskId={task.id} taskStatus={task.status} onStopped={onTaskChanged} />}
       </aside>
     </div>
   </div>;

@@ -25,7 +25,7 @@ import {
 
 const TaskCodeViewer = lazy(async () => ({ default: (await import('../TaskCodeViewer')).TaskCodeViewer }));
 
-export function TaskTurnBubble({ turn, now, subagents = [] }: { turn: TaskTurn; now: string; subagents?: SubagentRun[] }) {
+export function TaskTurnBubble({ turn, now, subagents = [], agentLabel = 'Codex Agent' }: { turn: TaskTurn; now: string; subagents?: SubagentRun[]; agentLabel?: string }) {
   const events = turn.events ?? [];
   const response = findFinalResponse(events);
   const userMessage = findUserMessage(events);
@@ -58,13 +58,13 @@ export function TaskTurnBubble({ turn, now, subagents = [] }: { turn: TaskTurn; 
     <article className={`turn-bubble ${status}`} aria-labelledby={headingId} aria-busy={status === 'running'}>
       <header className="turn-header">
         <span className="turn-avatar" aria-hidden="true">{status === 'running' ? <LoaderCircle className="spin" /> : status === 'failed' || status === 'incomplete' ? <CircleAlert /> : <CheckCircle2 />}</span>
-        <div><h3 id={headingId}>Codex Agent</h3><p>{status === 'running' ? `${activities.length.toLocaleString('vi')} hoạt động` : <><span>{stateLabel}</span> · {activities.length.toLocaleString('vi')} hoạt động</>}</p></div>
+        <div><h3 id={headingId}>{agentLabel}</h3><p>{status === 'running' ? `${activities.length.toLocaleString('vi')} hoạt động` : <><span>{stateLabel}</span> · {activities.length.toLocaleString('vi')} hoạt động</>}</p></div>
         <time dateTime={startedAt} aria-hidden="true">{status === 'running' ? duration(startedAt, now) : formatClockTime(startedAt)}</time>
       </header>
       {subagents.length > 0 && <SubagentList agents={subagents} />}
       {(activities.length > 0 || blocks.some((block) => block.type === 'progress')) && <TurnProcess blocks={blocks} now={now} taskId={taskId} onStop={setStopTarget} />}
       {isThinking && <div className="turn-thinking" role="status"><span>Đang suy nghĩ và chuẩn bị phản hồi…</span></div>}
-      {status === 'failed' && <div className="turn-error" role="alert"><CircleAlert /><div><strong>Lượt agent thất bại</strong><p>{latestMessage(events) || 'Agent không thể hoàn tất lượt này. Xem hoạt động phía trên để kiểm tra nguyên nhân.'}</p></div></div>}
+      {status === 'failed' && (agentLabel === 'ChatGPT' && latestMessage(events).includes('Nút gửi ChatGPT đang bị vô hiệu hóa.') ? <div className="turn-warning" role="status"><CircleAlert /><div><strong>Đang chờ gửi lại</strong><p>Nút gửi ChatGPT đang tạm bị vô hiệu hóa. Hệ thống sẽ tự thử lại sau 10 giây; bạn có thể hủy gửi tại ô nhập bên dưới.</p></div></div> : <div className="turn-error" role="alert"><CircleAlert /><div><strong>Lượt agent thất bại</strong><p>{latestMessage(events) || 'Agent không thể hoàn tất lượt này. Xem hoạt động phía trên để kiểm tra nguyên nhân.'}</p></div></div>)}
       {status === 'incomplete' && <div className="turn-warning" role="status"><CircleAlert /><div><strong>Có thể lượt đã bị gián đoạn</strong><p>{latestMessage(events) || 'Không nhận được hoạt động mới hoặc tín hiệu hoàn tất trong một thời gian dài. Có thể lượt bị gián đoạn hoặc tín hiệu đến muộn; trạng thái sẽ tự phục hồi khi có dữ liệu mới.'}</p></div></div>}
       {status === 'completed' && response && <div className="turn-response"><div className="turn-response-label"><CheckCircle2 /> Phản hồi cuối</div><div className="turn-response-content"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]} components={{ a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer noopener" /> }}>{response.text}</ReactMarkdown></div></div>}
     </article>

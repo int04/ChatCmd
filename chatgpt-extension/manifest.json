@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "ChatCMD ChatGPT Bridge",
+  "version": "0.1.0",
+  "description": "Bridges the local ChatCMD console to an already signed-in chatgpt.com tab.",
+  "permissions": ["tabs", "storage"],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://chatgpt.com/*"],
+      "js": ["content-chatgpt.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["http://localhost/*", "http://127.0.0.1/*"],
+      "js": ["content-chatcmd.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

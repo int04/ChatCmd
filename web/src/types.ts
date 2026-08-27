@@ -20,7 +20,9 @@ export interface AgentInput { name: string; enabled: boolean; projectFolder: str
 export interface SecretResult { agent?: Agent; endpoint: string }
 export interface Tool { id: Id; name: string; description?: string; group?: string; dangerous?: boolean }
 export interface ToolPreset { id: Id; name: string; description?: string; toolIds: Id[] }
-export interface Task { id: Id; title?: string; status: string; updatedAtUtc: string; createdAtUtc?: string; generation?: number; turnCount?: number; activeSessionId?: Id; outputPreview?: string; approvalPending?: boolean; finalResponseCount?: number; isSubagent?: boolean; parentTaskId?: Id; parentTurnId?: Id; agentName?: string }
+export interface Task { id: Id; title?: string; source?: string; status: string; updatedAtUtc: string; createdAtUtc?: string; generation?: number; turnCount?: number; activeSessionId?: Id; outputPreview?: string; approvalPending?: boolean; finalResponseCount?: number; isSubagent?: boolean; parentTaskId?: Id; parentTurnId?: Id; agentName?: string }
+export interface ChatGptRequest { id: Id; taskId?: Id; turnId: Id; agentId: Id; model: string; userContent: string; submittedContent: string; status: string; conversationId?: string; conversationUrl?: string; assistantContent?: string; errorMessage?: string }
+export interface ChatGptBridge { taskId: Id; conversationId: string; conversationUrl: string; model: string; activeRequestId?: Id; activeStatus?: string; activeSubmittedContent?: string }
 export interface SubagentRun { id: Id; parentTurnId: Id; taskId?: Id; name: string; request: string; status: string; createdAtUtc: string; updatedAtUtc: string; completedAtUtc?: string }
 export interface TaskDetail { task: Task; turns?: TaskTurn[]; events?: TimelineEvent[]; subagents?: SubagentRun[]; executionMode?: CommandExecutionMode }
 export interface TaskTurn { id: Id; generation?: number; actor?: string; status?: string; startedAtUtc?: string; completedAtUtc?: string; events?: TimelineEvent[] }
