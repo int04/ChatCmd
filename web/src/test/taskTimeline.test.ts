@@ -104,6 +104,21 @@ describe('user message synchronization rendering', () => {
   });
 });
 
+describe('sub-agent orchestration rendering', () => {
+  it('keeps orchestration tools out of the visible process activity list', () => {
+    const events: TimelineEvent[] = [
+      {
+        id: 'subagent-start', type: 'tool_call', occurredAt: '2026-08-27T08:00:00.000Z',
+        taskId: 'task-parent', turnId: 'turn-parent', payload: { tool: 'agent_subagent_start', status: 'started' },
+      },
+      {
+        id: 'subagent-wait', type: 'tool_call', occurredAt: '2026-08-27T08:00:01.000Z',
+        taskId: 'task-parent', turnId: 'turn-parent', payload: { tool: 'agent_subagent_wait', status: 'started' },
+      },
+    ];
+    expect(buildProcessBlocks(events)).toEqual([]);
+  });
+});
 describe('running tool stop projection', () => {
   const started: TimelineEvent = {
     id: 'tool-start', type: 'tool_call', occurredAt: '2026-08-27T08:00:00.000Z',

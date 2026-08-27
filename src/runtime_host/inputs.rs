@@ -256,3 +256,21 @@ mod tests {
         assert!(input.path.is_none());
     }
 }
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct SubagentStartInput {
+    pub(super) name: String,
+    pub(super) request: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct SubagentWaitInput {
+    #[serde(default = "default_subagent_wait_ms")]
+    pub(super) timeout_ms: u64,
+}
+
+const fn default_subagent_wait_ms() -> u64 {
+    20_000
+}

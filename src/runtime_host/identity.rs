@@ -19,26 +19,35 @@ impl RuntimeHost {
         } else {
             None
         };
-        let mapped_scope_task = if let Some(scope) = conversation_scope.as_deref() {
-            self.bound_task_for_conversation_scope(&context.agent_id, scope)
-                .await?
+        let delegated_task = self
+            .delegated_subagent_task_id(context, first_user_message)
+            .await?;
+        let mapped_scope_task = if delegated_task.is_none() {
+            if let Some(scope) = conversation_scope.as_deref() {
+                self.bound_task_for_conversation_scope(&context.agent_id, scope)
+                    .await?
+            } else {
+                None
+            }
         } else {
             None
         };
-        let task = mapped_scope_task.unwrap_or_else(|| {
-            if let (Some(scope), Some(message)) =
-                (conversation_scope.as_deref(), first_user_message)
-            {
-                task_identity_from_first_message(&context.agent_id, scope, message)
-            } else {
-                select_task_identity(
-                    &context.agent_id,
-                    conversation_scope.as_deref(),
-                    context.task_id.as_deref(),
-                    bound_task.as_deref(),
-                    &context.request_id,
-                )
-            }
+        let task = delegated_task.unwrap_or_else(|| {
+            mapped_scope_task.unwrap_or_else(|| {
+                if let (Some(scope), Some(message)) =
+                    (conversation_scope.as_deref(), first_user_message)
+                {
+                    task_identity_from_first_message(&context.agent_id, scope, message)
+                } else {
+                    select_task_identity(
+                        &context.agent_id,
+                        conversation_scope.as_deref(),
+                        context.task_id.as_deref(),
+                        bound_task.as_deref(),
+                        &context.request_id,
+                    )
+                }
+            })
         });
         let logical_session = safe_id("mcp-session", &context.agent_id, &task);
         let turn = context.turn_id.clone().unwrap_or_else(|| {
@@ -92,6 +101,8 @@ impl RuntimeHost {
             })
             .await
             .map_err(storage_error)?;
+        self.claim_subagent_from_message(context, task_id.as_str(), first_user_message)
+            .await?;
         self.repository
             .upsert_task_session(&TaskSession {
                 task_id: task_id.clone(),

@@ -89,6 +89,27 @@ fn turn_context(
 }
 
 #[tokio::test]
+async fn runtime_api_resolves_agent_project_folder() {
+    let (host, agent_id, directory) = test_host().await;
+    let project = directory.path().join("project-root");
+    std::fs::create_dir_all(&project).expect("create project root");
+    sqlx::query("UPDATE mcp_agents SET project_folder=? WHERE id=?")
+        .bind(project.display().to_string())
+        .bind(&agent_id)
+        .execute(host.repository.pool())
+        .await
+        .expect("set project folder");
+
+    let resolved = <RuntimeHost as chatcmd_mcp::RuntimeApi>::project_folder(&host, &agent_id)
+        .await
+        .expect("resolve project folder");
+    assert_eq!(
+        resolved.as_deref(),
+        Some(project.display().to_string().as_str())
+    );
+}
+
+#[tokio::test]
 async fn user_message_is_required_first_and_is_idempotent_per_turn() {
     let (host, agent_id, _directory) = test_host().await;
     let scope = "conversation-user-message-sync";
@@ -283,6 +304,134 @@ async fn first_message_seeds_task_id_and_only_first_final_can_name_chat() {
         .await
         .expect("final title");
     assert_eq!(final_title, "Sửa lỗi Git diff stat");
+}
+
+#[tokio::test]
+async fn delegated_child_keeps_user_message_sync_for_internal_calls() {
+    let (host, agent_id, _directory) = test_host().await;
+    let parent_scope = "conversation-subagent-internal-sync";
+    let parent_turn = "turn-parent-subagent-internal-sync";
+    let parent = host
+        .call_persisted(
+            "agent_user_message",
+            turn_context(
+                "parent-user",
+                &agent_id,
+                "agent_user_message",
+                parent_turn,
+                parent_scope,
+            ),
+            json!({"content":"Create one delegated child"}),
+        )
+        .await
+        .expect("sync parent user message");
+    let parent_task = parent["taskId"].as_str().expect("parent task");
+    let mut start_context =
+        OperationContext::new("subagent-start", &agent_id, "agent_subagent_start");
+    start_context.task_id = Some(parent_task.to_owned());
+    start_context.turn_id = Some(parent_turn.to_owned());
+    let registration = host
+        .call_persisted(
+            "agent_subagent_start",
+            start_context,
+            json!({"name":"Reader","request":"Read one file"}),
+        )
+        .await
+        .expect("register child");
+    assert_eq!(registration["taskId"], parent_task);
+    let child_task = registration["childTaskId"]
+        .as_str()
+        .expect("child task")
+        .to_owned();
+    let marker = registration["delegationMarker"].as_str().expect("marker");
+    let child_turn = format!(
+        "turn-{}",
+        registration["subagentId"].as_str().expect("subagent id")
+    );
+
+    let mut child_user = OperationContext::new("child-user", &agent_id, "agent_user_message");
+    child_user.task_id = Some(child_task.clone());
+    child_user.turn_id = Some(child_turn.clone());
+    host.call_persisted(
+        "agent_user_message",
+        child_user,
+        json!({"content":format!("Read one file\n\n{marker}")}),
+    )
+    .await
+    .expect("sync child user message");
+
+    let mut roots = OperationContext::new("child-roots", &agent_id, "workspace_roots");
+    roots.task_id = Some(child_task);
+    roots.turn_id = Some(child_turn);
+    host.ensure_call_identity(&mut roots, None)
+        .await
+        .expect("normalize child internal identity");
+    host.ensure_user_message_synced(&roots)
+        .await
+        .expect("child internal identity must see synchronized user message");
+}
+
+#[tokio::test]
+async fn repeated_subagent_registration_is_idempotent_with_new_request_id() {
+    let (host, agent_id, _directory) = test_host().await;
+    let scope = "conversation-subagent-idempotency";
+    let turn = "turn-subagent-idempotency";
+    let parent = host
+        .call_persisted(
+            "agent_user_message",
+            turn_context(
+                "parent-user-idempotency",
+                &agent_id,
+                "agent_user_message",
+                turn,
+                scope,
+            ),
+            json!({"content":"Create delegated reviewer"}),
+        )
+        .await
+        .expect("sync parent");
+    let parent_task = parent["taskId"].as_str().expect("parent task");
+
+    let start = |request_id: &str| {
+        let mut context = OperationContext::new(request_id, &agent_id, "agent_subagent_start");
+        context.task_id = Some(parent_task.to_owned());
+        context.turn_id = Some(turn.to_owned());
+        context
+    };
+    let first = host
+        .call_persisted(
+            "agent_subagent_start",
+            start("start-first"),
+            json!({"name":"MCP Lib Reviewer","request":"Read exactly lib.rs"}),
+        )
+        .await
+        .expect("first registration");
+    let retry = host
+        .call_persisted(
+            "agent_subagent_start",
+            start("start-retry-with-new-request-id"),
+            json!({"name":"MCP Lib Reviewer","request":"Read exactly lib.rs"}),
+        )
+        .await
+        .expect("idempotent retry");
+
+    assert_eq!(first["taskId"], parent_task);
+    assert_eq!(retry["taskId"], parent_task);
+    assert_eq!(first["childTaskId"], retry["childTaskId"]);
+    assert_eq!(first["subagentId"], retry["subagentId"]);
+    assert_eq!(first["duplicate"], false);
+    assert_eq!(retry["duplicate"], true);
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM subagent_runs WHERE parent_task_id=? AND parent_turn_id=? AND name=? AND request=?",
+    )
+    .bind(parent_task)
+    .bind(turn)
+    .bind("MCP Lib Reviewer")
+    .bind("Read exactly lib.rs")
+    .fetch_one(host.repository.pool())
+    .await
+    .expect("count subagents");
+    assert_eq!(count, 1);
 }
 
 #[tokio::test]

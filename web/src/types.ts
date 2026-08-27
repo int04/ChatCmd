@@ -20,8 +20,9 @@ export interface AgentInput { name: string; enabled: boolean; projectFolder: str
 export interface SecretResult { agent?: Agent; endpoint: string }
 export interface Tool { id: Id; name: string; description?: string; group?: string; dangerous?: boolean }
 export interface ToolPreset { id: Id; name: string; description?: string; toolIds: Id[] }
-export interface Task { id: Id; title?: string; status: string; updatedAtUtc: string; createdAtUtc?: string; generation?: number; turnCount?: number; activeSessionId?: Id; outputPreview?: string; approvalPending?: boolean; finalResponseCount?: number }
-export interface TaskDetail { task: Task; turns?: TaskTurn[]; events?: TimelineEvent[]; executionMode?: CommandExecutionMode }
+export interface Task { id: Id; title?: string; status: string; updatedAtUtc: string; createdAtUtc?: string; generation?: number; turnCount?: number; activeSessionId?: Id; outputPreview?: string; approvalPending?: boolean; finalResponseCount?: number; isSubagent?: boolean; parentTaskId?: Id; parentTurnId?: Id; agentName?: string }
+export interface SubagentRun { id: Id; parentTurnId: Id; taskId?: Id; name: string; request: string; status: string; createdAtUtc: string; updatedAtUtc: string; completedAtUtc?: string }
+export interface TaskDetail { task: Task; turns?: TaskTurn[]; events?: TimelineEvent[]; subagents?: SubagentRun[]; executionMode?: CommandExecutionMode }
 export interface TaskTurn { id: Id; generation?: number; actor?: string; status?: string; startedAtUtc?: string; completedAtUtc?: string; events?: TimelineEvent[] }
 export interface Session { kind: 'mcp' | 'terminal'; id: Id; taskId?: Id; shell?: string; processId?: number; status: string; workingDirectory?: string; createdAtUtc?: string; updatedAtUtc?: string; closedAtUtc?: string; replayCursor?: string }
 export interface SessionDetail { session: Session; events: TimelineEvent[]; nextCursor?: string; truncated?: boolean }

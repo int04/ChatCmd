@@ -26,7 +26,11 @@ impl RuntimeHost {
             .ok_or_else(|| RuntimeError::new("unauthorized", "agent is disabled or missing"))?;
         if matches!(
             tool,
-            "agent_user_message" | "agent_progress" | "agent_turn_complete"
+            "agent_user_message"
+                | "agent_progress"
+                | "agent_subagent_start"
+                | "agent_subagent_wait"
+                | "agent_turn_complete"
         ) {
             return Ok(());
         }
@@ -360,8 +364,18 @@ impl RuntimeHost {
                 )
                 .await
             }
+            "agent_subagent_start" => {
+                let input: SubagentStartInput = parse(arguments)?;
+                self.register_subagent(&context, &input.name, &input.request)
+                    .await
+            }
+            "agent_subagent_wait" => {
+                let input: SubagentWaitInput = parse(arguments)?;
+                self.wait_for_subagents(&context, input.timeout_ms).await
+            }
             "agent_turn_complete" => {
                 let input: CompleteInput = parse(arguments)?;
+                self.ensure_subagents_finished(&context).await?;
                 self.save_agent_event(
                     &context,
                     "completed",

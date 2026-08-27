@@ -2,6 +2,8 @@
 
 mod request_identity;
 mod server_contract;
+mod subagent_protocol;
+mod subagent_worker;
 mod tool_catalog;
 
 use axum::{
@@ -14,6 +16,7 @@ use axum::{
 };
 use chatcmd_runtime::{BoxFuture, DeviceDescriptor, OperationContext, RuntimeError, RuntimeResult};
 use rmcp::{
+    Peer, RoleServer,
     handler::server::wrapper::Parameters,
     model::CallToolResult,
     schemars, tool, tool_router,
@@ -54,6 +57,19 @@ pub trait RuntimeApi: Send + Sync {
     ) -> BoxFuture<'a, RuntimeResult<Value>>;
 
     fn local_device(&self) -> DeviceDescriptor;
+
+    fn project_folder<'a>(
+        &'a self,
+        _agent_id: &'a str,
+    ) -> BoxFuture<'a, RuntimeResult<Option<String>>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn fail_subagent<'a>(
+        &'a self,
+        child_task_id: &'a str,
+        message: &'a str,
+    ) -> BoxFuture<'a, RuntimeResult<()>>;
 }
 
 /// Shared typed argument envelope. Unknown fields remain structured and never become shell text.
@@ -97,7 +113,11 @@ impl McpServer {
         Self { runtime }
     }
 
-    async fn invoke(&self, tool_name: &'static str, arguments: ToolArguments) -> CallToolResult {
+    fn prepare_call(
+        &self,
+        tool_name: &'static str,
+        arguments: ToolArguments,
+    ) -> (OperationContext, Value) {
         let request_id = if arguments.request_id.is_empty() {
             uuid::Uuid::new_v4().to_string()
         } else {
@@ -112,9 +132,75 @@ impl McpServer {
         context.mcp_session_id = arguments.authenticated_session_id;
         context.conversation_scope_id = arguments.conversation_scope_id;
         let value = Value::Object(arguments.fields.into_iter().collect());
+        (context, value)
+    }
+
+    async fn invoke(&self, tool_name: &'static str, arguments: ToolArguments) -> CallToolResult {
+        let (context, value) = self.prepare_call(tool_name, arguments);
         match self.runtime.call(tool_name, context, value).await {
             Ok(value) => CallToolResult::structured(value),
             Err(error) => CallToolResult::structured_error(error_value(&error)),
+        }
+    }
+
+    async fn invoke_subagent_start(
+        &self,
+        arguments: ToolArguments,
+        peer: Peer<RoleServer>,
+    ) -> CallToolResult {
+        let (context, value) = self.prepare_call("agent_subagent_start", arguments);
+        let request = value
+            .get("request")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let registration = match self
+            .runtime
+            .call("agent_subagent_start", context.clone(), value)
+            .await
+        {
+            Ok(value) => value,
+            Err(error) => return CallToolResult::structured_error(error_value(&error)),
+        };
+        let tools = Self::tool_router().list_all();
+        let registered = registration.clone();
+        match subagent_worker::dispatch_registered_subagent(
+            self.runtime.clone(),
+            peer,
+            context,
+            registration,
+            &request,
+            tools,
+        )
+        .await
+        {
+            Ok(value) => CallToolResult::structured(value),
+            Err(error) => {
+                if let Some(child_task_id) = registered
+                    .get("childTaskId")
+                    .or_else(|| registered.get("taskId"))
+                    .and_then(Value::as_str)
+                {
+                    let _ = self
+                        .runtime
+                        .fail_subagent(child_task_id, &error.message)
+                        .await;
+                }
+                let mut failed = registered;
+                if let Some(object) = failed.as_object_mut() {
+                    object.insert("status".to_owned(), Value::String("failed".to_owned()));
+                    object.insert(
+                        "dispatchMode".to_owned(),
+                        Value::String("failed".to_owned()),
+                    );
+                    object.insert("workerStarted".to_owned(), Value::Bool(false));
+                    object.insert(
+                        "startupError".to_owned(),
+                        serde_json::json!({"code": error.code, "message": error.message}),
+                    );
+                }
+                CallToolResult::structured(failed)
+            }
         }
     }
 }
@@ -132,6 +218,15 @@ macro_rules! tool_methods {
                     self.invoke(stringify!($method), arguments).await
                 }
             )+
+
+            #[tool(description = "Create and dispatch one child agent. Pass the AI-chosen name and delegated request. ChatCMD uses server-to-model sampling when available; otherwise it starts a local Codex CLI worker in a read-only sandbox inside the reserved child task.")]
+            async fn agent_subagent_start(
+                &self,
+                Parameters(arguments): Parameters<ToolArguments>,
+                peer: Peer<RoleServer>,
+            ) -> CallToolResult {
+                self.invoke_subagent_start(arguments, peer).await
+            }
         }
     };
 }
@@ -201,6 +296,10 @@ tool_methods!(
     (
         agent_progress,
         "Publish one concise progress milestone during non-trivial work. Do not call it after agent_turn_complete."
+    ),
+    (
+        agent_subagent_wait,
+        "Wait for child agents registered by the current parent turn. Repeat while allFinished=false before finalizing the parent response."
     ),
     (
         agent_turn_complete,

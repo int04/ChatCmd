@@ -301,6 +301,63 @@ async fn restart_recovery_interrupts_running_task_and_session() {
 }
 
 #[tokio::test]
+async fn recent_tasks_hide_claimed_subagent_tasks() {
+    let directory = TempDir::new().expect("temporary directory");
+    let repository = repository(&directory).await;
+    let device = repository.local_device().await.expect("device");
+    let parent_id = TaskId::new("parent-task").expect("parent task ID");
+    let child_id = TaskId::new("child-task").expect("child task ID");
+
+    for (id, title, updated_at_ms) in [(&parent_id, "Parent", 1_i64), (&child_id, "Child", 2_i64)] {
+        repository
+            .upsert_task(&Task {
+                id: id.clone(),
+                agent_id: None,
+                device_id: device.id.clone(),
+                conversation_scope_hash: None,
+                title: Some(title.to_owned()),
+                source: Some("mcp".to_owned()),
+                status: TaskStatus::Running,
+                active_session_id: None,
+                generation: 1,
+                stopped_at_ms: None,
+                created_at_ms: updated_at_ms,
+                updated_at_ms,
+            })
+            .await
+            .expect("task");
+    }
+    sqlx::query("INSERT INTO subagent_runs(id,parent_task_id,parent_turn_id,child_task_id,name,request,status,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?, ?, ?)")
+        .bind("subagent-test")
+        .bind(parent_id.as_str())
+        .bind("turn-parent")
+        .bind(child_id.as_str())
+        .bind("Child Agent")
+        .bind("Inspect delegated work")
+        .bind("running")
+        .bind(2_i64)
+        .bind(2_i64)
+        .execute(repository.pool())
+        .await
+        .expect("subagent relation");
+
+    let recent = repository.list_tasks(20).await.expect("recent tasks");
+    assert_eq!(
+        recent
+            .iter()
+            .map(|task| task.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![parent_id.as_str()]
+    );
+    assert!(
+        repository
+            .task(&child_id)
+            .await
+            .expect("read child directly")
+            .is_some()
+    );
+}
+#[tokio::test]
 async fn newer_schema_is_rejected_before_migrations() {
     let directory = TempDir::new().expect("temporary directory");
     let repository = repository(&directory).await;

@@ -1,11 +1,13 @@
 mod agents;
 mod sessions;
 mod settings;
+mod subagents;
 mod task_controls;
 
 use agents::*;
 use sessions::*;
 use settings::*;
+use subagents::*;
 use task_controls::*;
 
 use std::{collections::BTreeMap, sync::Arc};
@@ -222,6 +224,14 @@ async fn task_detail(state: &Arc<AppState>, id: &str) -> Result<Json<Value>, Pro
         .await
         .map_err(storage_problem)?
         .ok_or_else(not_found)?;
+    let (subagent_parent, subagents) = task_subagent_data(state, id).await?;
+    let mut task_value = task_value(task);
+    if let (Some(parent), Some(object)) = (subagent_parent, task_value.as_object_mut()) {
+        object.insert("isSubagent".to_owned(), Value::Bool(true));
+        object.insert("parentTaskId".to_owned(), Value::String(parent.task_id));
+        object.insert("parentTurnId".to_owned(), Value::String(parent.turn_id));
+        object.insert("agentName".to_owned(), Value::String(parent.name));
+    }
     let rows = sqlx::query("SELECT event_id,turn_id,session_id,kind,payload_json,created_at_ms FROM timeline_events WHERE task_id=? ORDER BY created_at_ms DESC,event_id DESC LIMIT 1000")
         .bind(id).fetch_all(state.repository.pool()).await.map_err(db_problem)?;
     let terminal_rows = sqlx::query("SELECT event_id,turn_id,session_id,kind,stream,payload,payload_encoding,created_at_ms FROM terminal_event_chunks WHERE task_id=? ORDER BY created_at_ms DESC,event_id DESC LIMIT 5000")
@@ -259,7 +269,7 @@ async fn task_detail(state: &Arc<AppState>, id: &str) -> Result<Json<Value>, Pro
         .map(|(_, _, value)| value)
         .collect::<Vec<_>>();
     Ok(Json(
-        json!({ "task": task_value(task), "turns": [], "events": events, "executionMode": execution_mode_name(state.repository.execution_mode(Some(&TaskId::new(id).map_err(|_| bad_id())?)).await.map_err(storage_problem)?) }),
+        json!({ "task": task_value, "turns": [], "events": events, "subagents": subagents, "executionMode": execution_mode_name(state.repository.execution_mode(Some(&TaskId::new(id).map_err(|_| bad_id())?)).await.map_err(storage_problem)?) }),
     ))
 }
 

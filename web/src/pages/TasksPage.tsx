@@ -25,9 +25,17 @@ function TasksWorkspace() {
   const [liveEvents, setLiveEvents] = useState<TimelineEvent[]>([]);
   const [readFinalCounts, setReadFinalCounts] = useState<Record<string, number>>(readStoredFinalCounts);
   const connectedOnce = useRef(false);
+  const hiddenSubagentTaskIds = useRef(new Set<string>());
+  const visibleTaskIds = useRef(new Set<string>());
   const hadStoredReadCounts = useRef(typeof localStorage !== 'undefined' && localStorage.getItem(READ_FINAL_COUNTS_KEY) !== null);
 
   useEffect(() => setLiveEvents([]), [taskId]);
+  useEffect(() => { visibleTaskIds.current = new Set((result.data ?? []).map((task) => task.id)); }, [result.data]);
+
+  const hideSubagentTask = useCallback((childTaskId: string) => {
+    hiddenSubagentTaskIds.current.add(childTaskId);
+    setTasks((current) => current?.filter((task) => task.id !== childTaskId));
+  }, [setTasks]);
 
   const handleRealtime = useCallback((event: TimelineEvent) => {
     if (event.type === 'system.connected') {
@@ -35,12 +43,21 @@ function TasksWorkspace() {
       connectedOnce.current = true;
       return;
     }
+    if (event.type === 'subagent.status') {
+      const childTaskId = subagentChildTaskId(event);
+      if (childTaskId) hideSubagentTask(childTaskId);
+      if (event.taskId === taskId) setDetailVersion((value) => value + 1);
+      return;
+    }
     if (!event.taskId) return;
-    setTasks((current) => upsertTaskEvent(current, event));
+    if (!hiddenSubagentTaskIds.current.has(event.taskId)) {
+      if (visibleTaskIds.current.has(event.taskId)) setTasks((current) => upsertTaskEvent(current, event));
+      else void reloadTasks();
+    }
     if (event.taskId === taskId) {
       setLiveEvents((current) => current.some((item) => item.id === event.id) ? current : [...current, event]);
     }
-  }, [reloadTasks, setTasks, taskId]);
+  }, [hideSubagentTask, reloadTasks, setTasks, taskId]);
   const realtime = useRealtime(handleRealtime);
 
   useEffect(() => {
@@ -75,7 +92,7 @@ function TasksWorkspace() {
       </div>
     </aside>
     <section className="tasks-detail-pane" aria-label="Nội dung công việc">
-      {taskId ? <TaskConversationDetail taskId={taskId} refreshVersion={detailVersion} realtime={realtime} liveEvents={liveEvents} /> : <div className="tasks-select-empty"><MessageSquareText /><strong>Chọn một cuộc trò chuyện</strong><span>Nội dung xử lý của Agent, tool và kết luận sẽ hiển thị tại đây.</span></div>}
+      {taskId ? <TaskConversationDetail taskId={taskId} refreshVersion={detailVersion} realtime={realtime} liveEvents={liveEvents} onSubagentTask={hideSubagentTask} /> : <div className="tasks-select-empty"><MessageSquareText /><strong>Chọn một cuộc trò chuyện</strong><span>Nội dung xử lý của Agent, tool và kết luận sẽ hiển thị tại đây.</span></div>}
     </section>
   </div>;
 }
@@ -90,8 +107,11 @@ function ConversationRow({ task, selected, unread }: { task: Task; selected: boo
   </Link>;
 }
 
-function TaskConversationDetail({ taskId, refreshVersion, realtime, liveEvents }: { taskId: string; refreshVersion: number; realtime: string; liveEvents: TimelineEvent[] }) {
+function TaskConversationDetail({ taskId, refreshVersion, realtime, liveEvents, onSubagentTask }: { taskId: string; refreshVersion: number; realtime: string; liveEvents: TimelineEvent[]; onSubagentTask: (taskId: string) => void }) {
   const result = useLoad(() => api.task(taskId), [taskId, refreshVersion]);
+  useEffect(() => {
+    if (result.data?.task.isSubagent) onSubagentTask(result.data.task.id);
+  }, [onSubagentTask, result.data?.task.id, result.data?.task.isSubagent]);
   if (result.loading) return <Loading label="Loading task" />;
   if (result.error || !result.data) return <ErrorState message={result.error} retry={() => void result.reload()} />;
   const detail = mergeLiveDetail(result.data, liveEvents);
@@ -136,7 +156,7 @@ function TaskDetailContent({ detail, realtime, onTaskChanged }: { detail: TaskDe
     <header className="task-detail-topbar"><div><h1>{conversationName(task)}</h1><p>{turns.length} agent turns · generation {task.generation ?? 1} · {realtime === 'online' ? 'realtime' : realtime} · updated {formatTime(task.updatedAtUtc)}</p></div><StatusBadge state={task.status} /></header>
     <div className="task-detail-body">
       <main ref={chatRef} className="task-chat-column" onScroll={updateChatScrollPosition}><h2 className="sr-only">Activity timeline</h2><section className="task-bubble-timeline turn-timeline" aria-label="Conversation activity">
-        {turns.length ? turns.map((turn) => <TaskTurnBubble turn={turn} now={turnNow} key={turn.id} />) : <Empty title="Chưa có hoạt động" body="Agent chưa ghi nhận nội dung cho task này." />}
+        {turns.length ? turns.map((turn) => <TaskTurnBubble turn={turn} now={turnNow} subagents={(detail.subagents ?? []).filter((agent) => agent.parentTurnId === turn.id)} key={turn.id} />) : <Empty title="Chưa có hoạt động" body="Agent chưa ghi nhận nội dung cho task này." />}
       </section></main>
       <aside className="task-detail-sidebar" aria-label="Task information">
         <header className="task-info-header"><span className={`task-info-state ${task.status}`}>{task.status === 'running' ? <LoaderCircle className="spin" /> : task.status === 'failed' ? <CircleAlert /> : <CheckCircle2 />}</span><div><h2>{conversationName(task)}</h2><p><code>#{task.id}</code> · {task.status} · {turns.length} lượt agent</p></div></header>
@@ -156,5 +176,11 @@ function readStoredFinalCounts(): Record<string, number> {
   } catch { return {}; }
 }
 
-function conversationName(task: Task) { return task.title?.trim() || generatedConversationName(task.id); }
+function subagentChildTaskId(event: TimelineEvent) {
+  if (!event.payload || typeof event.payload !== 'object' || Array.isArray(event.payload)) return '';
+  const value = (event.payload as Record<string, unknown>).childTaskId;
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function conversationName(task: Task) { return task.agentName?.trim() || task.title?.trim() || generatedConversationName(task.id); }
 function generatedConversationName(id: string) { const first = ['Mây', 'Sao', 'Gió', 'Nắng', 'Trăng', 'Biển', 'Rừng', 'Sương']; const second = ['Xanh', 'Nhẹ', 'Sớm', 'Đêm', 'Mới', 'Xa', 'Ấm', 'Sáng']; let hash = 2166136261; for (let index = 0; index < id.length; index++) { hash ^= id.charCodeAt(index); hash = Math.imul(hash, 16777619); } const value = hash >>> 0; return `${first[value % first.length]} ${second[Math.floor(value / first.length) % second.length]} ${String(value % 97 + 1).padStart(2, '0')}`; }

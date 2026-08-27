@@ -260,6 +260,10 @@ impl RuntimeHost {
             .upsert_task(&task)
             .await
             .map_err(storage_error)?;
+        if status == "completed" {
+            self.finish_subagent_for_child(task_id.as_str(), "completed")
+                .await?;
+        }
         let key = safe_id(
             "agent-event",
             &context.agent_id,
@@ -317,7 +321,9 @@ fn enrich_tool_result(value: Value, context: &OperationContext, tool: &str) -> V
         object.insert("turnId".to_owned(), Value::String(turn_id.to_owned()));
     }
     if let Some(session_id) = context.mcp_session_id.as_deref() {
-        object.insert("sessionId".to_owned(), Value::String(session_id.to_owned()));
+        object
+            .entry("sessionId".to_owned())
+            .or_insert_with(|| Value::String(session_id.to_owned()));
     }
     let completed = tool == "agent_turn_complete";
     object.insert("requiresFinalization".to_owned(), Value::Bool(!completed));
@@ -337,6 +343,45 @@ fn enrich_tool_result(value: Value, context: &OperationContext, tool: &str) -> V
         );
     }
     Value::Object(object)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::enrich_tool_result;
+    use chatcmd_runtime::OperationContext;
+    use serde_json::json;
+
+    #[test]
+    fn enrichment_preserves_tool_session_but_keeps_parent_task_correlation() {
+        let mut context = OperationContext::new("request", "agent", "test_tool");
+        context.task_id = Some("parent-task".to_owned());
+        context.turn_id = Some("parent-turn".to_owned());
+        context.mcp_session_id = Some("logical-mcp-session".to_owned());
+        let result = enrich_tool_result(
+            json!({
+                "taskId": "child-task",
+                "turnId": "child-turn",
+                "sessionId": "physical-shell-session"
+            }),
+            &context,
+            "test_tool",
+        );
+        assert_eq!(result["taskId"], "parent-task");
+        assert_eq!(result["turnId"], "parent-turn");
+        assert_eq!(result["sessionId"], "physical-shell-session");
+    }
+
+    #[test]
+    fn enrichment_adds_missing_context_correlation_ids() {
+        let mut context = OperationContext::new("request", "agent", "test_tool");
+        context.task_id = Some("task".to_owned());
+        context.turn_id = Some("turn".to_owned());
+        context.mcp_session_id = Some("session".to_owned());
+        let result = enrich_tool_result(json!({"accepted":true}), &context, "test_tool");
+        assert_eq!(result["taskId"], "task");
+        assert_eq!(result["turnId"], "turn");
+        assert_eq!(result["sessionId"], "session");
+    }
 }
 
 fn required_task_id(context: &OperationContext) -> RuntimeResult<TaskId> {

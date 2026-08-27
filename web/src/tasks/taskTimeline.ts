@@ -381,7 +381,7 @@ function isVisibleAgentMessage(event: TimelineEvent) {
 function payloadObject(event: TimelineEvent): Record<string, unknown> { return asObject(event.payload); }
 function stringValue(value: unknown) { return typeof value === 'string' && value.trim() ? value.trim() : ''; }
 function asObject(value: unknown): Record<string, unknown> { return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}; }
-function isHousekeepingTool(tool: string) { return tool === 'agent_user_message' || tool === 'agent_progress' || tool === 'agent_turn_complete'; }
+function isHousekeepingTool(tool: string) { return ['agent_user_message', 'agent_progress', 'agent_subagent_start', 'agent_subagent_wait', 'agent_turn_complete'].includes(tool); }
 function toolKind(tool: string): ActivityKind {
   if (/^(?:fs_read_text|fs_list|fs_stat|fs_directory_sizes|view_image|file_download|skill_read)$/i.test(tool)) return 'read';
   if (tool === 'fs_search' || tool === 'fs_find') return 'search';

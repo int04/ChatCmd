@@ -18,7 +18,7 @@ impl TaskStore for SqliteRepository {
     }
 
     async fn list_tasks(&self, limit: u32) -> Result<Vec<Task>, StorageError> {
-        let rows = sqlx::query("SELECT id,agent_id,device_id,conversation_scope_hash,title,source,status,active_session_id,generation,stopped_at_ms,created_at_ms,updated_at_ms FROM tasks ORDER BY updated_at_ms DESC,id LIMIT ?")
+        let rows = sqlx::query("SELECT id,agent_id,device_id,conversation_scope_hash,title,source,status,active_session_id,generation,stopped_at_ms,created_at_ms,updated_at_ms FROM tasks WHERE NOT EXISTS (SELECT 1 FROM subagent_runs WHERE subagent_runs.child_task_id=tasks.id) ORDER BY updated_at_ms DESC,id LIMIT ?")
             .bind(i64::from(limit.clamp(1, 1000)))
             .fetch_all(&self.pool)
             .await

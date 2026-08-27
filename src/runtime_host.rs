@@ -4,11 +4,12 @@ mod dispatch;
 mod identity;
 mod inputs;
 mod persistence;
+mod subagents;
 mod user_message;
 #[cfg(test)]
 mod user_message_tests;
 
-use chatcmd_core::{LocalDevice, Task};
+use chatcmd_core::{AgentId, LocalDevice, McpAgentStore as _, Task};
 use chatcmd_mcp::RuntimeApi;
 use chatcmd_runtime::{
     BoxFuture, DeviceDescriptor, GitService, OperationContext, ProcessService, RuntimeError,
@@ -101,6 +102,27 @@ impl RuntimeApi for RuntimeHost {
             app_version: env!("CARGO_PKG_VERSION").to_owned(),
             online: true,
         }
+    }
+
+    fn project_folder<'a>(
+        &'a self,
+        agent_id: &'a str,
+    ) -> BoxFuture<'a, RuntimeResult<Option<String>>> {
+        Box::pin(async move {
+            let id = AgentId::new(agent_id).map_err(|error| invalid("agentId", error))?;
+            let agent = self.repository.agent(&id).await.map_err(storage_error)?;
+            Ok(agent
+                .and_then(|value| value.project_folder)
+                .filter(|value| !value.trim().is_empty()))
+        })
+    }
+
+    fn fail_subagent<'a>(
+        &'a self,
+        child_task_id: &'a str,
+        message: &'a str,
+    ) -> BoxFuture<'a, RuntimeResult<()>> {
+        Box::pin(async move { self.fail_subagent_worker(child_task_id, message).await })
     }
 }
 
