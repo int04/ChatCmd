@@ -86,13 +86,13 @@ impl GitService {
     }
     async fn run(&self, cwd: &Path, args: &[&str]) -> RuntimeResult<CommandOutput> {
         let cwd = self.workspace.stat(cwd).await?.path;
-        let output = Command::new("git")
+        let mut command = Command::new("git");
+        command
             .args(args)
             .current_dir(cwd)
             .stdin(Stdio::null())
-            .output()
-            .await
-            .map_err(command_error)?;
+            .kill_on_drop(true);
+        let output = command.output().await.map_err(command_error)?;
         Ok(bound_output(output, self.max_characters))
     }
 }

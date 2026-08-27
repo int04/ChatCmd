@@ -46,7 +46,18 @@ describe('task realtime list updates', () => {
     const tasks = upsertTaskEvent(upsertTaskEvent([], first), completed);
 
     expect(tasks).toHaveLength(1);
-    expect(tasks?.[0]).toMatchObject({ status: 'completed', outputPreview: 'Đã hoàn tất.' });
+    expect(tasks?.[0]).toMatchObject({ status: 'completed', outputPreview: 'Đã hoàn tất.', finalResponseCount: 1 });
+  });
+
+  it('propagates stopped status from realtime without creating another final response', () => {
+    const running: TimelineEvent = {
+      id: 'event-running', type: 'progress', occurredAt: '2026-08-27T08:00:00.000Z', taskId: 'task-stop', payload: { status: 'running', content: 'Working' },
+    };
+    const stopped: TimelineEvent = {
+      id: 'event-stopped', type: 'status', occurredAt: '2026-08-27T08:00:02.000Z', taskId: 'task-stop', payload: { status: 'stopped', content: 'Conversation stopped' },
+    };
+    const tasks = upsertTaskEvent(upsertTaskEvent([], running), stopped);
+    expect(tasks?.[0]).toMatchObject({ status: 'stopped', finalResponseCount: 0 });
   });
 });
 
@@ -90,5 +101,31 @@ describe('user message synchronization rendering', () => {
     const blocks = buildProcessBlocks([user, progress]);
     expect(blocks).toHaveLength(1);
     expect(blocks[0]).toMatchObject({ type: 'progress' });
+  });
+});
+
+describe('running tool stop projection', () => {
+  const started: TimelineEvent = {
+    id: 'tool-start', type: 'tool_call', occurredAt: '2026-08-27T08:00:00.000Z',
+    taskId: 'task-1', turnId: 'turn-1', payload: { activityId: 'activity-1', tool: 'git_diff', status: 'started', input: { cwd: '.' } },
+  };
+
+  it('projects a stop request onto the existing running activity', () => {
+    const stopRequested: TimelineEvent = {
+      id: 'tool-stop-request', type: 'tool_call', occurredAt: '2026-08-27T08:00:01.000Z',
+      taskId: 'task-1', turnId: 'turn-1', payload: { activityId: 'activity-1', tool: 'git_diff', status: 'stop_requested', stopReason: 'Đổi cách làm' },
+    };
+    const blocks = buildProcessBlocks([started, stopRequested]);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({ type: 'activities', activities: [{ id: 'activity-1', status: 'stop_requested', error: 'Lý do dừng: Đổi cách làm' }] });
+  });
+
+  it('finishes the same activity as stopped and preserves the agent-facing reason', () => {
+    const stopped: TimelineEvent = {
+      id: 'tool-stopped', type: 'tool_result', occurredAt: '2026-08-27T08:00:02.000Z',
+      taskId: 'task-1', turnId: 'turn-1', payload: { activityId: 'activity-1', tool: 'git_diff', status: 'stopped', errorCode: 'activity_stopped', errorMessage: 'the user stopped this activity. Reason: Đổi cách làm' },
+    };
+    const blocks = buildProcessBlocks([started, stopped]);
+    expect(blocks[0]).toMatchObject({ type: 'activities', activities: [{ id: 'activity-1', status: 'stopped', error: 'the user stopped this activity. Reason: Đổi cách làm' }] });
   });
 });

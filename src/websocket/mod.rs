@@ -56,6 +56,7 @@ pub(crate) struct AppState {
     pub device: chatcmd_core::LocalDevice,
     pub shell: chatcmd_runtime::ShellRuntime,
     pub skills: chatcmd_runtime::SkillService,
+    pub activities: crate::runtime_host::ActivityRegistry,
     events: broadcast::Sender<AppEvent>,
     connected_clients: AtomicUsize,
 }
@@ -70,6 +71,7 @@ impl AppState {
         device: chatcmd_core::LocalDevice,
         shell: chatcmd_runtime::ShellRuntime,
         skills: chatcmd_runtime::SkillService,
+        activities: crate::runtime_host::ActivityRegistry,
         events: broadcast::Sender<AppEvent>,
     ) -> Self {
         Self {
@@ -81,6 +83,7 @@ impl AppState {
             device,
             shell,
             skills,
+            activities,
             events,
             connected_clients: AtomicUsize::new(0),
         }

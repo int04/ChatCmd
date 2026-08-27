@@ -28,6 +28,29 @@ pub(super) async fn save_settings(
             "port must be 1..65535",
         ));
     }
+    if let Some(mode) = object.get("executionMode").and_then(Value::as_str) {
+        let persisted = match mode {
+            "approval" => "approval",
+            "allowAll" | "allow" | "safe" | "unrestricted" => "allow",
+            _ => {
+                return Err(Problem::new(
+                    StatusCode::BAD_REQUEST,
+                    "Invalid execution mode",
+                    "executionMode must be 'approval' or 'allowAll'.",
+                ));
+            }
+        };
+        state
+            .repository
+            .set_setting(&Setting {
+                key: "command_execution_mode".to_owned(),
+                value_json: serde_json::to_string(persisted)
+                    .unwrap_or_else(|_| "\"allow\"".to_owned()),
+                updated_at_ms: now_ms(),
+            })
+            .await
+            .map_err(storage_problem)?;
+    }
     for (key, value) in object {
         state
             .repository
@@ -51,7 +74,7 @@ pub(super) fn mcp_endpoint(state: &AppState, token: &str) -> String {
 }
 
 pub(super) async fn settings_value(state: &Arc<AppState>) -> Result<Value, Problem> {
-    let defaults = json!({ "bindAddress": state.bind_address, "port": state.port, "mcpEndpoint": mcp_endpoint_template(state), "databasePath": state.database_path, "databaseState": "ready", "executionMode": "approval", "workspaceRoots": [std::env::current_dir().unwrap_or_default()], "terminalExecutable": default_shell(), "taskConcurrency": 4, "sessionConcurrency": 8, "theme": "system", "language": "en", "sound": false });
+    let defaults = json!({ "bindAddress": state.bind_address, "port": state.port, "mcpEndpoint": mcp_endpoint_template(state), "databasePath": state.database_path, "databaseState": "ready", "executionMode": "allowAll", "workspaceRoots": [std::env::current_dir().unwrap_or_default()], "terminalExecutable": default_shell(), "taskConcurrency": 4, "sessionConcurrency": 8, "theme": "system", "language": "en", "sound": true });
     let mut object = defaults.as_object().cloned().unwrap_or_default();
     for key in [
         "executionMode",
@@ -73,5 +96,22 @@ pub(super) async fn settings_value(state: &Arc<AppState>) -> Result<Value, Probl
             object.insert(key.to_owned(), value);
         }
     }
+    let execution_mode = state
+        .repository
+        .execution_mode(None)
+        .await
+        .map_err(storage_problem)?;
+    object.insert(
+        "executionMode".to_owned(),
+        Value::String(
+            match execution_mode {
+                chatcmd_core::ExecutionMode::Allow => "allowAll",
+                chatcmd_core::ExecutionMode::Approval | chatcmd_core::ExecutionMode::Deny => {
+                    "approval"
+                }
+            }
+            .to_owned(),
+        ),
+    );
     Ok(Value::Object(object))
 }

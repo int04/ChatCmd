@@ -25,10 +25,28 @@ impl RuntimeHost {
         if tool != "agent_user_message" {
             self.ensure_user_message_synced(&context).await?;
         }
+        if let Err(error) = self.authorize_execution(&context, tool, &arguments).await {
+            self.append_call_event(&context, tool, "failed", None, None, Some(&error))
+                .await?;
+            return Err(error);
+        }
+        let _activity_guard = self.activities.register(&context, tool, &arguments);
         self.append_call_event(&context, tool, "started", Some(&arguments), None, None)
             .await?;
 
-        let result = self.dispatch(tool, context.clone(), arguments).await;
+        let result = tokio::select! {
+            result = self.dispatch(tool, context.clone(), arguments) => result,
+            () = context.cancellation.cancelled() => {
+                let reason = self.activities.stop_reason(&context.request_id);
+                Err(RuntimeError::new(
+                    "activity_stopped",
+                    reason.map_or_else(
+                        || "the user stopped this activity".to_owned(),
+                        |value| format!("the user stopped this activity. Reason: {value}"),
+                    ),
+                ))
+            }
+        };
         match result {
             Ok(output) => {
                 self.append_call_event(&context, tool, "succeeded", None, Some(&output), None)
@@ -36,14 +54,19 @@ impl RuntimeHost {
                 Ok(enrich_tool_result(output, &context, tool))
             }
             Err(error) => {
-                self.append_call_event(&context, tool, "failed", None, None, Some(&error))
+                let status = if error.code == "activity_stopped" {
+                    "stopped"
+                } else {
+                    "failed"
+                };
+                self.append_call_event(&context, tool, status, None, None, Some(&error))
                     .await?;
                 Err(error)
             }
         }
     }
 
-    async fn append_call_event(
+    pub(super) async fn append_call_event(
         &self,
         context: &OperationContext,
         tool: &str,
@@ -75,7 +98,7 @@ impl RuntimeHost {
             payload["errorCode"] = Value::String(value.code.clone());
             payload["errorMessage"] = Value::String(value.message.clone());
         }
-        let event_kind = if status == "started" {
+        let event_kind = if status == "started" || status == "pending_approval" {
             EventKind::ToolCall
         } else {
             EventKind::ToolResult

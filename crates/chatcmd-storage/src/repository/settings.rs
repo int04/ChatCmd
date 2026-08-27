@@ -55,7 +55,7 @@ impl SettingsStore for SqliteRepository {
                     .map_err(|error| backend("parse execution mode setting", error))?;
                 ExecutionMode::from_str(&mode).map_err(invalid_data)
             }
-            None => Ok(ExecutionMode::Approval),
+            None => Ok(ExecutionMode::Allow),
         }
     }
 }

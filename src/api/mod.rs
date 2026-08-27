@@ -1,10 +1,12 @@
 mod agents;
 mod sessions;
 mod settings;
+mod task_controls;
 
 use agents::*;
 use sessions::*;
 use settings::*;
+use task_controls::*;
 
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -40,6 +42,18 @@ pub(crate) fn router() -> Router<Arc<AppState>> {
         .route("/mcp/tool-presets", get(presets))
         .route("/tasks", get(tasks))
         .route("/tasks/{id}", get(task))
+        .route(
+            "/tasks/{id}/command-execution-mode",
+            get(task_execution_mode).put(set_task_execution_mode),
+        )
+        .route(
+            "/tasks/{id}/activities/{activity_id}/approval",
+            post(resolve_task_approval),
+        )
+        .route(
+            "/tasks/{task_id}/activities/{activity_id}/stop",
+            post(stop_task_activity),
+        )
         .route("/tasks/{id}/{action}", post(task_action))
         .route("/sessions", get(sessions))
         .route("/sessions/{id}", get(session))
@@ -132,6 +146,17 @@ async fn tasks(State(state): State<Arc<AppState>>) -> Result<Json<Value>, Proble
             )
         })
         .collect::<BTreeMap<_, _>>();
+    let final_rows = sqlx::query("SELECT task_id,COUNT(*) AS final_response_count FROM timeline_events WHERE actor='assistant' AND kind='status' AND json_extract(payload_json,'$.status')='completed' GROUP BY task_id")
+        .fetch_all(state.repository.pool()).await.map_err(db_problem)?;
+    let final_counts = final_rows
+        .into_iter()
+        .map(|row| {
+            (
+                row.get::<String, _>("task_id"),
+                row.get::<i64, _>("final_response_count"),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     Ok(Json(Value::Array(
         tasks
             .into_iter()
@@ -141,6 +166,10 @@ async fn tasks(State(state): State<Arc<AppState>>) -> Result<Json<Value>, Proble
                 if let Some(object) = value.as_object_mut() {
                     let (turn_count, preview) = summaries.get(&id).cloned().unwrap_or((0, None));
                     object.insert("turnCount".to_owned(), json!(turn_count));
+                    object.insert(
+                        "finalResponseCount".to_owned(),
+                        json!(final_counts.get(&id).copied().unwrap_or(0)),
+                    );
                     if let Some(preview) = preview.filter(|value| !value.trim().is_empty()) {
                         object.insert(
                             "outputPreview".to_owned(),
@@ -165,8 +194,10 @@ async fn task_action(
     State(state): State<Arc<AppState>>,
     Path((id, action)): Path<(String, String)>,
 ) -> Result<Json<Value>, Problem> {
+    if action == "stop" {
+        return stop_conversation(&state, &id).await;
+    }
     let status = match action.as_str() {
-        "stop" => "stopped",
         "retry" | "resume" => "pending",
         _ => {
             return Err(Problem::new(
@@ -228,7 +259,7 @@ async fn task_detail(state: &Arc<AppState>, id: &str) -> Result<Json<Value>, Pro
         .map(|(_, _, value)| value)
         .collect::<Vec<_>>();
     Ok(Json(
-        json!({ "task": task_value(task), "turns": [], "events": events, "executionMode": state.repository.execution_mode(Some(&TaskId::new(id).map_err(|_| bad_id())?)).await.map_err(storage_problem)?.as_str() }),
+        json!({ "task": task_value(task), "turns": [], "events": events, "executionMode": execution_mode_name(state.repository.execution_mode(Some(&TaskId::new(id).map_err(|_| bad_id())?)).await.map_err(storage_problem)?) }),
     ))
 }
 

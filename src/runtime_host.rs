@@ -1,3 +1,5 @@
+mod activity_control;
+mod approval;
 mod dispatch;
 mod identity;
 mod inputs;
@@ -18,6 +20,7 @@ use serde_json::{Value, json};
 use tokio::sync::broadcast;
 
 use crate::websocket::AppEvent;
+pub(crate) use activity_control::{ActivityRegistry, StopActivityResult};
 
 #[derive(Clone)]
 pub(crate) struct RuntimeHost {
@@ -29,6 +32,7 @@ pub(crate) struct RuntimeHost {
     process: ProcessService,
     skills: SkillService,
     events: broadcast::Sender<AppEvent>,
+    activities: ActivityRegistry,
 }
 
 impl RuntimeHost {
@@ -51,7 +55,12 @@ impl RuntimeHost {
             process,
             skills,
             events,
+            activities: ActivityRegistry::default(),
         }
+    }
+
+    pub(crate) fn activity_registry(&self) -> ActivityRegistry {
+        self.activities.clone()
     }
 
     pub(super) fn publish_event(

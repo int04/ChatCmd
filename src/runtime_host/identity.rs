@@ -60,6 +60,15 @@ impl RuntimeHost {
             .task(&task_id)
             .await
             .map_err(storage_error)?;
+        if current
+            .as_ref()
+            .is_some_and(|task| task.status == TaskStatus::Stopped)
+        {
+            return Err(RuntimeError::new(
+                "conversation_stopped",
+                "this conversation was stopped by the user and cannot continue",
+            ));
+        }
         let now = now_ms();
         let generation = current.as_ref().map_or(1, |task| task.generation);
         self.repository

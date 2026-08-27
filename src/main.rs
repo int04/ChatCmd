@@ -99,6 +99,7 @@ async fn main() -> Result<()> {
         skills.clone(),
         event_tx.clone(),
     ));
+    let activity_registry = runtime.activity_registry();
     let security = HttpSecurity::new(
         Arc::new(DatabaseAuth(repository.clone())),
         Arc::new(LocalOrigins {
@@ -119,6 +120,7 @@ async fn main() -> Result<()> {
         bootstrap.device,
         shell,
         skills,
+        activity_registry,
         event_tx,
     ));
     let frontend_dir = resolve_frontend_dir();

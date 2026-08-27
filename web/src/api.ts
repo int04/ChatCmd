@@ -1,4 +1,4 @@
-import type { Agent, AgentInput, LocalSettings, McpStatus, Overview, ProblemDetails, SecretResult, Session, SessionDetail, Skill, Task, TaskDetail, Tool, ToolPreset } from './types';
+import type { Agent, AgentInput, CommandExecutionMode, LocalSettings, McpStatus, Overview, ProblemDetails, SecretResult, Session, SessionDetail, Skill, Task, TaskDetail, Tool, ToolPreset } from './types';
 
 export class ApiError extends Error {
   constructor(message: string, public status?: number, public problem?: ProblemDetails) { super(message); this.name = 'ApiError'; }
@@ -38,6 +38,11 @@ export const api = {
   tasks: () => request<Task[]>('/api/local/tasks'),
   task: (id: string) => request<TaskDetail>(`/api/local/tasks/${item(id)}`),
   taskAction: (id: string, action: string, body?: unknown) => request<TaskDetail>(`/api/local/tasks/${item(id)}/${action}`, { method: 'POST', body: body === undefined ? undefined : json(body) }),
+  stopTask: (id: string) => request<TaskDetail>(`/api/local/tasks/${item(id)}/stop`, { method: 'POST', body: '{}' }),
+  taskExecutionMode: (id: string, signal?: AbortSignal) => request<{ mode: CommandExecutionMode; overridden: boolean }>(`/api/local/tasks/${item(id)}/command-execution-mode`, { signal }),
+  setTaskExecutionMode: (id: string, mode: CommandExecutionMode) => request<{ mode: CommandExecutionMode; overridden: boolean }>(`/api/local/tasks/${item(id)}/command-execution-mode`, { method: 'PUT', body: json({ mode }) }),
+  stopTaskActivity: (taskId: string, activityId: string, input: { turnId?: string; reason?: string }) => request<void>(`/api/local/tasks/${item(taskId)}/activities/${item(activityId)}/stop`, { method: 'POST', body: json(input) }),
+  resolveTaskApproval: (taskId: string, activityId: string, input: { turnId?: string; decision: 'allow' | 'allowSimilar' | 'reject'; reason?: string }) => request<{ accepted: boolean; decision: string }>(`/api/local/tasks/${item(taskId)}/activities/${item(activityId)}/approval`, { method: 'POST', body: json(input) }),
   sessions: () => request<Session[]>('/api/local/sessions'),
   session: (id: string, cursor?: string) => request<SessionDetail>(`/api/local/sessions/${item(id)}${cursor ? `?cursor=${item(cursor)}` : ''}`),
   sessionAction: (id: string, action: string, body?: unknown) => request<SessionDetail>(`/api/local/sessions/${item(id)}/${action}`, { method: 'POST', body: body === undefined ? undefined : json(body) }),

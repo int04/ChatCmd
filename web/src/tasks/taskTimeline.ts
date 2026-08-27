@@ -11,6 +11,7 @@ export type ToolActivity = {
   error?: string;
   startedAt: string;
   finishedAt?: string;
+  turnId?: string;
 };
 export type ProcessBlock =
   | { type: 'progress'; key: string; event: TimelineEvent }
@@ -56,13 +57,23 @@ export function buildProcessBlocks(events: TimelineEvent[]): ProcessBlock[] {
       const payload = payloadObject(event);
       const tool = stringValue(payload.tool) || 'tool';
       if (isHousekeepingTool(tool)) continue;
+      const activityId = stringValue(payload.activityId) || event.id;
+      const existing = pending.get(activityId);
+      if (existing) {
+        existing.status = stringValue(payload.status) || existing.status;
+        if (payload.input !== undefined) existing.input = payload.input;
+        const stopReason = stringValue(payload.stopReason);
+        if (stopReason) existing.error = `Lý do dừng: ${stopReason}`;
+        continue;
+      }
       const activity: ToolActivity = {
-        id: stringValue(payload.activityId) || event.id,
+        id: activityId,
         tool,
         kind: toolKind(tool),
         input: payload.input,
         status: stringValue(payload.status) || 'started',
         startedAt: event.occurredAt,
+        turnId: event.turnId,
       };
       if (!currentActivities) {
         currentActivities = [];
@@ -185,6 +196,9 @@ export function activityTarget(activity: ToolActivity) {
 export function activityLabel(activity: ToolActivity) {
   const target = activityTarget(activity);
   const running = activity.status === 'started';
+  if (activity.status === 'pending_approval') return `Chờ phê duyệt để ${target}`;
+  if (activity.status === 'stop_requested') return `Đang dừng ${target}`;
+  if (activity.status === 'stopped') return `Đã dừng ${target}`;
   if (running) {
     if (activity.kind === 'read') return `Đang đọc ${target}`;
     if (activity.kind === 'search') return `Đang tìm ${target}`;
@@ -300,12 +314,15 @@ export function mergeTaskEvent(task: Task, event: TimelineEvent): Task {
   const payload = payloadObject(event);
   const status = stringValue(payload.status);
   const title = stringValue(payload.title);
+  const finalCompleted = event.type === 'status' && status === 'completed';
+  const nextStatus = taskStatusFromEvent(status, event.type, task.status);
   return {
     ...task,
-    status: status === 'completed' ? 'completed' : event.type === 'progress' || event.type === 'tool_call' ? 'running' : task.status,
+    status: nextStatus,
     title: title || task.title,
     updatedAtUtc: event.occurredAt || task.updatedAtUtc,
     outputPreview: stringValue(payload.content) || stringValue(payload.message) || task.outputPreview,
+    finalResponseCount: (task.finalResponseCount ?? 0) + (finalCompleted ? 1 : 0),
   };
 }
 
@@ -323,15 +340,17 @@ export function taskFromRealtimeEvent(event: TimelineEvent): Task | null {
   if (!event.taskId) return null;
   const payload = payloadObject(event);
   const status = stringValue(payload.status);
+  const finalCompleted = event.type === 'status' && status === 'completed';
   return {
     id: event.taskId,
     title: stringValue(payload.title) || undefined,
-    status: status === 'completed' ? 'completed' : 'running',
+    status: taskStatusFromEvent(status, event.type, 'running'),
     createdAtUtc: event.occurredAt,
     updatedAtUtc: event.occurredAt,
     turnCount: event.turnId ? 1 : 0,
     activeSessionId: event.sessionId,
     outputPreview: stringValue(payload.content) || stringValue(payload.message) || undefined,
+    finalResponseCount: finalCompleted ? 1 : 0,
   };
 }
 
@@ -345,6 +364,11 @@ export function mergeLiveDetail(detail: TaskDetail, liveEvents: TimelineEvent[])
   return { ...detail, task, turns: undefined, events };
 }
 
+function taskStatusFromEvent(status: string, eventType: string, fallback: string) {
+  if (['pending', 'running', 'completed', 'failed', 'stopped', 'interrupted'].includes(status)) return status;
+  if (eventType === 'progress' || eventType === 'tool_call') return 'running';
+  return fallback;
+}
 function isUserMessage(event: TimelineEvent) {
   const payload = payloadObject(event);
   return event.type === 'message' && stringValue(payload.role) === 'user';

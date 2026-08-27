@@ -284,3 +284,45 @@ async fn first_message_seeds_task_id_and_only_first_final_can_name_chat() {
         .expect("final title");
     assert_eq!(final_title, "Sửa lỗi Git diff stat");
 }
+
+#[tokio::test]
+async fn stopped_conversation_cannot_be_resurrected_by_later_mcp_calls() {
+    let (host, agent_id, _directory) = test_host().await;
+    let scope = "conversation-stop-guard";
+    let first = host
+        .call_persisted(
+            "agent_user_message",
+            turn_context(
+                "stop-user",
+                &agent_id,
+                "agent_user_message",
+                "turn-stop-1",
+                scope,
+            ),
+            json!({"content":"Start conversation"}),
+        )
+        .await
+        .expect("initial user message");
+    let task_id = first["taskId"].as_str().expect("task id");
+    sqlx::query("UPDATE tasks SET status='stopped',stopped_at_ms=1 WHERE id=?")
+        .bind(task_id)
+        .execute(host.repository.pool())
+        .await
+        .expect("stop task");
+
+    let error = host
+        .call_persisted(
+            "agent_user_message",
+            turn_context(
+                "stop-user-next",
+                &agent_id,
+                "agent_user_message",
+                "turn-stop-2",
+                scope,
+            ),
+            json!({"content":"Try to continue"}),
+        )
+        .await
+        .expect_err("stopped task must remain stopped");
+    assert_eq!(error.code, "conversation_stopped");
+}
