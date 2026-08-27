@@ -11,6 +11,9 @@ use chatcmd_runtime::{
 use chatcmd_storage::SqliteRepository;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
+use tokio::sync::broadcast;
+
+use crate::websocket::AppEvent;
 
 #[derive(Clone)]
 pub(crate) struct RuntimeHost {
@@ -21,6 +24,7 @@ pub(crate) struct RuntimeHost {
     git: GitService,
     process: ProcessService,
     skills: SkillService,
+    events: broadcast::Sender<AppEvent>,
 }
 
 impl RuntimeHost {
@@ -32,6 +36,7 @@ impl RuntimeHost {
         git: GitService,
         process: ProcessService,
         skills: SkillService,
+        events: broadcast::Sender<AppEvent>,
     ) -> Self {
         Self {
             repository,
@@ -41,7 +46,25 @@ impl RuntimeHost {
             git,
             process,
             skills,
+            events,
         }
+    }
+
+    pub(super) fn publish_event(
+        &self,
+        id: String,
+        event_type: &str,
+        task_id: Option<String>,
+        session_id: Option<String>,
+        turn_id: Option<String>,
+        payload: Value,
+    ) {
+        let mut event = AppEvent::new(event_type, payload);
+        event.id = id;
+        event.task_id = task_id;
+        event.session_id = session_id;
+        event.turn_id = turn_id;
+        let _ = self.events.send(event);
     }
 }
 

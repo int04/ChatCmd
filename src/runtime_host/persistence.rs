@@ -18,15 +18,20 @@ impl RuntimeHost {
     ) -> RuntimeResult<Value> {
         self.authorize_tool(&context.agent_id, tool).await?;
         self.ensure_call_identity(&mut context).await?;
-        self.append_call_event(&context, tool, "started", None)
+        self.append_call_event(&context, tool, "started", Some(&arguments), None, None)
             .await?;
 
         let result = self.dispatch(tool, context.clone(), arguments).await;
-        let (status, code) = match &result {
-            Ok(_) => ("succeeded", None),
-            Err(error) => ("failed", Some(error.code.as_str())),
-        };
-        self.append_call_event(&context, tool, status, code).await?;
+        match &result {
+            Ok(output) => {
+                self.append_call_event(&context, tool, "succeeded", None, Some(output), None)
+                    .await?;
+            }
+            Err(error) => {
+                self.append_call_event(&context, tool, "failed", None, None, Some(error))
+                    .await?;
+            }
+        }
         result
     }
 
@@ -113,7 +118,9 @@ impl RuntimeHost {
         context: &OperationContext,
         tool: &str,
         status: &str,
-        error_code: Option<&str>,
+        input: Option<&Value>,
+        output: Option<&Value>,
+        error: Option<&RuntimeError>,
     ) -> RuntimeResult<()> {
         let task_id = required_task_id(context)?;
         let turn_id = required_turn_id(context)?;
@@ -123,22 +130,37 @@ impl RuntimeHost {
             &context.agent_id,
             &format!("{}\0{status}", context.request_id),
         );
-        let mut payload = json!({ "tool": tool, "status": status });
-        if let Some(code) = error_code {
-            payload["errorCode"] = Value::String(code.to_owned());
+        let mut payload = json!({
+            "activityId": context.request_id,
+            "tool": tool,
+            "status": status
+        });
+        if let Some(value) = input {
+            payload["input"] = value.clone();
         }
+        if let Some(value) = output {
+            payload["output"] = value.clone();
+        }
+        if let Some(value) = error {
+            payload["errorCode"] = Value::String(value.code.clone());
+            payload["errorMessage"] = Value::String(value.message.clone());
+        }
+        let event_kind = if status == "started" {
+            EventKind::ToolCall
+        } else {
+            EventKind::ToolResult
+        };
+        let task_value = task_id.as_str().to_owned();
+        let turn_value = turn_id.as_str().to_owned();
+        let session_value = session_id.as_str().to_owned();
         let event = TimelineEvent {
             id: EventId::new(key.clone()).map_err(|error| invalid("eventId", error))?,
             task_id,
             turn_id: Some(turn_id),
             session_id: Some(session_id),
             actor: ActorKind::Tool,
-            kind: if status == "started" {
-                EventKind::ToolCall
-            } else {
-                EventKind::ToolResult
-            },
-            idempotency_key: key,
+            kind: event_kind,
+            idempotency_key: key.clone(),
             payload_json: payload.to_string(),
             metadata_json: None,
             created_at_ms: now_ms(),
@@ -147,6 +169,14 @@ impl RuntimeHost {
             .append_timeline_events(&[event])
             .await
             .map_err(storage_error)?;
+        self.publish_event(
+            key,
+            event_kind.as_str(),
+            Some(task_value),
+            Some(session_value),
+            Some(turn_value),
+            payload,
+        );
         Ok(())
     }
 
@@ -209,6 +239,16 @@ impl RuntimeHost {
             .append_terminal_chunks(&chunks)
             .await
             .map_err(storage_error)?;
+        for event in &result.events {
+            self.publish_event(
+                format!("{}:{}", result.session_id, event.sequence),
+                EventKind::TerminalOutput.as_str(),
+                Some(task_id.as_str().to_owned()),
+                Some(session_id.as_str().to_owned()),
+                Some(turn_id.as_str().to_owned()),
+                json!({ "text": event.data, "stream": event.stream, "encoding": "utf-8" }),
+            );
+        }
         Ok(())
     }
 
@@ -230,8 +270,8 @@ impl RuntimeHost {
         &self,
         context: &OperationContext,
         status: &str,
-        _content: &str,
-        _title: Option<&str>,
+        content: &str,
+        title: Option<&str>,
     ) -> RuntimeResult<Value> {
         let task_id = required_task_id(context)?;
         let now = now_ms();
@@ -246,6 +286,9 @@ impl RuntimeHost {
         } else {
             TaskStatus::Running
         };
+        if let Some(value) = title.filter(|value| !value.trim().is_empty()) {
+            task.title = Some(value.trim().to_owned());
+        }
         task.updated_at_ms = now;
         self.repository
             .upsert_task(&task)
@@ -257,25 +300,42 @@ impl RuntimeHost {
             &context.agent_id,
             &format!("{}\0{status}", context.request_id),
         );
+        let turn_id = required_turn_id(context)?;
+        let session_id = required_session_id(context)?;
+        let event_kind = if status == "completed" {
+            EventKind::Status
+        } else {
+            EventKind::Progress
+        };
+        let payload = json!({
+            "tool": context.tool_name,
+            "status": status,
+            "content": content,
+            "title": title
+        });
         self.repository
             .append_timeline_events(&[TimelineEvent {
                 id: EventId::new(key.clone()).map_err(|error| invalid("eventId", error))?,
                 task_id: task_id.clone(),
-                turn_id: Some(required_turn_id(context)?),
-                session_id: Some(required_session_id(context)?),
+                turn_id: Some(turn_id.clone()),
+                session_id: Some(session_id.clone()),
                 actor: ActorKind::Assistant,
-                kind: if status == "completed" {
-                    EventKind::Status
-                } else {
-                    EventKind::Progress
-                },
-                idempotency_key: key,
-                payload_json: json!({ "tool": context.tool_name, "status": status }).to_string(),
+                kind: event_kind,
+                idempotency_key: key.clone(),
+                payload_json: payload.to_string(),
                 metadata_json: None,
                 created_at_ms: now,
             }])
             .await
             .map_err(storage_error)?;
+        self.publish_event(
+            key,
+            event_kind.as_str(),
+            Some(task_id.as_str().to_owned()),
+            Some(session_id.as_str().to_owned()),
+            Some(turn_id.as_str().to_owned()),
+            payload,
+        );
         Ok(json!({ "accepted": true, "taskId": task_id.as_str(), "status": status }))
     }
 }

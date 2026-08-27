@@ -97,6 +97,7 @@ async fn main() -> Result<()> {
         git,
         process,
         skills.clone(),
+        event_tx.clone(),
     ));
     let security = HttpSecurity::new(
         Arc::new(DatabaseAuth(repository.clone())),

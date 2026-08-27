@@ -118,8 +118,39 @@ async fn tasks(State(state): State<Arc<AppState>>) -> Result<Json<Value>, Proble
         .list_tasks(500)
         .await
         .map_err(storage_problem)?;
+    let summary_rows = sqlx::query("SELECT timeline_events.task_id,COUNT(DISTINCT timeline_events.turn_id) AS turn_count,(SELECT COALESCE(json_extract(latest.payload_json,'$.content'),json_extract(latest.payload_json,'$.message'),json_extract(latest.payload_json,'$.text'),json_extract(latest.payload_json,'$.response')) FROM timeline_events latest WHERE latest.task_id=timeline_events.task_id AND COALESCE(json_extract(latest.payload_json,'$.content'),json_extract(latest.payload_json,'$.message'),json_extract(latest.payload_json,'$.text'),json_extract(latest.payload_json,'$.response')) IS NOT NULL ORDER BY latest.created_at_ms DESC,latest.event_id DESC LIMIT 1) AS output_preview FROM timeline_events GROUP BY timeline_events.task_id")
+        .fetch_all(state.repository.pool()).await.map_err(db_problem)?;
+    let summaries = summary_rows
+        .into_iter()
+        .map(|row| {
+            (
+                row.get::<String, _>("task_id"),
+                (
+                    row.get::<i64, _>("turn_count"),
+                    row.get::<Option<String>, _>("output_preview"),
+                ),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
     Ok(Json(Value::Array(
-        tasks.into_iter().map(task_value).collect(),
+        tasks
+            .into_iter()
+            .map(|task| {
+                let id = task.id.as_str().to_owned();
+                let mut value = task_value(task);
+                if let Some(object) = value.as_object_mut() {
+                    let (turn_count, preview) = summaries.get(&id).cloned().unwrap_or((0, None));
+                    object.insert("turnCount".to_owned(), json!(turn_count));
+                    if let Some(preview) = preview.filter(|value| !value.trim().is_empty()) {
+                        object.insert(
+                            "outputPreview".to_owned(),
+                            Value::String(compact_preview(&preview)),
+                        );
+                    }
+                }
+                value
+            })
+            .collect(),
     )))
 }
 
@@ -162,7 +193,40 @@ async fn task_detail(state: &Arc<AppState>, id: &str) -> Result<Json<Value>, Pro
         .ok_or_else(not_found)?;
     let rows = sqlx::query("SELECT event_id,turn_id,session_id,kind,payload_json,created_at_ms FROM timeline_events WHERE task_id=? ORDER BY created_at_ms,event_id LIMIT 1000")
         .bind(id).fetch_all(state.repository.pool()).await.map_err(db_problem)?;
-    let events = rows.iter().map(timeline_row).collect::<Vec<_>>();
+    let terminal_rows = sqlx::query("SELECT event_id,turn_id,session_id,kind,stream,payload,payload_encoding,created_at_ms FROM terminal_event_chunks WHERE task_id=? ORDER BY created_at_ms,event_id LIMIT 5000")
+        .bind(id).fetch_all(state.repository.pool()).await.map_err(db_problem)?;
+    let mut ordered_events = rows
+        .iter()
+        .map(|row| {
+            let timestamp = row.get::<i64, _>("created_at_ms");
+            let event_id = row.get::<String, _>("event_id");
+            (timestamp, event_id, timeline_row(row))
+        })
+        .collect::<Vec<_>>();
+    ordered_events.extend(terminal_rows.iter().map(|row| {
+        let timestamp = row.get::<i64, _>("created_at_ms");
+        let event_id = row.get::<String, _>("event_id");
+        let payload = row.get::<Vec<u8>, _>("payload");
+        let text = String::from_utf8_lossy(&payload).into_owned();
+        let value = json!({
+            "id": event_id,
+            "type": row.get::<String, _>("kind"),
+            "occurredAt": iso_ms(timestamp),
+            "turnId": row.get::<Option<String>, _>("turn_id"),
+            "sessionId": row.get::<Option<String>, _>("session_id"),
+            "payload": {
+                "text": text,
+                "stream": row.get::<Option<String>, _>("stream"),
+                "encoding": row.get::<String, _>("payload_encoding")
+            }
+        });
+        (timestamp, event_id, value)
+    }));
+    ordered_events.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    let events = ordered_events
+        .into_iter()
+        .map(|(_, _, value)| value)
+        .collect::<Vec<_>>();
     Ok(Json(
         json!({ "task": task_value(task), "turns": [], "events": events, "executionMode": state.repository.execution_mode(Some(&TaskId::new(id).map_err(|_| bad_id())?)).await.map_err(storage_problem)?.as_str() }),
     ))
@@ -180,6 +244,17 @@ async fn skill(
     Ok(Json(
         json!({ "id": skill.id, "name": skill.name, "source": skill.source, "enabled": true, "shadowed": false, "content": skill.instructions }),
     ))
+}
+
+fn compact_preview(value: &str) -> String {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut chars = normalized.chars();
+    let preview = chars.by_ref().take(180).collect::<String>();
+    if chars.next().is_some() {
+        format!("{preview}…")
+    } else {
+        preview
+    }
 }
 
 fn task_value(task: chatcmd_core::Task) -> Value {
