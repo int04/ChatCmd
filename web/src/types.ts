@@ -22,7 +22,7 @@ export interface ToolPreset { id: Id; name: string; description?: string; toolId
 export interface Task { id: Id; title?: string; status: string; updatedAtUtc: string; createdAtUtc?: string; generation?: number; turnCount?: number; activeSessionId?: Id; outputPreview?: string; approvalPending?: boolean }
 export interface TaskDetail { task: Task; turns?: TaskTurn[]; events?: TimelineEvent[]; executionMode?: string }
 export interface TaskTurn { id: Id; generation?: number; actor?: string; status?: string; startedAtUtc?: string; completedAtUtc?: string; events?: TimelineEvent[] }
-export interface Session { id: Id; taskId?: Id; shell?: string; processId?: number; status: string; workingDirectory?: string; createdAtUtc?: string; updatedAtUtc?: string; closedAtUtc?: string; replayCursor?: string }
+export interface Session { kind: 'mcp' | 'terminal'; id: Id; taskId?: Id; shell?: string; processId?: number; status: string; workingDirectory?: string; createdAtUtc?: string; updatedAtUtc?: string; closedAtUtc?: string; replayCursor?: string }
 export interface SessionDetail { session: Session; events: TimelineEvent[]; nextCursor?: string; truncated?: boolean }
 export interface Skill { id: Id; name: string; source?: string; precedence?: number; enabled: boolean; shadowed?: boolean; description?: string; content?: string }
 export interface LocalSettings { bindAddress: string; port: number; mcpEndpoint: string; databasePath: string; databaseState?: HealthState; executionMode: string; workspaceRoots: string[]; terminalExecutable: string; taskConcurrency: number; sessionConcurrency: number; theme: 'system' | 'light' | 'dark'; language: 'en' | 'vi'; sound: boolean }

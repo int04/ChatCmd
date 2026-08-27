@@ -111,6 +111,10 @@ pub struct ToolArguments {
     /// Turn correlation identifier.
     #[serde(default)]
     pub turn_id: Option<String>,
+    /// HTTP-bound, server-derived correlation. Hidden from MCP input schema.
+    #[serde(default, rename = "__chatcmdMcpSessionId")]
+    #[schemars(skip)]
+    pub(crate) authenticated_session_id: Option<String>,
     /// Tool-specific typed JSON fields.
     #[serde(flatten)]
     pub fields: BTreeMap<String, Value>,
@@ -140,6 +144,7 @@ impl McpServer {
         let mut context = OperationContext::new(request_id, authenticated_agent, tool_name);
         context.task_id = arguments.task_id;
         context.turn_id = arguments.turn_id;
+        context.mcp_session_id = arguments.authenticated_session_id;
         let value = Value::Object(arguments.fields.into_iter().collect());
         match self.runtime.call(tool_name, context, value).await {
             Ok(value) => CallToolResult::structured(value),
@@ -322,12 +327,19 @@ async fn mcp_handler(
         Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
     };
 
-    // Bind tool identity to the URL token before rmcp moves work into its session task.
+    let header_session = request
+        .headers()
+        .get("mcp-session-id")
+        .and_then(|value| value.to_str().ok());
+    let session_id = local_mcp_session_id(&agent_id, header_session);
+
+    // Bind tool identity and safe correlation before rmcp moves work into its session task.
     // Client-provided `agent_id` values (for example a ChatGPT connector name) never win.
-    request = match request_identity::bind_authenticated_agent(request, &agent_id).await {
-        Ok(request) => request,
-        Err(status) => return status.into_response(),
-    };
+    request =
+        match request_identity::bind_authenticated_agent(request, &agent_id, &session_id).await {
+            Ok(request) => request,
+            Err(status) => return status.into_response(),
+        };
 
     // Keep the credential at the HTTP boundary. Downstream rmcp handlers receive
     // a stable credential-free URI and the authenticated agent identity only.
@@ -339,6 +351,15 @@ async fn mcp_handler(
         Ok(response) => response.into_response(),
         Err(infallible) => match infallible {},
     }
+}
+
+fn local_mcp_session_id(agent_id: &str, header_session: Option<&str>) -> String {
+    let scope = header_session.unwrap_or("agent-fallback");
+    let material = format!("agent:{agent_id}\0session:{scope}");
+    format!(
+        "mcp-session-{}",
+        uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_OID, material.as_bytes())
+    )
 }
 
 /// Build reusable Streamable HTTP service with local rmcp session management.
@@ -426,6 +447,22 @@ mod tests {
     fn query_tokens_are_rejected() {
         assert!(has_query_token("access_token=secret"));
         assert!(!has_query_token("cursor=token-value"));
+    }
+
+    #[test]
+    fn local_session_correlation_is_stable_and_secret_free() {
+        let first = local_mcp_session_id("agent-test", Some("remote-secret-session"));
+        let second = local_mcp_session_id("agent-test", Some("remote-secret-session"));
+        assert_eq!(first, second);
+        assert!(!first.contains("remote-secret-session"));
+        assert_ne!(
+            first,
+            local_mcp_session_id("other-agent", Some("remote-secret-session"))
+        );
+        assert_eq!(
+            local_mcp_session_id("agent-test", None),
+            local_mcp_session_id("agent-test", None)
+        );
     }
 
     #[tokio::test]

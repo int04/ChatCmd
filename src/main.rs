@@ -173,18 +173,21 @@ fn resolve_frontend_dir() -> PathBuf {
 }
 
 async fn seed_catalog(repository: &SqliteRepository) -> Result<(), chatcmd_core::StorageError> {
-    let groups = vec![ToolGroup {
-        id: "group-local".to_owned(),
-        key: "local".to_owned(),
-        display_name: "Local machine".to_owned(),
-        sort_order: 10,
-    }];
+    let groups = vec![
+        tool_group("group-device", "device", "Device", 10),
+        tool_group("group-terminal", "terminal", "Terminal", 20),
+        tool_group("group-files", "files", "Files & workspace", 30),
+        tool_group("group-git", "git", "Git", 40),
+        tool_group("group-process", "process", "Processes", 50),
+        tool_group("group-skills", "skills", "Skills", 60),
+        tool_group("group-tasks", "tasks", "Tasks & agent lifecycle", 70),
+    ];
     let tools = chatcmd_mcp::TOOL_NAMES
         .iter()
         .map(|name| ToolDefinition {
             id: seeded_tool_id(name),
             key: (*name).to_owned(),
-            group_id: "group-local".to_owned(),
+            group_id: tool_group_id(name).to_owned(),
             title: name.replace('_', " "),
             description: format!("Local {name} operation"),
             input_schema_json: "{}".to_owned(),
@@ -221,6 +224,32 @@ async fn seed_catalog(repository: &SqliteRepository) -> Result<(), chatcmd_core:
     repository.replace_catalog(&groups, &tools, &presets).await
 }
 
+fn tool_group(id: &str, key: &str, display_name: &str, sort_order: i32) -> ToolGroup {
+    ToolGroup {
+        id: id.to_owned(),
+        key: key.to_owned(),
+        display_name: display_name.to_owned(),
+        sort_order,
+    }
+}
+
+fn tool_group_id(name: &str) -> &'static str {
+    if name.starts_with("device_") {
+        "group-device"
+    } else if name.starts_with("shell_") {
+        "group-terminal"
+    } else if name.starts_with("fs_") || name == "workspace_roots" {
+        "group-files"
+    } else if name.starts_with("git_") {
+        "group-git"
+    } else if name.starts_with("process_") {
+        "group-process"
+    } else if name.starts_with("skill_") || name.starts_with("skills_") {
+        "group-skills"
+    } else {
+        "group-tasks"
+    }
+}
 fn seeded_tool_id(name: &str) -> String {
     match name {
         "device_list" => "tool-device-list".to_owned(),

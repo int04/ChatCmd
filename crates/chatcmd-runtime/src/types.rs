@@ -77,6 +77,8 @@ pub struct OperationContext {
     pub tool_name: String,
     pub task_id: Option<String>,
     pub turn_id: Option<String>,
+    /// Server-derived logical MCP session. Never accepted from untrusted tool arguments.
+    pub mcp_session_id: Option<String>,
     #[serde(skip)]
     pub cancellation: CancellationToken,
 }
@@ -94,6 +96,7 @@ impl OperationContext {
             tool_name: tool_name.into(),
             task_id: None,
             turn_id: None,
+            mcp_session_id: None,
             cancellation: CancellationToken::new(),
         }
     }
