@@ -1,6 +1,6 @@
 import { CheckCircle2, CircleAlert, CircleStop, Clock3, LoaderCircle, MessageSquareText, Search, TerminalSquare } from 'lucide-react';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { Link, useParams } from 'react-router-dom';
 
@@ -21,8 +21,6 @@ import { useLoad } from '../useLoad';
 
 
 export function TasksPage() { return <TasksWorkspace />; }
-
-export function TaskDetailPage() { return <TasksWorkspace />; }
 
 
 
@@ -165,6 +163,29 @@ function TaskDetailContent({ detail, realtime, problem, clearProblem, stop, busy
 
   const startedAt = task.createdAtUtc ?? turns[0]?.startedAtUtc ?? task.updatedAtUtc;
 
+  const chatRef = useRef<HTMLElement>(null);
+  const nearBottomRef = useRef(true);
+  const activeTaskRef = useRef<string | null>(null);
+  const lastEvent = events.at(-1);
+  const lastTurn = turns.at(-1);
+  const updateKey = `${events.length}:${lastEvent?.id ?? 'empty'}:${turns.length}:${lastTurn?.id ?? 'empty'}:${lastTurn?.status ?? 'empty'}:${lastTurn?.completedAtUtc ?? ''}`;
+
+  useLayoutEffect(() => {
+    const root = chatRef.current;
+    if (!root) return;
+    const taskChanged = activeTaskRef.current !== task.id;
+    activeTaskRef.current = task.id;
+    if (!taskChanged && !nearBottomRef.current) return;
+    const frame = window.requestAnimationFrame(() => { root.scrollTop = root.scrollHeight; });
+    return () => window.cancelAnimationFrame(frame);
+  }, [task.id, updateKey]);
+
+  const updateChatScrollPosition = () => {
+    const root = chatRef.current;
+    if (!root) return;
+    nearBottomRef.current = root.scrollHeight - root.scrollTop - root.clientHeight < 96;
+  };
+
   return <div className="task-detail-shell">
 
     <header className="task-detail-topbar"><div><h1>{conversationName(task)}</h1><p>{turns.length} agent turns · generation {task.generation ?? 1} · {realtime === 'online' ? 'realtime' : realtime} · updated {formatTime(task.updatedAtUtc)}</p></div><StatusBadge state={task.status} /></header>
@@ -173,7 +194,7 @@ function TaskDetailContent({ detail, realtime, problem, clearProblem, stop, busy
 
     <div className="task-detail-body">
 
-      <main className="task-chat-column"><h2 className="sr-only">Activity timeline</h2><section className="task-bubble-timeline turn-timeline" aria-label="Conversation activity">
+      <main ref={chatRef} className="task-chat-column" onScroll={updateChatScrollPosition}><h2 className="sr-only">Activity timeline</h2><section className="task-bubble-timeline turn-timeline" aria-label="Conversation activity">
 
         {turns.length ? turns.map((turn) => <TaskTurnBubble turn={turn} now={turnNow} key={turn.id} />) : <Empty title="Chưa có hoạt động" body="Agent chưa ghi nhận nội dung cho task này." />}
 

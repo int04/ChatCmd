@@ -78,7 +78,8 @@
 
 /* Desktop tasks: three independent fixed-height scroll regions. */
 @media(min-width:821px){
-  .tasks-workspace{height:calc(100dvh - 108px);min-height:0;max-height:calc(100dvh - 108px);overflow:hidden}
+  .content-shell main.tasks-main{width:100%;max-width:none;margin:0;padding:0}
+  .tasks-workspace{height:100dvh;min-height:0;max-height:100dvh;overflow:hidden;border-radius:0;border-top:0;border-bottom:0;box-shadow:none}
   .tasks-conversation-pane{height:100%;max-height:none;min-height:0;overflow:hidden}
   .tasks-conversation-header,.tasks-conversation-search{flex:0 0 auto}
   .tasks-conversation-list{min-height:0;flex:1 1 auto;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
@@ -86,12 +87,12 @@
   .tasks-workspace .task-detail-shell{height:100%;min-height:0;display:flex;flex-direction:column;overflow:hidden}
   .tasks-workspace .task-detail-topbar{position:relative;top:auto;flex:0 0 auto}
   .tasks-workspace .problem-banner{flex:0 0 auto}
-  .tasks-workspace .task-detail-body{min-height:0;flex:1 1 auto;display:grid;grid-template-columns:minmax(0,1fr) 250px;align-items:stretch;overflow:hidden}
+  .tasks-workspace .task-detail-body{min-height:0;flex:1 1 auto;display:grid;grid-template-columns:minmax(0,1fr) 280px;align-items:stretch;overflow:hidden}
   .tasks-workspace .task-chat-column{height:100%;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable}
   .tasks-workspace .task-detail-sidebar{position:relative;top:auto;height:100%;min-height:0;max-height:none;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding-bottom:24px}
 }
 @media(min-width:821px) and (max-width:1180px){
-  .tasks-workspace .task-detail-body{grid-template-columns:minmax(0,1fr) 230px}
+  .tasks-workspace .task-detail-body{grid-template-columns:minmax(0,1fr) 250px}
   .tasks-workspace .task-detail-sidebar{display:flex;grid-template-columns:none;border-top:0;border-left:1px solid var(--border)}
   .tasks-workspace .task-info-header,.tasks-workspace .task-info-duration{grid-column:auto}
   .tasks-workspace .task-stop-card{margin-top:auto}

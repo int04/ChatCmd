@@ -222,6 +222,12 @@ export function activityOutput(activity: ToolActivity) {
   if (activity.output === undefined) return activity.error ? activity.error : '';
   if (typeof activity.output === 'string') return stripAnsi(activity.output);
   const value = asObject(activity.output);
+  if (activity.kind === 'git') {
+    const stdout = stringValue(value.stdout);
+    const stderr = stringValue(value.stderr);
+    const commandOutput = [stdout, stderr].filter(Boolean).join('\n');
+    if (commandOutput) return stripAnsi(commandOutput);
+  }
   for (const key of ['code', 'content', 'text', 'plainText', 'output']) {
     const text = stringValue(value[key]);
     if (!text) continue;
@@ -238,7 +244,14 @@ export function activityCodeView(activity: ToolActivity) {
   const input = asObject(activity.input);
   const output = activityOutput(activity);
   if (!output.trim()) return null;
-  if (activity.tool === 'git_diff' || activity.tool === 'git_show') return { code: output, language: 'diff' };
+  if (activity.kind === 'git') {
+    const isDiff = activity.tool === 'git_diff' || activity.tool === 'git_show';
+    return {
+      code: output,
+      path: stringValue(input.path) || null,
+      language: isDiff ? 'diff' : 'plain',
+    };
+  }
   if (activity.tool === 'fs_read_text') {
     const outputObject = asObject(activity.output);
     return { code: output, path: stringValue(outputObject.path) || stringValue(input.path) || null, startLine: Number(outputObject.startLine) || Number(input.startLine) || 1 };
