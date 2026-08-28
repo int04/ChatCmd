@@ -1,4 +1,4 @@
-import type { Agent, AgentInput, ChatGptBridge, ChatGptRequest, CommandExecutionMode, LocalSettings, McpStatus, Overview, ProblemDetails, SecretResult, Session, SessionDetail, Skill, SkillOptionValue, Task, TaskDetail, Tool, ToolPreset, UserSkill } from './types';
+import type { Agent, AgentInput, ChatGptBridge, ChatGptRequest, CommandExecutionMode, LocalSettings, McpStatus, Overview, ProblemDetails, SecretResult, Session, SessionDetail, Skill, SkillOptionValue, TaskDetail, TaskPage, Tool, ToolPreset, UserSkill } from './types';
 
 export class ApiError extends Error {
   constructor(message: string, public status?: number, public problem?: ProblemDetails) { super(message); this.name = 'ApiError'; }
@@ -40,7 +40,7 @@ export const api = {
   chatGptBridge: (taskId: string) => request<ChatGptBridge>(`/api/local/chatgpt/tasks/${item(taskId)}`),
   sendChatGptMessage: (taskId: string, input: { model?: string; content: string }) => request<ChatGptRequest>(`/api/local/chatgpt/tasks/${item(taskId)}/messages`, { method: 'POST', body: json(input) }),
   stopChatGptMessage: (taskId: string) => request<ChatGptRequest>(`/api/local/chatgpt/tasks/${item(taskId)}/stop`, { method: 'POST', body: '{}' }),
-  tasks: () => request<Task[]>('/api/local/tasks'),
+  tasks: (cursor?: string, limit = 10) => request<TaskPage>(`/api/local/tasks?limit=${limit}${cursor ? `&cursor=${item(cursor)}` : ''}`),
   task: (id: string) => request<TaskDetail>(`/api/local/tasks/${item(id)}`),
   taskAction: (id: string, action: string, body?: unknown) => request<TaskDetail>(`/api/local/tasks/${item(id)}/${action}`, { method: 'POST', body: body === undefined ? undefined : json(body) }),
   stopTask: (id: string) => request<TaskDetail>(`/api/local/tasks/${item(id)}/stop`, { method: 'POST', body: '{}' }),

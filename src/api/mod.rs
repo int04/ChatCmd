@@ -19,7 +19,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use axum::{
     Json, Router,
-    extract::{Path, Request, State},
+    extract::{Path, Query, Request, State},
     http::{HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -29,6 +29,7 @@ use chatcmd_core::{
     AgentId, McpAgent, McpAgentStore, NewMcpAgent, Setting, SettingsStore, TaskId, TaskStore,
     ToolCapability, ToolCatalogStore,
 };
+use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::Row;
 
@@ -147,12 +148,36 @@ async fn mcp_status(State(state): State<Arc<AppState>>) -> Json<Value> {
     )
 }
 
-async fn tasks(State(state): State<Arc<AppState>>) -> Result<Json<Value>, Problem> {
-    let tasks = state
+#[derive(Debug, Deserialize)]
+struct TaskListQuery {
+    cursor: Option<String>,
+    limit: Option<u32>,
+}
+
+async fn tasks(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<TaskListQuery>,
+) -> Result<Json<Value>, Problem> {
+    let all_tasks = state
         .repository
         .list_tasks(500)
         .await
         .map_err(storage_problem)?;
+    let limit = query.limit.unwrap_or(10).clamp(1, 50) as usize;
+    let start = query
+        .cursor
+        .as_deref()
+        .and_then(|cursor| all_tasks.iter().position(|task| task.id.as_str() == cursor))
+        .map_or(0, |index| index + 1);
+    let has_more = start.saturating_add(limit) < all_tasks.len();
+    let tasks = all_tasks
+        .into_iter()
+        .skip(start)
+        .take(limit)
+        .collect::<Vec<_>>();
+    let next_cursor = has_more
+        .then(|| tasks.last().map(|task| task.id.as_str().to_owned()))
+        .flatten();
     let summary_rows = sqlx::query("SELECT timeline_events.task_id,COUNT(DISTINCT timeline_events.turn_id) AS turn_count,(SELECT COALESCE(json_extract(latest.payload_json,'$.content'),json_extract(latest.payload_json,'$.message'),json_extract(latest.payload_json,'$.text'),json_extract(latest.payload_json,'$.response')) FROM timeline_events latest WHERE latest.task_id=timeline_events.task_id AND COALESCE(json_extract(latest.payload_json,'$.content'),json_extract(latest.payload_json,'$.message'),json_extract(latest.payload_json,'$.text'),json_extract(latest.payload_json,'$.response')) IS NOT NULL ORDER BY latest.created_at_ms DESC,latest.event_id DESC LIMIT 1) AS output_preview FROM timeline_events GROUP BY timeline_events.task_id")
         .fetch_all(state.repository.pool()).await.map_err(db_problem)?;
     let summaries = summary_rows
@@ -178,30 +203,29 @@ async fn tasks(State(state): State<Arc<AppState>>) -> Result<Json<Value>, Proble
             )
         })
         .collect::<BTreeMap<_, _>>();
-    Ok(Json(Value::Array(
-        tasks
-            .into_iter()
-            .map(|task| {
-                let id = task.id.as_str().to_owned();
-                let mut value = task_value(task);
-                if let Some(object) = value.as_object_mut() {
-                    let (turn_count, preview) = summaries.get(&id).cloned().unwrap_or((0, None));
-                    object.insert("turnCount".to_owned(), json!(turn_count));
+    let items = tasks
+        .into_iter()
+        .map(|task| {
+            let id = task.id.as_str().to_owned();
+            let mut value = task_value(task);
+            if let Some(object) = value.as_object_mut() {
+                let (turn_count, preview) = summaries.get(&id).cloned().unwrap_or((0, None));
+                object.insert("turnCount".to_owned(), json!(turn_count));
+                object.insert(
+                    "finalResponseCount".to_owned(),
+                    json!(final_counts.get(&id).copied().unwrap_or(0)),
+                );
+                if let Some(preview) = preview.filter(|value| !value.trim().is_empty()) {
                     object.insert(
-                        "finalResponseCount".to_owned(),
-                        json!(final_counts.get(&id).copied().unwrap_or(0)),
+                        "outputPreview".to_owned(),
+                        Value::String(compact_preview(&preview)),
                     );
-                    if let Some(preview) = preview.filter(|value| !value.trim().is_empty()) {
-                        object.insert(
-                            "outputPreview".to_owned(),
-                            Value::String(compact_preview(&preview)),
-                        );
-                    }
                 }
-                value
-            })
-            .collect(),
-    )))
+            }
+            value
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(json!({ "items": items, "nextCursor": next_cursor })))
 }
 
 async fn task(

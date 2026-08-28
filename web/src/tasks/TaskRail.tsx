@@ -6,10 +6,10 @@ import { api } from '../api';
 import { Empty, ErrorState, Loading } from '../components';
 import { useRealtime } from '../realtime';
 import type { Task, TimelineEvent } from '../types';
-import { useLoad } from '../useLoad';
 import { upsertTaskEvent } from './taskTimeline';
 
 const READ_FINAL_COUNTS_KEY = 'chatcmd.tasks.readFinalCounts.v1';
+const PAGE_SIZE = 10;
 const menuItems = [
   { to: '/', end: true, label: 'Overview', icon: LayoutDashboard },
   { to: '/tasks', label: 'Task', icon: Sparkles },
@@ -22,28 +22,74 @@ const menuItems = [
 export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void }) {
   const location = useLocation();
   const taskId = activeTaskId(location.pathname);
-  const result = useLoad(api.tasks, []);
-  const { reload, setData } = result;
+  const [loadedTasks, setLoadedTasks] = useState<Task[]>([]);
+  const [nextCursor, setNextCursor] = useState<string>();
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState('');
   const [query, setQuery] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
   const [readFinalCounts, setReadFinalCounts] = useState<Record<string, number>>(readStoredFinalCounts);
   const visibleTaskIds = useRef(new Set<string>());
+  const loadingMoreRef = useRef(false);
   const hadStoredReadCounts = useRef(typeof localStorage !== 'undefined' && localStorage.getItem(READ_FINAL_COUNTS_KEY) !== null);
 
-  const visibleTasks = useMemo(() => Array.isArray(result.data) ? result.data.filter((task) => !task.isSubagent) : [], [result.data]);
-  useEffect(() => { visibleTaskIds.current = new Set(visibleTasks.map((task) => task.id)); }, [visibleTasks]);
+  const applyFirstPage = useCallback(async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const page = await api.tasks(undefined, PAGE_SIZE);
+      setLoadedTasks(pageItems(page).filter((task) => !task.isSubagent));
+      setNextCursor(pageCursor(page));
+    } catch (value) {
+      setError(value instanceof Error ? value.message : 'Không thể tải đoạn trò chuyện.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const refreshHead = useCallback(async () => {
+    try {
+      const page = await api.tasks(undefined, PAGE_SIZE);
+      setLoadedTasks((current) => mergeTasks(pageItems(page).filter((task) => !task.isSubagent), current));
+      if (!loadedTasks.length) setNextCursor(pageCursor(page));
+    } catch { /* realtime refresh is best effort */ }
+  }, [loadedTasks.length]);
+
+  const loadMore = useCallback(async () => {
+    if (!nextCursor || loadingMoreRef.current) return;
+    loadingMoreRef.current = true;
+    setLoadingMore(true);
+    setError('');
+    try {
+      const page = await api.tasks(nextCursor, PAGE_SIZE);
+      setLoadedTasks((current) => mergeTasks(current, pageItems(page).filter((task) => !task.isSubagent)));
+      setNextCursor(pageCursor(page));
+    } catch (value) {
+      setError(value instanceof Error ? value.message : 'Không thể tải thêm đoạn trò chuyện.');
+    } finally {
+      loadingMoreRef.current = false;
+      setLoadingMore(false);
+    }
+  }, [nextCursor]);
+
+  useEffect(() => { void applyFirstPage(); }, [applyFirstPage]);
+  useEffect(() => { visibleTaskIds.current = new Set(loadedTasks.map((task) => task.id)); }, [loadedTasks]);
   useEffect(() => {
-    if (!Array.isArray(result.data) || hadStoredReadCounts.current) return;
+    if (loading || hadStoredReadCounts.current) return;
     hadStoredReadCounts.current = true;
-    setReadFinalCounts(Object.fromEntries(visibleTasks.map((task) => [task.id, task.finalResponseCount ?? 0])));
-  }, [result.data, visibleTasks]);
+    setReadFinalCounts(Object.fromEntries(loadedTasks.map((task) => [task.id, task.finalResponseCount ?? 0])));
+  }, [loadedTasks, loading]);
 
   const handleRealtime = useCallback((event: TimelineEvent) => {
-    if (event.type === 'system.connected') { void reload(); return; }
+    if (event.type === 'system.connected') { void refreshHead(); return; }
     if (!event.taskId) return;
-    if (visibleTaskIds.current.has(event.taskId)) setData((current) => upsertTaskEvent(current, event));
-    else void reload();
-  }, [reload, setData]);
+    if (visibleTaskIds.current.has(event.taskId)) {
+      setLoadedTasks((current) => upsertTaskEvent(current, event) ?? current);
+    } else {
+      void refreshHead();
+    }
+  }, [refreshHead]);
   useRealtime(handleRealtime);
 
   useEffect(() => {
@@ -52,29 +98,36 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
 
   useEffect(() => {
     if (!taskId) return;
-    const task = visibleTasks.find((item) => item.id === taskId);
+    const task = loadedTasks.find((item) => item.id === taskId);
     if (!task) return;
     const count = task.finalResponseCount ?? 0;
     setReadFinalCounts((current) => (current[taskId] ?? 0) >= count ? current : { ...current, [taskId]: count });
-  }, [taskId, visibleTasks]);
+  }, [taskId, loadedTasks]);
 
   useEffect(() => { setMenuOpen(false); onClose(); }, [location.pathname, onClose]);
 
-  const tasks = useMemo(() => [...visibleTasks]
+  const tasks = useMemo(() => [...loadedTasks]
     .sort((a, b) => Date.parse(b.updatedAtUtc) - Date.parse(a.updatedAtUtc))
-    .filter((task) => `${conversationName(task)} ${task.id} ${task.outputPreview ?? ''}`.toLowerCase().includes(query.toLowerCase())), [query, visibleTasks]);
+    .filter((task) => `${conversationName(task)} ${task.id} ${task.outputPreview ?? ''}`.toLowerCase().includes(query.toLowerCase())), [query, loadedTasks]);
 
   return <aside className={`task-rail ${open ? 'open' : ''}`} aria-label="Đoạn trò chuyện">
     <header className="task-rail-header">
       <div className="task-rail-brand"><span className="brand-mark"><Braces /></span><strong>ChatCMD</strong><button className="icon-button mobile-only" aria-label="Close navigation" onClick={onClose}><X /></button></div>
       <Link className="task-rail-new-message" to="/tasks/new"><span className="task-rail-new-icon"><Plus /></span><span>Tin nhắn mới</span></Link>
-      <label className="tasks-conversation-search"><Search /><span className="sr-only">Tìm công việc</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Tìm kiếm" /></label>
+      <label className="tasks-conversation-search"><Search /><span className="sr-only">Tìm đoạn trò chuyện</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Tìm kiếm" /></label>
     </header>
 
     <div className="task-rail-body">
       <div className="task-rail-section-label"><span>Đoạn trò chuyện</span><small>{tasks.length}</small></div>
-      <div className="task-rail-list">
-        {result.loading ? <Loading label="Loading tasks" /> : result.error ? <ErrorState message={result.error} retry={() => void reload()} /> : !tasks.length ? <Empty title="Chưa có công việc" body="Task từ Agent sẽ xuất hiện tại đây." /> : tasks.map((task) => <TaskRailRow task={task} selected={task.id === taskId} unread={Math.max(0, (task.finalResponseCount ?? 0) - (readFinalCounts[task.id] ?? 0))} key={task.id} />)}
+      <div className="task-rail-list" onScroll={(event) => {
+        const target = event.currentTarget;
+        if (target.scrollHeight - target.scrollTop - target.clientHeight < 180) void loadMore();
+      }}>
+        {loading ? <Loading label="Loading tasks" /> : error && !tasks.length ? <ErrorState message={error} retry={() => void applyFirstPage()} /> : !tasks.length ? <Empty title="Chưa có đoạn trò chuyện" body="Đoạn trò chuyện từ Agent sẽ xuất hiện tại đây." /> : <>
+          {tasks.map((task) => <TaskRailRow task={task} selected={task.id === taskId} unread={Math.max(0, (task.finalResponseCount ?? 0) - (readFinalCounts[task.id] ?? 0))} key={task.id} />)}
+          {loadingMore && <div className="task-rail-load-more" role="status"><LoaderCircle className="spin" /><span>Đang tải thêm…</span></div>}
+          {error && <button className="task-rail-load-retry" type="button" onClick={() => void loadMore()}>Tải lại</button>}
+        </>}
       </div>
     </div>
 
@@ -98,6 +151,15 @@ function TaskRailRow({ task, selected, unread }: { task: Task; selected: boolean
       <span className="tasks-conversation-status-line"><span className={`task-rail-state ${task.status}`}>{running ? <LoaderCircle className="spin" /> : <i />}</span><span>{taskStatusLabel(task.status)}</span></span>
     </span>
   </Link>;
+}
+
+function pageItems(page: { items?: Task[] } | Task[]) { return Array.isArray(page) ? page : page.items ?? []; }
+function pageCursor(page: { nextCursor?: string } | Task[]) { return Array.isArray(page) ? undefined : page.nextCursor; }
+
+function mergeTasks(first: Task[], second: Task[]) {
+  const merged = new Map<string, Task>();
+  for (const task of [...first, ...second]) if (!merged.has(task.id)) merged.set(task.id, task);
+  return [...merged.values()];
 }
 
 function taskStatusLabel(status: string) {
