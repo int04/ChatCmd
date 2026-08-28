@@ -15,17 +15,12 @@ input!(DeviceGet { device_id: String });
 input!(SessionInput { session_id: String });
 input!(PathInput { path: PathBuf });
 input!(CwdInput { cwd: PathBuf });
-input!(TaskInput { task_id: String });
 input!(SkillInput { skill_id: String });
 input!(ProcessInput { process_id: u32 });
 input!(ArtifactInput {
-    task_id: String,
     artifact_id: String
 });
-input!(ExecutionModeInput {
-    task_id: String,
-    mode: String
-});
+input!(ExecutionModeInput { mode: String });
 input!(ShellResize {
     session_id: String,
     columns: u16,
@@ -51,7 +46,7 @@ input!(GitShow {
 input!(GitCommit {
     cwd: PathBuf,
     message: String,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     all: bool
 });
 input!(ProcessKill {
@@ -85,6 +80,7 @@ pub(super) struct CompleteInput {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct ShellCreate {
+    #[serde(alias = "cwd")]
     pub(super) working_directory: Option<PathBuf>,
     pub(super) executable: Option<PathBuf>,
     #[serde(default)]
@@ -99,6 +95,7 @@ pub(super) struct ShellCreate {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct ShellWrite {
     pub(super) session_id: String,
+    #[serde(alias = "input")]
     pub(super) text: String,
     #[serde(default = "default_true")]
     pub(super) append_new_line: bool,
@@ -124,7 +121,7 @@ const fn default_timeout() -> u64 {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct ShellRead {
     pub(super) session_id: String,
-    #[serde(default)]
+    #[serde(default, alias = "startSequence")]
     pub(super) after_sequence: u64,
     #[serde(default = "default_limit")]
     pub(super) max_events: usize,
@@ -242,7 +239,7 @@ const fn default_git_count() -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::GitDiff;
+    use super::{GitCommit, GitDiff, ShellCreate, ShellRead, ShellSignalInput, ShellWrite};
 
     #[test]
     fn git_diff_accepts_stat_flag() {
@@ -254,6 +251,61 @@ mod tests {
         assert!(input.stat);
         assert!(!input.staged);
         assert!(input.path.is_none());
+    }
+
+    #[test]
+    fn shell_create_accepts_legacy_cwd_alias() {
+        let input: ShellCreate = serde_json::from_value(serde_json::json!({
+            "cwd": "."
+        }))
+        .expect("legacy shell create cwd");
+        assert_eq!(
+            input.working_directory.as_deref(),
+            Some(std::path::Path::new("."))
+        );
+    }
+
+    #[test]
+    fn shell_write_accepts_legacy_input_alias() {
+        let input: ShellWrite = serde_json::from_value(serde_json::json!({
+            "sessionId": "session-1",
+            "input": "echo ok"
+        }))
+        .expect("legacy shell write input");
+        assert_eq!(input.text, "echo ok");
+        assert!(input.append_new_line);
+    }
+
+    #[test]
+    fn shell_read_accepts_legacy_start_sequence_alias() {
+        let input: ShellRead = serde_json::from_value(serde_json::json!({
+            "sessionId": "session-1",
+            "startSequence": 7,
+            "maxEvents": 50
+        }))
+        .expect("legacy shell read start sequence");
+        assert_eq!(input.after_sequence, 7);
+        assert_eq!(input.max_events, 50);
+    }
+
+    #[test]
+    fn git_commit_stages_all_by_default() {
+        let input: GitCommit = serde_json::from_value(serde_json::json!({
+            "cwd": ".",
+            "message": "test"
+        }))
+        .expect("git commit input");
+        assert!(input.all);
+    }
+
+    #[test]
+    fn shell_signal_accepts_sigint_alias() {
+        let input: ShellSignalInput = serde_json::from_value(serde_json::json!({
+            "sessionId": "session-1",
+            "signal": "SIGINT"
+        }))
+        .expect("legacy SIGINT signal");
+        assert!(matches!(input.signal, chatcmd_runtime::ShellSignal::CtrlC));
     }
 }
 

@@ -22,9 +22,10 @@ impl RuntimeHost {
         }
         let task_id = TaskId::new(context.task_id.as_deref().unwrap_or_default())
             .map_err(|error| invalid("taskId", error))?;
+        let mode_task_id = self.execution_mode_task_id(&task_id).await?;
         match self
             .repository
-            .execution_mode(Some(&task_id))
+            .execution_mode(Some(&mode_task_id))
             .await
             .map_err(storage_error)?
         {
@@ -40,7 +41,7 @@ impl RuntimeHost {
 
         let similarity_key = similarity_key(tool, arguments);
         if self
-            .similar_operation_allowed(task_id.as_str(), &similarity_key)
+            .similar_operation_allowed(mode_task_id.as_str(), &similarity_key)
             .await?
         {
             return Ok(());
@@ -80,8 +81,77 @@ impl RuntimeHost {
             None,
         )
         .await?;
+        self.publish_parent_subagent_approval(
+            &task_id,
+            &approval_id,
+            turn_id,
+            tool,
+            arguments,
+            "subagent.approval_pending",
+        )
+        .await?;
         self.wait_for_approval(context, &task_id, &approval_id)
             .await
+    }
+
+    async fn publish_parent_subagent_approval(
+        &self,
+        child_task_id: &TaskId,
+        approval_id: &str,
+        child_turn_id: &str,
+        tool: &str,
+        arguments: &Value,
+        event_type: &str,
+    ) -> RuntimeResult<()> {
+        let row = sqlx::query(
+            "SELECT id,parent_task_id,parent_turn_id,name FROM subagent_runs WHERE child_task_id=? LIMIT 1",
+        )
+        .bind(child_task_id.as_str())
+        .fetch_optional(self.repository.pool())
+        .await
+        .map_err(|_| RuntimeError::new("storage_error", "sub-agent approval routing lookup failed"))?;
+        let Some(row) = row else {
+            return Ok(());
+        };
+        let subagent_id = row.get::<String, _>("id");
+        let parent_task_id = row.get::<String, _>("parent_task_id");
+        let parent_turn_id = row.get::<String, _>("parent_turn_id");
+        let agent_name = row.get::<String, _>("name");
+        self.publish_event(
+            format!("subagent-approval:{approval_id}:{}", now_ms()),
+            event_type,
+            Some(parent_task_id),
+            Some(child_task_id.as_str().to_owned()),
+            Some(parent_turn_id),
+            json!({
+                "subagentId": subagent_id,
+                "childTaskId": child_task_id.as_str(),
+                "activityId": approval_id,
+                "childTurnId": child_turn_id,
+                "agentName": agent_name,
+                "tool": tool,
+                "input": arguments,
+            }),
+        );
+        Ok(())
+    }
+
+    async fn execution_mode_task_id(&self, task_id: &TaskId) -> RuntimeResult<TaskId> {
+        let parent_task_id = sqlx::query_scalar::<_, String>(
+            "SELECT parent_task_id FROM subagent_runs WHERE child_task_id=? LIMIT 1",
+        )
+        .bind(task_id.as_str())
+        .fetch_optional(self.repository.pool())
+        .await
+        .map_err(|_| {
+            RuntimeError::new("storage_error", "sub-agent approval scope lookup failed")
+        })?;
+        match parent_task_id {
+            Some(parent_task_id) => {
+                TaskId::new(parent_task_id).map_err(|error| invalid("taskId", error))
+            }
+            None => Ok(task_id.clone()),
+        }
     }
 
     async fn similar_operation_allowed(
@@ -90,8 +160,9 @@ impl RuntimeHost {
         similarity_key: &str,
     ) -> RuntimeResult<bool> {
         sqlx::query_scalar::<_, i64>(
-            "SELECT EXISTS(SELECT 1 FROM approvals WHERE task_id=? AND state='approved' AND json_extract(request_json,'$.similarityKey')=? AND json_extract(decision_json,'$.decision')='allowSimilar' LIMIT 1)",
+            "SELECT EXISTS(SELECT 1 FROM approvals a LEFT JOIN subagent_runs r ON r.child_task_id=a.task_id WHERE (a.task_id=? OR r.parent_task_id=?) AND a.state='approved' AND json_extract(a.request_json,'$.similarityKey')=? AND json_extract(a.decision_json,'$.decision')='allowSimilar' LIMIT 1)",
         )
+        .bind(task_id)
         .bind(task_id)
         .bind(similarity_key)
         .fetch_one(self.repository.pool())

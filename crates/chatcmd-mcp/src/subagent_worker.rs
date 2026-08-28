@@ -219,6 +219,46 @@ async fn start_local_codex_subagent(
         ));
     }
 
+    let response = enrich_registration(
+        registration,
+        json!({
+            "dispatchMode": "localCodex",
+            "nativeDelegationRequired": false,
+            "status": "running",
+            "workerStarted": true,
+            "executor": "codex",
+            "sandbox": "read-only",
+            "instruction": "The MCP client does not advertise sampling, so ChatCMD started a local Codex CLI worker in the reserved child task. Child approvals are queued independently; wait for completion with agent_subagent_wait."
+        }),
+    );
+    let request = request.trim().to_owned();
+    tokio::spawn(async move {
+        if let Err(error) = bootstrap_local_codex_subagent(
+            runtime.clone(),
+            parent_context,
+            subagent_id,
+            child_task_id.clone(),
+            turn_id,
+            name,
+            request,
+        )
+        .await
+        {
+            let _ = runtime.fail_subagent(&child_task_id, &error.message).await;
+        }
+    });
+    Ok(response)
+}
+
+async fn bootstrap_local_codex_subagent(
+    runtime: Arc<dyn RuntimeApi>,
+    parent_context: OperationContext,
+    subagent_id: String,
+    child_task_id: String,
+    turn_id: String,
+    name: String,
+    request: String,
+) -> RuntimeResult<()> {
     let workspace = match runtime.project_folder(&parent_context.agent_id).await {
         Ok(Some(value)) if !value.trim().is_empty() => value,
         Ok(_) => {
@@ -229,36 +269,21 @@ async fn start_local_codex_subagent(
                 "workspace_roots",
                 format!("subagent-roots-{subagent_id}"),
             );
-            let roots = match runtime
+            let roots = runtime
                 .call("workspace_roots", roots_context, json!({}))
-                .await
-            {
-                Ok(value) => value,
-                Err(error) => {
-                    let _ = runtime.fail_subagent(&child_task_id, &error.message).await;
-                    return Err(error);
-                }
-            };
-            match resolve_workspace_root(&roots) {
-                Some(value) => value,
-                None => {
-                    let error = RuntimeError::new(
-                        "subagent_workspace_missing",
-                        "local sub-agent executor could not resolve the agent project folder or a workspace root",
-                    );
-                    let _ = runtime.fail_subagent(&child_task_id, &error.message).await;
-                    return Err(error);
-                }
-            }
+                .await?;
+            resolve_workspace_root(&roots).ok_or_else(|| {
+                RuntimeError::new(
+                    "subagent_workspace_missing",
+                    "local sub-agent executor could not resolve the agent project folder or a workspace root",
+                )
+            })?
         }
-        Err(error) => {
-            let _ = runtime.fail_subagent(&child_task_id, &error.message).await;
-            return Err(error);
-        }
+        Err(error) => return Err(error),
     };
 
     let output_path = local_executor_output_path(&subagent_id);
-    let executor_prompt = local_codex_prompt(&name, request);
+    let executor_prompt = local_codex_prompt(&name, &request);
     let shell_create_context = child_context(
         &parent_context,
         &child_task_id,
@@ -266,7 +291,7 @@ async fn start_local_codex_subagent(
         "shell_create",
         format!("subagent-shell-create-{subagent_id}"),
     );
-    let shell = match runtime
+    let shell = runtime
         .call(
             "shell_create",
             shell_create_context,
@@ -278,21 +303,8 @@ async fn start_local_codex_subagent(
                 }
             }),
         )
-        .await
-    {
-        Ok(value) => value,
-        Err(error) => {
-            let _ = runtime.fail_subagent(&child_task_id, &error.message).await;
-            return Err(error);
-        }
-    };
-    let session_id = match required_string(&shell, "sessionId") {
-        Ok(value) => value.to_owned(),
-        Err(error) => {
-            let _ = runtime.fail_subagent(&child_task_id, &error.message).await;
-            return Err(error);
-        }
-    };
+        .await?;
+    let session_id = required_string(&shell, "sessionId")?.to_owned();
     let platform = runtime.local_device().platform;
     let command = local_codex_command(&platform);
     let shell_write_context = child_context(
@@ -302,7 +314,7 @@ async fn start_local_codex_subagent(
         "shell_write",
         format!("subagent-shell-write-{subagent_id}"),
     );
-    if let Err(error) = runtime
+    runtime
         .call(
             "shell_write",
             shell_write_context,
@@ -312,24 +324,7 @@ async fn start_local_codex_subagent(
                 "appendNewLine": true
             }),
         )
-        .await
-    {
-        let _ = runtime.fail_subagent(&child_task_id, &error.message).await;
-        return Err(error);
-    }
-
-    let response = enrich_registration(
-        registration,
-        json!({
-            "dispatchMode": "localCodex",
-            "nativeDelegationRequired": false,
-            "status": "running",
-            "workerStarted": true,
-            "executor": "codex",
-            "sandbox": "read-only",
-            "instruction": "The MCP client does not advertise sampling, so ChatCMD started a local Codex CLI worker in the reserved child task. Wait for completion with agent_subagent_wait."
-        }),
-    );
+        .await?;
 
     tokio::spawn(async move {
         run_local_codex_worker(
@@ -343,7 +338,7 @@ async fn start_local_codex_subagent(
         )
         .await;
     });
-    Ok(response)
+    Ok(())
 }
 
 async fn run_local_codex_worker(

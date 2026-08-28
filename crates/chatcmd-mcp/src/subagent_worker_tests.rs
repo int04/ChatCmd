@@ -365,7 +365,7 @@ async fn text_sampling_worker_runs_tool_without_sampling_tools_capability() {
 }
 
 #[tokio::test]
-async fn startup_failure_after_registration_returns_structured_failed_result() {
+async fn startup_failure_after_registration_is_reported_asynchronously() {
     use rmcp::{ServiceExt as _, model::CallToolRequestParams};
 
     let runtime = FakeRuntime {
@@ -410,18 +410,36 @@ async fn startup_failure_after_registration_returns_structured_failed_result() {
         .expect("subagent tool call");
     assert!(!result.is_error.unwrap_or(false));
     let structured = result.structured_content.expect("structured result");
-    assert_eq!(structured.get("status"), Some(&json!("failed")));
-    assert_eq!(structured.get("dispatchMode"), Some(&json!("failed")));
-    assert_eq!(
-        structured.pointer("/startupError/code"),
-        Some(&json!("user_message_sync_required"))
-    );
+    assert_eq!(structured.get("status"), Some(&json!("running")));
+    assert_eq!(structured.get("dispatchMode"), Some(&json!("localCodex")));
+    assert_eq!(structured.get("workerStarted"), Some(&json!(true)));
+
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if recorded
+                .lock()
+                .expect("recorded")
+                .iter()
+                .any(|(tool, _, _)| tool == "fail_subagent")
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("background startup failure is reported");
+
     let recorded = recorded.lock().expect("recorded");
     let failed = recorded
         .iter()
         .find(|(tool, _, _)| tool == "fail_subagent")
         .expect("registered child is marked failed");
     assert_eq!(failed.1.task_id.as_deref(), Some("task-subagent-test"));
+    assert_eq!(
+        failed.2.pointer("/message"),
+        Some(&json!("simulated startup failure after registration"))
+    );
     drop(recorded);
 
     client.cancel().await.expect("cancel client");

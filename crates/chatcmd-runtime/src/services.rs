@@ -77,12 +77,13 @@ impl GitService {
                 "commit message cannot be empty",
             ));
         }
-        let mut args = vec!["commit"];
         if all {
-            args.push("--all");
+            let staged = self.run(cwd, &["add", "--all"]).await?;
+            if staged.exit_code != Some(0) {
+                return Ok(staged);
+            }
         }
-        args.extend(["--message", message]);
-        self.run(cwd, &args).await
+        self.run(cwd, &["commit", "--message", message]).await
     }
     async fn run(&self, cwd: &Path, args: &[&str]) -> RuntimeResult<CommandOutput> {
         let cwd = self.workspace.stat(cwd).await?.path;

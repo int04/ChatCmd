@@ -8,6 +8,7 @@ import { Empty, ErrorState, Loading, StatusBadge, formatTime } from '../componen
 import { useRealtime } from '../realtime';
 import { TaskAccessCard } from '../tasks/TaskAccessCard';
 import { TaskConversationStopCard } from '../tasks/TaskConversationStopCard';
+import { SubagentApprovalQueue } from '../tasks/SubagentApprovalQueue';
 import { TaskTurnBubble } from '../tasks/TaskTurnBubble';
 import { buildTaskTurns, mergeLiveDetail, upsertTaskEvent } from '../tasks/taskTimeline';
 import type { Task, TaskDetail, TimelineEvent } from '../types';
@@ -44,7 +45,7 @@ function TasksWorkspace() {
       connectedOnce.current = true;
       return;
     }
-    if (event.type === 'subagent.status') {
+    if (event.type === 'subagent.status' || event.type === 'subagent.approval_pending' || event.type === 'subagent.approval_resolved') {
       const childTaskId = subagentChildTaskId(event);
       if (childTaskId) hideSubagentTask(childTaskId);
       if (event.taskId === taskId) setDetailVersion((value) => value + 1);
@@ -57,6 +58,8 @@ function TasksWorkspace() {
     }
     if (event.taskId === taskId) {
       setLiveEvents((current) => current.some((item) => item.id === event.id) ? current : [...current, event]);
+    } else if (taskId && hiddenSubagentTaskIds.current.has(event.taskId)) {
+      setDetailVersion((value) => value + 1);
     }
   }, [hideSubagentTask, reloadTasks, setTasks, taskId]);
   const realtime = useRealtime(handleRealtime);
@@ -109,10 +112,22 @@ function ConversationRow({ task, selected, unread }: { task: Task; selected: boo
 }
 
 function TaskConversationDetail({ taskId, refreshVersion, realtime, liveEvents, onSubagentTask }: { taskId: string; refreshVersion: number; realtime: string; liveEvents: TimelineEvent[]; onSubagentTask: (taskId: string) => void }) {
-  const result = useLoad(() => api.task(taskId), [taskId, refreshVersion]);
+  const result = useLoad(() => api.task(taskId), [taskId]);
+  useEffect(() => {
+    if (refreshVersion > 0) void result.refresh();
+  }, [refreshVersion, result.refresh]);
   useEffect(() => {
     if (result.data?.task.isSubagent) onSubagentTask(result.data.task.id);
-  }, [onSubagentTask, result.data?.task.id, result.data?.task.isSubagent]);
+    for (const subagent of result.data?.subagents ?? []) {
+      if (subagent.taskId) onSubagentTask(subagent.taskId);
+    }
+  }, [onSubagentTask, result.data?.subagents, result.data?.task.id, result.data?.task.isSubagent]);
+  const approvalPolling = result.data?.executionMode === 'approval' && (result.data.task.status === 'running' || (result.data.subagents ?? []).some((subagent) => subagent.status === 'pending' || subagent.status === 'running'));
+  useEffect(() => {
+    if (!approvalPolling) return;
+    const timer = window.setInterval(() => void result.refresh(), 1500);
+    return () => window.clearInterval(timer);
+  }, [approvalPolling, result.refresh]);
   if (result.loading) return <Loading label="Loading task" />;
   if (result.error || !result.data) return <ErrorState message={result.error} retry={() => void result.reload()} />;
   const detail = mergeLiveDetail(result.data, liveEvents);
@@ -157,15 +172,17 @@ function TaskDetailContent({ detail, realtime, onTaskChanged }: { detail: TaskDe
   return <div className="task-detail-shell">
     <header className="task-detail-topbar"><div><h1>{conversationName(task)}</h1><p>{turns.length} agent turns · generation {task.generation ?? 1} · {realtime === 'online' ? 'realtime' : realtime} · updated {formatTime(task.updatedAtUtc)}</p></div><StatusBadge state={task.status} /></header>
     <div className="task-detail-body">
-      <main ref={chatRef} className="task-chat-column" onScroll={updateChatScrollPosition}><h2 className="sr-only">Activity timeline</h2><section className="task-bubble-timeline turn-timeline" aria-label="Conversation activity">
-        {turns.length ? turns.map((turn) => <TaskTurnBubble turn={turn} now={turnNow} agentLabel={chatGpt ? 'ChatGPT' : 'Codex Agent'} subagents={(detail.subagents ?? []).filter((agent) => agent.parentTurnId === turn.id)} key={turn.id} />) : <Empty title="Chưa có hoạt động" body="Agent chưa ghi nhận nội dung cho task này." />}
+      <main ref={chatRef} className="task-chat-column" onScroll={updateChatScrollPosition}><h2 className="sr-only">Activity timeline</h2>
+        <SubagentApprovalQueue approvals={detail.subagentApprovals ?? []} onResolved={(activityId) => onTaskChanged({ ...detail, subagentApprovals: (detail.subagentApprovals ?? []).filter((item) => item.activityId !== activityId) })} />
+        <section className="task-bubble-timeline turn-timeline" aria-label="Conversation activity">
+        {turns.length ? turns.map((turn) => <TaskTurnBubble turn={turn} now={turnNow} taskId={task.id} agentLabel={chatGpt ? 'ChatGPT' : 'Codex Agent'} subagents={(detail.subagents ?? []).filter((agent) => agent.parentTurnId === turn.id)} key={turn.id} />) : <Empty title="Chưa có hoạt động" body="Agent chưa ghi nhận nội dung cho task này." />}
       </section>{chatGpt && <ChatGptTaskComposer taskId={task.id} />}</main>
       <aside className="task-detail-sidebar" aria-label="Task information">
         <header className="task-info-header"><span className={`task-info-state ${task.status}`}>{task.status === 'running' ? <LoaderCircle className="spin" /> : task.status === 'failed' ? <CircleAlert /> : <CheckCircle2 />}</span><div><h2>{conversationName(task)}</h2><p><code>#{task.id}</code> · {task.status} · {turns.length} lượt agent</p></div></header>
         <div className="task-info-duration"><Clock3 /><span>{formatTime(startedAt)} → {formatTime(task.updatedAtUtc)}</span></div>
         <section className="task-info-section"><strong>Terminal / Task</strong><div className="task-info-generation"><TerminalSquare /><div><code>Generation {task.generation ?? 1}</code><small>{task.activeSessionId ? `#${task.activeSessionId}` : 'No active terminal'}</small></div></div></section>
         {chatGpt && <ChatGptTaskCard taskId={task.id} />}
-        <TaskAccessCard taskId={task.id} defaultMode={detail.executionMode ?? 'allowAll'} />
+        <TaskAccessCard taskId={detail.executionModeSourceTaskId ?? task.id} defaultMode={detail.executionMode ?? 'allowAll'} />
         {!chatGpt && <TaskConversationStopCard taskId={task.id} taskStatus={task.status} onStopped={onTaskChanged} />}
       </aside>
     </div>

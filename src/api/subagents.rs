@@ -63,6 +63,70 @@ pub(super) async fn task_subagent_data(
     Ok((parent, runs))
 }
 
+pub(super) async fn pending_subagent_approvals(
+    state: &AppState,
+    parent_task_id: &str,
+) -> Result<Vec<Value>, Problem> {
+    let rows = sqlx::query(
+        "SELECT a.id AS activity_id,a.task_id AS child_task_id,a.request_json,a.created_at_ms,r.id AS subagent_id,r.parent_turn_id,r.name FROM approvals a JOIN subagent_runs r ON r.child_task_id=a.task_id WHERE r.parent_task_id=? AND a.state='pending' ORDER BY a.created_at_ms,a.id",
+    )
+    .bind(parent_task_id)
+    .fetch_all(state.repository.pool())
+    .await
+    .map_err(db_problem)?;
+    Ok(rows
+        .iter()
+        .map(|row| {
+            let request = serde_json::from_str::<Value>(&row.get::<String, _>("request_json"))
+                .unwrap_or(Value::Null);
+            json!({
+                "activityId": row.get::<String, _>("activity_id"),
+                "childTaskId": row.get::<String, _>("child_task_id"),
+                "subagentId": row.get::<String, _>("subagent_id"),
+                "agentName": row.get::<String, _>("name"),
+                "parentTurnId": row.get::<String, _>("parent_turn_id"),
+                "childTurnId": request.get("turnId").cloned().unwrap_or(Value::Null),
+                "tool": request.get("tool").cloned().unwrap_or(Value::Null),
+                "input": request.get("input").cloned().unwrap_or(Value::Null),
+                "createdAtUtc": iso_ms(row.get::<i64, _>("created_at_ms"))
+            })
+        })
+        .collect())
+}
+
+pub(super) async fn publish_subagent_approval_resolved(
+    state: &AppState,
+    child_task_id: &str,
+    activity_id: &str,
+    decision: &str,
+) -> Result<(), Problem> {
+    let row = sqlx::query(
+        "SELECT id,parent_task_id,parent_turn_id,name FROM subagent_runs WHERE child_task_id=? LIMIT 1",
+    )
+    .bind(child_task_id)
+    .fetch_optional(state.repository.pool())
+    .await
+    .map_err(db_problem)?;
+    let Some(row) = row else {
+        return Ok(());
+    };
+    let mut event = AppEvent::new(
+        "subagent.approval_resolved",
+        json!({
+            "subagentId": row.get::<String, _>("id"),
+            "childTaskId": child_task_id,
+            "activityId": activity_id,
+            "agentName": row.get::<String, _>("name"),
+            "decision": decision,
+        }),
+    );
+    event.task_id = Some(row.get::<String, _>("parent_task_id"));
+    event.session_id = Some(child_task_id.to_owned());
+    event.turn_id = Some(row.get::<String, _>("parent_turn_id"));
+    state.publish(event);
+    Ok(())
+}
+
 async fn ensure_reserved_subagent_tasks(
     state: &AppState,
     parent_task_id: &str,

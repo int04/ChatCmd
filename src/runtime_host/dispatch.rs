@@ -311,8 +311,7 @@ impl RuntimeHost {
                 value(self.skills.read(&input.skill_id).await?)
             }
             "task_get" => {
-                let input: TaskInput = parse(arguments)?;
-                let id = TaskId::new(input.task_id).map_err(|error| invalid("taskId", error))?;
+                let id = context_task_id(&context)?;
                 Ok(self
                     .repository
                     .task(&id)
@@ -331,7 +330,7 @@ impl RuntimeHost {
             )),
             "task_set_execution_mode" => {
                 let input: ExecutionModeInput = parse(arguments)?;
-                let id = TaskId::new(input.task_id).map_err(|error| invalid("taskId", error))?;
+                let id = context_task_id(&context)?;
                 let mode = match input.mode.as_str() {
                     "approval" => ExecutionMode::Approval,
                     "allow" | "safe" | "unrestricted" => ExecutionMode::Allow,
@@ -348,8 +347,8 @@ impl RuntimeHost {
                     .map_err(storage_error)?;
                 Ok(json!({ "mode": mode.as_str() }))
             }
-            "task_artifact_list" => self.list_artifacts(arguments).await,
-            "task_artifact_read" => self.read_artifact(arguments).await,
+            "task_artifact_list" => self.list_artifacts(&context).await,
+            "task_artifact_read" => self.read_artifact(&context, arguments).await,
             "agent_user_message" => {
                 let input: UserMessageInput = parse(arguments)?;
                 self.save_user_message(&context, &input.content).await
@@ -388,12 +387,12 @@ impl RuntimeHost {
         }
     }
 
-    async fn list_artifacts(&self, arguments: Value) -> RuntimeResult<Value> {
+    async fn list_artifacts(&self, context: &OperationContext) -> RuntimeResult<Value> {
         use sqlx::Row as _;
 
-        let input: TaskInput = parse(arguments)?;
+        let task_id = context_task_id(context)?;
         let rows = sqlx::query("SELECT id,relative_path,media_type,size_bytes,created_at_ms FROM artifact_registry WHERE task_id=? ORDER BY created_at_ms,id")
-            .bind(input.task_id)
+            .bind(task_id.as_str())
             .fetch_all(self.repository.pool())
             .await
             .map_err(|_| RuntimeError::new("storage_error", "artifact list unavailable"))?;
@@ -412,7 +411,12 @@ impl RuntimeHost {
         ))
     }
 
-    async fn read_artifact(&self, arguments: Value) -> RuntimeResult<Value> {
+    async fn read_artifact(
+        &self,
+        context: &OperationContext,
+        arguments: Value,
+    ) -> RuntimeResult<Value> {
+        let task_id = context_task_id(context)?;
         let input: ArtifactInput = parse(arguments)?;
         let id =
             ArtifactId::new(input.artifact_id).map_err(|error| invalid("artifactId", error))?;
@@ -421,7 +425,7 @@ impl RuntimeHost {
             .artifact(&id)
             .await
             .map_err(storage_error)?
-            .filter(|artifact| artifact.task_id.as_str() == input.task_id)
+            .filter(|artifact| artifact.task_id.as_str() == task_id.as_str())
             .ok_or_else(|| RuntimeError::new("artifact_not_found", "artifact was not found"))?;
         let path = self
             .workspace
@@ -443,4 +447,9 @@ impl RuntimeHost {
             "content": read.content, "truncated": read.truncated
         }))
     }
+}
+
+fn context_task_id(context: &OperationContext) -> RuntimeResult<TaskId> {
+    TaskId::new(context.task_id.as_deref().unwrap_or_default())
+        .map_err(|error| invalid("taskId", error))
 }

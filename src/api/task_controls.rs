@@ -163,6 +163,7 @@ pub(super) async fn resolve_task_approval(
             "This approval request was resolved by another action.",
         ));
     }
+    publish_subagent_approval_resolved(&state, &task_id, &activity_id, &request.decision).await?;
     Ok(Json(
         json!({ "accepted": true, "decision": request.decision }),
     ))

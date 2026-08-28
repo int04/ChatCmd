@@ -1,10 +1,10 @@
-import { Ban, BookOpen, Bot, Check, CheckCheck, CheckCircle2, ChevronDown, CircleAlert, CircleStop, Clock3, ExternalLink, FileCode2, FilePenLine, GitBranch, LoaderCircle, MessageSquareText, Search, TerminalSquare, Wrench } from 'lucide-react';
+import { BookOpen, Bot, CheckCircle2, ChevronDown, CircleAlert, CircleStop, Clock3, ExternalLink, FileCode2, FilePenLine, GitBranch, LoaderCircle, MessageSquareText, Search, TerminalSquare, Wrench } from 'lucide-react';
 import { lazy, Suspense, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
-import { api } from '../api';
 import type { SubagentRun, TaskTurn, TimelineEvent } from '../types';
+import { ApprovalDecisionActions } from './ApprovalDecisionActions';
 import { StopActivityDialog } from './StopActivityDialog';
 import {
   activityCodeView,
@@ -25,7 +25,7 @@ import {
 
 const TaskCodeViewer = lazy(async () => ({ default: (await import('../TaskCodeViewer')).TaskCodeViewer }));
 
-export function TaskTurnBubble({ turn, now, subagents = [], agentLabel = 'Codex Agent' }: { turn: TaskTurn; now: string; subagents?: SubagentRun[]; agentLabel?: string }) {
+export function TaskTurnBubble({ turn, now, taskId, subagents = [], agentLabel = 'Codex Agent' }: { turn: TaskTurn; now: string; taskId: string; subagents?: SubagentRun[]; agentLabel?: string }) {
   const events = turn.events ?? [];
   const response = findFinalResponse(events);
   const userMessage = findUserMessage(events);
@@ -39,7 +39,6 @@ export function TaskTurnBubble({ turn, now, subagents = [], agentLabel = 'Codex 
   const stateLabel = status === 'running' ? 'Đang xử lý…' : status === 'failed' ? 'Thất bại' : status === 'incomplete' ? 'Chưa hoàn tất' : 'Đã hoàn tất';
   const isThinking = status === 'running' && !response && !activities.some((activity) => activity.status === 'started' || activity.status === 'pending_approval');
   const headingId = `turn-${turn.id}`;
-  const taskId = events.find((event) => event.taskId)?.taskId ?? '';
   const [stopTarget, setStopTarget] = useState<ToolActivity | null>(null);
 
   return <div className="turn-item">
@@ -142,28 +141,6 @@ function ActivityRow({ activity, now, taskId, onStop }: { activity: ToolActivity
         : <pre tabIndex={0} aria-label={`Output của ${command}`}><code>{output || (approvalPending ? 'Đang chờ bạn phê duyệt…' : running ? 'Đang chờ output…' : 'Lệnh không có output.')}</code></pre>}</div>
     </details>
     {stoppable && <button type="button" className="activity-stop-button" aria-label={`Dừng ${activityLabel(activity)}`} onClick={(event) => { event.preventDefault(); event.stopPropagation(); onStop(activity); }}><CircleStop aria-hidden="true" /><span>Dừng</span></button>}
-    {approvalPending && taskId && <ApprovalActions taskId={taskId} activity={activity} />}
-  </div>;
-}
-
-function ApprovalActions({ taskId, activity }: { taskId: string; activity: ToolActivity }) {
-  const [busy, setBusy] = useState<'allow' | 'allowSimilar' | 'reject' | null>(null);
-  const [error, setError] = useState('');
-  const resolve = async (decision: 'allow' | 'allowSimilar' | 'reject') => {
-    if (busy) return;
-    setBusy(decision);
-    setError('');
-    try {
-      await api.resolveTaskApproval(taskId, activity.id, { turnId: activity.turnId, decision });
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Không thể gửi quyết định phê duyệt.');
-      setBusy(null);
-    }
-  };
-  return <div className="approval-actions" role="group" aria-label="Quyết định quyền chạy lệnh">
-    <button type="button" className="approval-allow" disabled={Boolean(busy)} onClick={() => void resolve('allow')}>{busy === 'allow' ? <LoaderCircle className="spin" /> : <Check />}Cho phép</button>
-    <button type="button" className="approval-similar" disabled={Boolean(busy)} onClick={() => void resolve('allowSimilar')}>{busy === 'allowSimilar' ? <LoaderCircle className="spin" /> : <CheckCheck />}Cho phép tương tự</button>
-    <button type="button" className="approval-reject" disabled={Boolean(busy)} onClick={() => void resolve('reject')}>{busy === 'reject' ? <LoaderCircle className="spin" /> : <Ban />}Từ chối</button>
-    {error && <p role="alert"><CircleAlert />{error}</p>}
+    {approvalPending && taskId && <ApprovalDecisionActions target={{ taskId, activityId: activity.id, turnId: activity.turnId }} />}
   </div>;
 }

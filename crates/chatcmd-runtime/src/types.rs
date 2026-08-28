@@ -245,8 +245,11 @@ const fn default_true() -> bool {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ShellSignal {
+    #[serde(alias = "SIGINT", alias = "sigint")]
     CtrlC,
+    #[serde(alias = "SIGBREAK", alias = "sigbreak")]
     CtrlBreak,
+    #[serde(alias = "EOF", alias = "eof")]
     Eof,
 }
 
