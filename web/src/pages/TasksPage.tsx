@@ -1,6 +1,6 @@
-import { CheckCircle2, CircleAlert, Clock3, LoaderCircle, MessageSquareText, Plus, Search, TerminalSquare } from 'lucide-react';
+import { CheckCircle2, CircleAlert, Clock3, LoaderCircle, MessageSquareText, TerminalSquare } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 
 import { api } from '../api';
 import { ChatGptTaskCard, ChatGptTaskComposer, NewChatGptConversation } from '../chatgpt/ChatGptConversation';
@@ -10,38 +10,28 @@ import { TaskAccessCard } from '../tasks/TaskAccessCard';
 import { TaskConversationStopCard } from '../tasks/TaskConversationStopCard';
 import { SubagentApprovalQueue } from '../tasks/SubagentApprovalQueue';
 import { TaskTurnBubble } from '../tasks/TaskTurnBubble';
-import { buildTaskTurns, mergeLiveDetail, upsertTaskEvent } from '../tasks/taskTimeline';
+import { buildTaskTurns, mergeLiveDetail } from '../tasks/taskTimeline';
 import type { Task, TaskDetail, TimelineEvent } from '../types';
 import { useLoad } from '../useLoad';
-
-const READ_FINAL_COUNTS_KEY = 'chatcmd.tasks.readFinalCounts.v1';
 
 export function TasksPage() { return <TasksWorkspace />; }
 
 function TasksWorkspace() {
   const { taskId } = useParams();
-  const result = useLoad(api.tasks, []);
-  const [query, setQuery] = useState('');
-  const { reload: reloadTasks, setData: setTasks } = result;
   const [detailVersion, setDetailVersion] = useState(0);
   const [liveEvents, setLiveEvents] = useState<TimelineEvent[]>([]);
-  const [readFinalCounts, setReadFinalCounts] = useState<Record<string, number>>(readStoredFinalCounts);
   const connectedOnce = useRef(false);
   const hiddenSubagentTaskIds = useRef(new Set<string>());
-  const visibleTaskIds = useRef(new Set<string>());
-  const hadStoredReadCounts = useRef(typeof localStorage !== 'undefined' && localStorage.getItem(READ_FINAL_COUNTS_KEY) !== null);
 
   useEffect(() => setLiveEvents([]), [taskId]);
-  useEffect(() => { visibleTaskIds.current = new Set((result.data ?? []).map((task) => task.id)); }, [result.data]);
 
   const hideSubagentTask = useCallback((childTaskId: string) => {
     hiddenSubagentTaskIds.current.add(childTaskId);
-    setTasks((current) => current?.filter((task) => task.id !== childTaskId));
-  }, [setTasks]);
+  }, []);
 
   const handleRealtime = useCallback((event: TimelineEvent) => {
     if (event.type === 'system.connected') {
-      if (connectedOnce.current) { void reloadTasks(); setDetailVersion((value) => value + 1); }
+      if (connectedOnce.current) setDetailVersion((value) => value + 1);
       connectedOnce.current = true;
       return;
     }
@@ -52,63 +42,19 @@ function TasksWorkspace() {
       return;
     }
     if (!event.taskId) return;
-    if (!hiddenSubagentTaskIds.current.has(event.taskId)) {
-      if (visibleTaskIds.current.has(event.taskId)) setTasks((current) => upsertTaskEvent(current, event));
-      else void reloadTasks();
-    }
     if (event.taskId === taskId) {
       setLiveEvents((current) => current.some((item) => item.id === event.id) ? current : [...current, event]);
     } else if (taskId && hiddenSubagentTaskIds.current.has(event.taskId)) {
       setDetailVersion((value) => value + 1);
     }
-  }, [hideSubagentTask, reloadTasks, setTasks, taskId]);
+  }, [hideSubagentTask, taskId]);
   const realtime = useRealtime(handleRealtime);
 
-  useEffect(() => {
-    const next = result.data;
-    if (!next || hadStoredReadCounts.current) return;
-    hadStoredReadCounts.current = true;
-    setReadFinalCounts(Object.fromEntries(next.map((task) => [task.id, task.finalResponseCount ?? 0])));
-  }, [result.data]);
-
-  useEffect(() => {
-    try { localStorage.setItem(READ_FINAL_COUNTS_KEY, JSON.stringify(readFinalCounts)); } catch { /* storage can be unavailable */ }
-  }, [readFinalCounts]);
-
-  useEffect(() => {
-    if (!taskId || !result.data) return;
-    const task = result.data.find((item) => item.id === taskId);
-    if (!task) return;
-    const count = task.finalResponseCount ?? 0;
-    setReadFinalCounts((current) => (current[taskId] ?? 0) >= count ? current : { ...current, [taskId]: count });
-  }, [result.data, taskId]);
-
-  const tasks = useMemo(() => [...(result.data ?? [])]
-    .sort((a, b) => Date.parse(b.updatedAtUtc) - Date.parse(a.updatedAtUtc))
-    .filter((task) => `${conversationName(task)} ${task.id} ${task.outputPreview ?? ''}`.toLowerCase().includes(query.toLowerCase())), [query, result.data]);
-
   return <div className="tasks-workspace">
-    <aside className="tasks-conversation-pane" aria-label="Công việc gần đây">
-      <header className="tasks-conversation-header"><div><span className="eyebrow">TASKS</span><h1>Công việc gần đây</h1></div><div className="tasks-header-actions"><small>{tasks.length}</small><Link className="tasks-new-message" to="/tasks/new"><Plus /><span>Tin nhắn mới</span></Link></div></header>
-      <label className="tasks-conversation-search"><Search /><span className="sr-only">Tìm công việc</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Tìm công việc" /></label>
-      <div className="tasks-conversation-list">
-        {result.loading ? <Loading label="Loading tasks" /> : result.error ? <ErrorState message={result.error} retry={() => void result.reload()} /> : !tasks.length ? <Empty title="Chưa có công việc" body="Task từ Agent sẽ xuất hiện tại đây." /> : tasks.map((task) => <ConversationRow task={task} selected={task.id === taskId} unread={Math.max(0, (task.finalResponseCount ?? 0) - (readFinalCounts[task.id] ?? 0))} key={task.id} />)}
-      </div>
-    </aside>
     <section className="tasks-detail-pane" aria-label="Nội dung công việc">
       {taskId === 'new' ? <NewChatGptConversation /> : taskId ? <TaskConversationDetail taskId={taskId} refreshVersion={detailVersion} realtime={realtime} liveEvents={liveEvents} onSubagentTask={hideSubagentTask} /> : <div className="tasks-select-empty"><MessageSquareText /><strong>Chọn một cuộc trò chuyện</strong><span>Nội dung xử lý của Agent, tool và kết luận sẽ hiển thị tại đây.</span></div>}
     </section>
   </div>;
-}
-
-function ConversationRow({ task, selected, unread }: { task: Task; selected: boolean; unread: number }) {
-  const running = task.status === 'running';
-  return <Link className={`tasks-conversation-row ${selected ? 'selected' : ''}`} aria-current={selected ? 'page' : undefined} to={`/tasks/${encodeURIComponent(task.id)}`}>
-    <span className={`tasks-conversation-icon ${running ? 'running' : ''}`}>{running ? <LoaderCircle className="spin" /> : <TerminalSquare />}</span>
-    <span className="tasks-conversation-copy"><strong>{conversationName(task)}</strong><small>{task.outputPreview || `${task.turnCount ?? 0} lượt Agent · ${task.status}`}</small></span>
-    {unread > 0 && <span className="task-unread-badge" aria-label={`${unread} phản hồi mới chưa đọc`}>{unread > 99 ? '99+' : unread}</span>}
-    <span className="tasks-conversation-tail"><time>{formatTime(task.updatedAtUtc)}</time>{running ? <LoaderCircle className="spin" /> : <i className={`conversation-state ${task.status}`} />}</span>
-  </Link>;
 }
 
 function TaskConversationDetail({ taskId, refreshVersion, realtime, liveEvents, onSubagentTask }: { taskId: string; refreshVersion: number; realtime: string; liveEvents: TimelineEvent[]; onSubagentTask: (taskId: string) => void }) {
@@ -187,13 +133,6 @@ function TaskDetailContent({ detail, realtime, onTaskChanged }: { detail: TaskDe
       </aside>
     </div>
   </div>;
-}
-
-function readStoredFinalCounts(): Record<string, number> {
-  try {
-    const value = JSON.parse(localStorage.getItem(READ_FINAL_COUNTS_KEY) ?? '{}') as Record<string, unknown>;
-    return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, number] => typeof entry[1] === 'number' && Number.isFinite(entry[1]) && entry[1] >= 0));
-  } catch { return {}; }
 }
 
 function subagentChildTaskId(event: TimelineEvent) {
