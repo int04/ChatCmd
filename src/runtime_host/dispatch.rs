@@ -13,6 +13,27 @@ use super::inputs::*;
 use super::{RuntimeHost, invalid, now_ms, parse, storage_error, task_json, value};
 
 impl RuntimeHost {
+    async fn resolve_git_cwd(
+        &self,
+        context: &OperationContext,
+        explicit: Option<std::path::PathBuf>,
+    ) -> RuntimeResult<std::path::PathBuf> {
+        if let Some(cwd) = explicit {
+            return Ok(cwd);
+        }
+        if let Some(project_folder) =
+            <Self as chatcmd_mcp::RuntimeApi>::project_folder(self, &context.agent_id).await?
+        {
+            return Ok(project_folder.into());
+        }
+        self.workspace.roots().first().cloned().ok_or_else(|| {
+            RuntimeError::new(
+                "workspace_not_configured",
+                "git cwd was omitted and no project folder or workspace root is configured",
+            )
+        })
+    }
+
     pub(super) async fn authorize_tool(&self, agent_id: &str, tool: &str) -> RuntimeResult<()> {
         use chatcmd_core::{McpAgentStore as _, ToolCatalogStore as _};
 
@@ -255,43 +276,45 @@ impl RuntimeHost {
             }
             "git_status" => {
                 let input: CwdInput = parse(arguments)?;
-                value(self.git.status(&input.cwd).await?)
+                let cwd = self.resolve_git_cwd(&context, input.cwd).await?;
+                value(self.git.status(&cwd).await?)
             }
             "git_diff" => {
                 let input: GitDiff = parse(arguments)?;
+                let cwd = self.resolve_git_cwd(&context, input.cwd).await?;
                 value(
                     self.git
-                        .diff(&input.cwd, input.staged, input.stat, input.path.as_deref())
+                        .diff(&cwd, input.staged, input.stat, input.path.as_deref())
                         .await?,
                 )
             }
             "git_log" => {
                 let input: GitLog = parse(arguments)?;
+                let cwd = self.resolve_git_cwd(&context, input.cwd).await?;
                 value(
                     self.git
-                        .log(&input.cwd, input.count, input.path.as_deref())
+                        .log(&cwd, input.count, input.path.as_deref())
                         .await?,
                 )
             }
             "git_branch" => {
                 let input: CwdInput = parse(arguments)?;
-                value(self.git.branch(&input.cwd).await?)
+                let cwd = self.resolve_git_cwd(&context, input.cwd).await?;
+                value(self.git.branch(&cwd).await?)
             }
             "git_show" => {
                 let input: GitShow = parse(arguments)?;
+                let cwd = self.resolve_git_cwd(&context, input.cwd).await?;
                 value(
                     self.git
-                        .show(&input.cwd, &input.revision, input.path.as_deref())
+                        .show(&cwd, &input.revision, input.path.as_deref())
                         .await?,
                 )
             }
             "git_commit" => {
                 let input: GitCommit = parse(arguments)?;
-                value(
-                    self.git
-                        .commit(&input.cwd, &input.message, input.all)
-                        .await?,
-                )
+                let cwd = self.resolve_git_cwd(&context, input.cwd).await?;
+                value(self.git.commit(&cwd, &input.message, input.all).await?)
             }
             "process_list" => value(self.process.list().await?),
             "process_inspect" => {

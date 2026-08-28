@@ -14,7 +14,7 @@ macro_rules! input {
 input!(DeviceGet { device_id: String });
 input!(SessionInput { session_id: String });
 input!(PathInput { path: PathBuf });
-input!(CwdInput { cwd: PathBuf });
+input!(CwdInput { cwd: Option<PathBuf> });
 input!(SkillInput { skill_id: String });
 input!(ProcessInput { process_id: u32 });
 input!(ArtifactInput {
@@ -38,13 +38,13 @@ input!(DeleteInput {
     recursive: bool
 });
 input!(GitShow {
-    cwd: PathBuf,
+    cwd: Option<PathBuf>,
     revision: String,
     #[serde(default)]
     path: Option<String>
 });
 input!(GitCommit {
-    cwd: PathBuf,
+    cwd: Option<PathBuf>,
     message: String,
     #[serde(default = "default_true")]
     all: bool
@@ -214,7 +214,7 @@ input!(WriteRawInput {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct GitDiff {
-    pub(super) cwd: PathBuf,
+    pub(super) cwd: Option<PathBuf>,
     #[serde(default)]
     pub(super) staged: bool,
     #[serde(default)]
@@ -226,7 +226,7 @@ pub(super) struct GitDiff {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct GitLog {
-    pub(super) cwd: PathBuf,
+    pub(super) cwd: Option<PathBuf>,
     #[serde(default = "default_git_count")]
     pub(super) count: usize,
     #[serde(default)]
@@ -239,7 +239,21 @@ const fn default_git_count() -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{GitCommit, GitDiff, ShellCreate, ShellRead, ShellSignalInput, ShellWrite};
+    use super::{
+        CwdInput, GitCommit, GitDiff, ShellCreate, ShellRead, ShellSignalInput, ShellWrite,
+    };
+
+    #[test]
+    fn git_cwd_can_be_omitted() {
+        let status: CwdInput =
+            serde_json::from_value(serde_json::json!({})).expect("git status input");
+        assert!(status.cwd.is_none());
+
+        let diff: GitDiff =
+            serde_json::from_value(serde_json::json!({"stat": true})).expect("git diff input");
+        assert!(diff.cwd.is_none());
+        assert!(diff.stat);
+    }
 
     #[test]
     fn git_diff_accepts_stat_flag() {

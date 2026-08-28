@@ -1,6 +1,8 @@
 mod activity_control;
 mod approval;
 mod dispatch;
+#[cfg(test)]
+mod git_tests;
 mod identity;
 mod inputs;
 mod persistence;
