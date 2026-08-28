@@ -1,5 +1,5 @@
 import { BookOpen, Bot, CheckCircle2, ChevronDown, CircleAlert, CircleStop, Clock3, ExternalLink, FileCode2, FilePenLine, GitBranch, LoaderCircle, MessageSquareText, Search, TerminalSquare, Wrench } from 'lucide-react';
-import { lazy, Suspense, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Modal } from '../components';
 import rehypeSanitize from 'rehype-sanitize';
@@ -26,7 +26,7 @@ import {
 
 const TaskCodeViewer = lazy(async () => ({ default: (await import('../TaskCodeViewer')).TaskCodeViewer }));
 
-export function TaskTurnBubble({ turn, now, taskId, subagents = [], agentLabel = 'Codex Agent' }: { turn: TaskTurn; now: string; taskId: string; subagents?: SubagentRun[]; agentLabel?: string }) {
+export function TaskTurnBubble({ turn, taskId, subagents = [], agentLabel = 'Codex Agent' }: { turn: TaskTurn; taskId: string; subagents?: SubagentRun[]; agentLabel?: string }) {
   const events = turn.events ?? [];
   const response = findFinalResponse(events);
   const userMessage = findUserMessage(events);
@@ -35,23 +35,24 @@ export function TaskTurnBubble({ turn, now, taskId, subagents = [], agentLabel =
   const blocks = buildProcessBlocks(processEvents);
   const activities = blocks.flatMap((block) => block.type === 'activities' ? block.activities : []);
   const status = turn.status ?? 'incomplete';
-  const startedAt = turn.startedAtUtc ?? events[0]?.occurredAt ?? now;
+  const startedAt = turn.startedAtUtc ?? events[0]?.occurredAt ?? new Date().toISOString();
   const finishedAt = turn.completedAtUtc ?? response?.event.occurredAt;
   const stateLabel = status === 'running' ? 'Đang xử lý…' : status === 'failed' ? 'Thất bại' : status === 'incomplete' ? 'Chưa hoàn tất' : 'Đã hoàn tất';
   const isThinking = status === 'running' && !response && !activities.some((activity) => activity.status === 'started' || activity.status === 'pending_approval');
   const headingId = `turn-${turn.id}`;
   const [stopTarget, setStopTarget] = useState<ToolActivity | null>(null);
 
+
   return <div className="turn-item">
     {userMessage && <article className="turn-user-message">
-      <header><strong>Bạn</strong><time dateTime={userMessage.event.occurredAt}>{formatClockTime(userMessage.event.occurredAt)}</time></header>
+      <header><strong>Bạn</strong><BubbleTime value={userMessage.event.occurredAt} /></header>
       <div className="turn-user-content"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>{visibleUserMessage}</ReactMarkdown></div>
     </article>}
     <div className={`turn-end-status ${status}`} role={status === 'running' ? 'status' : undefined}>
       {status === 'running'
-        ? <><LoaderCircle className="spin" /><span>Đang xử lý trong {duration(startedAt, now)}</span></>
+        ? <><LoaderCircle className="spin" /><span>Đang chạy trong <LiveDuration startedAt={startedAt} /></span></>
         : finishedAt
-          ? <><Clock3 /><span>{status === 'completed' ? `Hoàn thành lúc ${formatClockTime(finishedAt)} · ${duration(startedAt, finishedAt)}` : status === 'incomplete' ? `Không có tín hiệu mới từ ${formatClockTime(finishedAt)} · ${duration(startedAt, finishedAt)}` : `Kết thúc lúc ${formatClockTime(finishedAt)} · ${duration(startedAt, finishedAt)}`}</span></>
+          ? <><Clock3 /><span>{status === 'completed' ? <>Hoàn thành <BubbleTimePhrase value={finishedAt} /> · {duration(startedAt, finishedAt)}</> : status === 'incomplete' ? <>Không có tín hiệu mới từ <BubbleTimePhrase value={finishedAt} /> · {duration(startedAt, finishedAt)}</> : <>Kết thúc <BubbleTimePhrase value={finishedAt} /> · {duration(startedAt, finishedAt)}</>}</span></>
           : null}
     </div>
     <div className="turn-item-divider" aria-hidden="true" />
@@ -59,10 +60,10 @@ export function TaskTurnBubble({ turn, now, taskId, subagents = [], agentLabel =
       <header className="turn-header">
         <span className="turn-avatar" aria-hidden="true">{status === 'running' ? <LoaderCircle className="spin" /> : status === 'failed' || status === 'incomplete' ? <CircleAlert /> : <CheckCircle2 />}</span>
         <div><h3 id={headingId}>{agentLabel}</h3><p>{status === 'running' ? `${activities.length.toLocaleString('vi')} hoạt động` : <><span>{stateLabel}</span> · {activities.length.toLocaleString('vi')} hoạt động</>}</p></div>
-        <time dateTime={startedAt} aria-hidden="true">{status === 'running' ? duration(startedAt, now) : formatClockTime(startedAt)}</time>
+        {status === 'running' ? <time dateTime={startedAt} aria-hidden="true"><LiveDuration startedAt={startedAt} /></time> : <BubbleTime value={startedAt} ariaHidden />}
       </header>
       {subagents.length > 0 && <SubagentList agents={subagents} />}
-      {(activities.length > 0 || blocks.some((block) => block.type === 'progress')) && <TurnProcess blocks={blocks} now={now} taskId={taskId} onStop={setStopTarget} />}
+      {(activities.length > 0 || blocks.some((block) => block.type === 'progress')) && <TurnProcess blocks={blocks} taskId={taskId} onStop={setStopTarget} />}
       {isThinking && <div className="turn-thinking" role="status"><span>Đang suy nghĩ và chuẩn bị phản hồi…</span></div>}
       {status === 'failed' && (agentLabel === 'ChatGPT' && latestMessage(events).includes('Nút gửi ChatGPT đang bị vô hiệu hóa.') ? <div className="turn-warning" role="status"><CircleAlert /><div><strong>Đang chờ gửi lại</strong><p>Nút gửi ChatGPT đang tạm bị vô hiệu hóa. Hệ thống sẽ tự thử lại sau 10 giây; bạn có thể hủy gửi tại ô nhập bên dưới.</p></div></div> : <div className="turn-error" role="alert"><CircleAlert /><div><strong>Lượt agent thất bại</strong><p>{latestMessage(events) || 'Agent không thể hoàn tất lượt này. Xem hoạt động phía trên để kiểm tra nguyên nhân.'}</p></div></div>)}
       {status === 'incomplete' && <div className="turn-warning" role="status"><CircleAlert /><div><strong>Có thể lượt đã bị gián đoạn</strong><p>{latestMessage(events) || 'Không nhận được hoạt động mới hoặc tín hiệu hoàn tất trong một thời gian dài. Có thể lượt bị gián đoạn hoặc tín hiệu đến muộn; trạng thái sẽ tự phục hồi khi có dữ liệu mới.'}</p></div></div>}
@@ -97,7 +98,7 @@ function SubagentItem({ agent }: { agent: SubagentRun }) {
     : <div className={`turn-subagent ${agent.status}`} aria-label={`${agent.name} - ${statusLabel}`}>{content}</div>;
 }
 
-function TurnProcess({ blocks, now, taskId, onStop }: { blocks: ReturnType<typeof buildProcessBlocks>; now: string; taskId: string; onStop: (activity: ToolActivity) => void }) {
+function TurnProcess({ blocks, taskId, onStop }: { blocks: ReturnType<typeof buildProcessBlocks>; taskId: string; onStop: (activity: ToolActivity) => void }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const nearBottomRef = useRef(true);
   const last = blocks.at(-1);
@@ -116,7 +117,7 @@ function TurnProcess({ blocks, now, taskId, onStop }: { blocks: ReturnType<typeo
   return <div ref={scrollRef} className="turn-activities turn-process" role="region" tabIndex={0} aria-label="Tiến trình của agent" onScroll={updateScrollPosition}>
     {blocks.map((block) => block.type === 'progress'
       ? <ProgressMessage event={block.event} key={block.key} />
-      : <section className="turn-activity-batch" key={block.key} aria-label={summarizeActivities(block.activities)}><div className="turn-activity-summary" role="status"><Wrench aria-hidden="true" /><p>{summarizeActivities(block.activities)}</p></div><div className="turn-activity-rows">{block.activities.map((activity) => <ActivityRow activity={activity} now={now} taskId={taskId} onStop={onStop} key={activity.id} />)}</div></section>)}
+      : <section className="turn-activity-batch" key={block.key} aria-label={summarizeActivities(block.activities)}><div className="turn-activity-summary" role="status"><Wrench aria-hidden="true" /><p>{summarizeActivities(block.activities)}</p></div><div className="turn-activity-rows">{block.activities.map((activity) => <ActivityRow activity={activity} taskId={taskId} onStop={onStop} key={activity.id} />)}</div></section>)}
   </div>;
 }
 
@@ -124,8 +125,19 @@ function ProgressMessage({ event }: { event: TimelineEvent }) {
   return <div className="turn-progress-message"><MessageSquareText aria-hidden="true" /><p>{eventText(event)}</p><time dateTime={event.occurredAt}>{formatClockTime(event.occurredAt)}</time></div>;
 }
 
-function ActivityRow({ activity, now, taskId, onStop }: { activity: ToolActivity; now: string; taskId: string; onStop: (activity: ToolActivity) => void }) {
+function ActivityRow({ activity, taskId, onStop }: { activity: ToolActivity; taskId: string; onStop: (activity: ToolActivity) => void }) {
   const [open, setOpen] = useState(false);
+  const [recentlyViewed, setRecentlyViewed] = useState(false);
+  useEffect(() => {
+    if (!recentlyViewed) return;
+    const timer = window.setTimeout(() => setRecentlyViewed(false), 3000);
+    return () => window.clearTimeout(timer);
+  }, [recentlyViewed]);
+  const closePopup = () => {
+    setOpen(false);
+    setRecentlyViewed(false);
+    window.requestAnimationFrame(() => setRecentlyViewed(true));
+  };
   const approvalPending = activity.status === 'pending_approval';
   const stopRequested = activity.status === 'stop_requested';
   const stopped = activity.status === 'stopped';
@@ -136,16 +148,16 @@ function ActivityRow({ activity, now, taskId, onStop }: { activity: ToolActivity
   const command = activityCommand(activity);
   const output = activityOutput(activity);
   const codeView = activityCodeView(activity);
-  return <div className={`terminal-activity ${running ? 'running' : ''} ${stopRequested ? 'stopping' : ''} ${stopped ? 'stopped' : ''} ${failed ? 'failed' : ''}`}>
+  return <div className={`terminal-activity ${running ? 'running' : ''} ${stopRequested ? 'stopping' : ''} ${stopped ? 'stopped' : ''} ${failed ? 'failed' : ''} ${recentlyViewed ? 'recently-viewed' : ''}`}>
     <button type="button" className="activity-popup-trigger" onClick={() => setOpen(true)} aria-haspopup="dialog">
       <span className="activity-row-icon" aria-hidden="true">{running ? <LoaderCircle className="spin" /> : <Icon />}</span>
       <span className="activity-label">{activityLabel(activity)}</span>
-      <span className="activity-timing"><time dateTime={activity.startedAt}>{formatClockTime(activity.startedAt)}</time><span aria-label={`Thời gian thực thi ${activityDuration(activity.startedAt, activity.finishedAt ?? now)}`}>· {activityDuration(activity.startedAt, activity.finishedAt ?? now)}</span></span>
+      <span className="activity-timing"><BubbleTime value={activity.startedAt} /><span aria-label="Thời gian thực thi">· {running ? <LiveActivityDuration startedAt={activity.startedAt} /> : activityDuration(activity.startedAt, activity.finishedAt ?? activity.startedAt)}</span></span>
       <ChevronDown className="activity-chevron" aria-hidden="true" />
     </button>
     {stoppable && <button type="button" className="activity-stop-button" aria-label={`Dừng ${activityLabel(activity)}`} onClick={(event) => { event.preventDefault(); event.stopPropagation(); onStop(activity); }}><CircleStop aria-hidden="true" /><span>Dừng</span></button>}
     {approvalPending && taskId && <ApprovalDecisionActions target={{ taskId, activityId: activity.id, turnId: activity.turnId }} />}
-    {open && <Modal title={activityLabel(activity)} description={`${formatClockTime(activity.startedAt)} · ${activityDuration(activity.startedAt, activity.finishedAt ?? now)}`} close={() => setOpen(false)}>
+    {open && <Modal title={activityLabel(activity)} description={`${formatClockTime(activity.startedAt)} · ${activityDuration(activity.startedAt, activity.finishedAt ?? new Date().toISOString())}`} close={closePopup}>
       <div className="activity-popup-content">
         <div className="activity-command"><FileCode2 /><code>{command}</code></div>
         {codeView
@@ -154,4 +166,102 @@ function ActivityRow({ activity, now, taskId, onStop }: { activity: ToolActivity
       </div>
     </Modal>}
   </div>;
+}
+
+function BubbleTime({ value, ariaHidden = false }: { value: string; ariaHidden?: boolean }) {
+  const nowMs = useAdaptiveNow(value);
+  return <time dateTime={value} title={bubbleTimeHint(value)} aria-hidden={ariaHidden || undefined}>{bubbleTimeLabel(value, nowMs)}</time>;
+}
+
+function BubbleTimePhrase({ value }: { value: string }) {
+  const nowMs = useAdaptiveNow(value);
+  const timestamp = Date.parse(value);
+  const elapsedSeconds = Number.isFinite(timestamp) ? Math.max(0, Math.floor((nowMs - timestamp) / 1000)) : 0;
+  return <>{elapsedSeconds >= 3600 ? <>lúc <time dateTime={value} title={bubbleTimeHint(value)}>{bubbleTimeLabel(value, nowMs)}</time></> : <time dateTime={value} title={bubbleTimeHint(value)}>{bubbleTimeLabel(value, nowMs)}</time>}</>;
+}
+
+function LiveDuration({ startedAt }: { startedAt: string }) {
+  const nowMs = useLiveSecondClock();
+  return <>{duration(startedAt, new Date(nowMs).toISOString())}</>;
+}
+
+function LiveActivityDuration({ startedAt }: { startedAt: string }) {
+  const nowMs = useLiveSecondClock();
+  return <>{activityDuration(startedAt, new Date(nowMs).toISOString())}</>;
+}
+
+function useAdaptiveNow(value: string) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const timestamp = Date.parse(value);
+    if (!Number.isFinite(timestamp)) return;
+    let timer: number | undefined;
+    const schedule = () => {
+      const current = Date.now();
+      const elapsed = Math.max(0, current - timestamp);
+      if (elapsed >= 3_600_000) return;
+      const interval = elapsed < 60_000 ? 1_000 : 60_000;
+      const delay = interval - (current % interval) + 20;
+      timer = window.setTimeout(() => {
+        if (document.visibilityState !== 'visible') { timer = undefined; return; }
+        setNowMs(Date.now());
+        schedule();
+      }, delay);
+    };
+    const onVisibility = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (timer !== undefined) window.clearTimeout(timer);
+      setNowMs(Date.now());
+      schedule();
+    };
+    schedule();
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [value]);
+  return nowMs;
+}
+
+function useLiveSecondClock() {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    let timer: number | undefined;
+    const schedule = () => {
+      timer = window.setTimeout(() => {
+        if (document.visibilityState !== 'visible') { timer = undefined; return; }
+        setNowMs(Date.now());
+        schedule();
+      }, 1_000);
+    };
+    const onVisibility = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (timer !== undefined) window.clearTimeout(timer);
+      setNowMs(Date.now());
+      schedule();
+    };
+    schedule();
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, []);
+  return nowMs;
+}
+
+function bubbleTimeLabel(value: string, nowMs: number) {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return value;
+  const elapsedSeconds = Math.max(0, Math.floor((nowMs - timestamp) / 1000));
+  if (elapsedSeconds < 60) return `${elapsedSeconds} giây trước`;
+  if (elapsedSeconds < 3600) return `${Math.floor(elapsedSeconds / 60)} phút trước`;
+  return new Intl.DateTimeFormat('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(timestamp));
+}
+
+function bubbleTimeHint(value: string) {
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return value;
+  return new Intl.DateTimeFormat('vi-VN', { hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(timestamp));
 }

@@ -85,21 +85,14 @@ function TaskDetailContent({ detail, realtime, onTaskChanged }: { detail: TaskDe
   const { task, events = [] } = detail;
   const chatGpt = task.source === 'chatgpt_web';
   const turns = useMemo(() => detail.turns?.length ? detail.turns : buildTaskTurns(events, task), [detail.turns, events, task]);
-  const [now, setNow] = useState(0);
-  useEffect(() => {
-    if (task.status !== 'running') return;
-    setNow(Date.now());
-    const timer = window.setInterval(() => { if (document.visibilityState === 'visible') setNow(Date.now()); }, 1000);
-    return () => window.clearInterval(timer);
-  }, [task.status]);
-  const turnNow = task.status === 'running' && now > 0 ? new Date(now).toISOString() : turns.at(-1)?.completedAtUtc ?? task.updatedAtUtc;
   const startedAt = task.createdAtUtc ?? turns[0]?.startedAtUtc ?? task.updatedAtUtc;
   const chatRef = useRef<HTMLElement>(null);
   const nearBottomRef = useRef(true);
   const [visibleTurnCount, setVisibleTurnCount] = useState(2);
+  const [loadingOlderTurns, setLoadingOlderTurns] = useState(false);
   const sidebarResize = useResizableWidth({ storageKey: 'chatcmd.layout.taskDetailSidebarWidth.v1', cssVariable: '--task-detail-sidebar-width', defaultWidth: typeof window !== 'undefined' && window.innerWidth <= 1180 ? 300 : 340, minWidth: 280, maxWidth: 520, direction: -1 });
   const visibleTurns = turns.slice(Math.max(0, turns.length - visibleTurnCount));
-  useEffect(() => setVisibleTurnCount(2), [task.id]);
+  useEffect(() => { setVisibleTurnCount(2); setLoadingOlderTurns(false); }, [task.id]);
   const activeTaskRef = useRef<string | null>(null);
   const lastEvent = events.at(-1);
   const lastTurn = turns.at(-1);
@@ -119,13 +112,17 @@ function TaskDetailContent({ detail, realtime, onTaskChanged }: { detail: TaskDe
     const root = chatRef.current;
     if (!root) return;
     nearBottomRef.current = root.scrollHeight - root.scrollTop - root.clientHeight < 96;
-    if (root.scrollTop <= 40 && visibleTurnCount < turns.length) {
+    if (root.scrollTop <= 40 && visibleTurnCount < turns.length && !loadingOlderTurns) {
       const previousHeight = root.scrollHeight;
-      setVisibleTurnCount((count) => Math.min(turns.length, count + 2));
-      window.requestAnimationFrame(() => {
-        const current = chatRef.current;
-        if (current) current.scrollTop += current.scrollHeight - previousHeight;
-      });
+      setLoadingOlderTurns(true);
+      window.setTimeout(() => {
+        setVisibleTurnCount((count) => Math.min(turns.length, count + 2));
+        window.requestAnimationFrame(() => {
+          const current = chatRef.current;
+          if (current) current.scrollTop += current.scrollHeight - previousHeight;
+          setLoadingOlderTurns(false);
+        });
+      }, 260);
     }
   };
 
@@ -134,8 +131,9 @@ function TaskDetailContent({ detail, realtime, onTaskChanged }: { detail: TaskDe
     <div className="task-detail-body">
       <main ref={chatRef} className="task-chat-column" onScroll={updateChatScrollPosition}><h2 className="sr-only">Activity timeline</h2>
         <SubagentApprovalQueue approvals={detail.subagentApprovals ?? []} onResolved={(activityId) => onTaskChanged({ ...detail, subagentApprovals: (detail.subagentApprovals ?? []).filter((item) => item.activityId !== activityId) })} />
+        {loadingOlderTurns && <div className="task-history-skeleton" role="status" aria-label="Đang tải đoạn trò chuyện cũ"><span /><span /><span /></div>}
         <section className="task-bubble-timeline turn-timeline" aria-label="Conversation activity">
-        {turns.length ? visibleTurns.map((turn) => <TaskTurnBubble turn={turn} now={turnNow} taskId={task.id} agentLabel={chatGpt ? 'ChatGPT' : 'Codex Agent'} subagents={(detail.subagents ?? []).filter((agent) => agent.parentTurnId === turn.id)} key={turn.id} />) : <Empty title="Chưa có hoạt động" body="Agent chưa ghi nhận nội dung cho task này." />}
+        {turns.length ? visibleTurns.map((turn) => <TaskTurnBubble turn={turn} taskId={task.id} agentLabel={chatGpt ? 'ChatGPT' : 'Codex Agent'} subagents={(detail.subagents ?? []).filter((agent) => agent.parentTurnId === turn.id)} key={turn.id} />) : <Empty title="Chưa có hoạt động" body="Agent chưa ghi nhận nội dung cho task này." />}
       </section>{chatGpt && <ChatGptTaskComposer taskId={task.id} />}</main>
       <aside className="task-detail-sidebar" aria-label="Task information">
         <div className="panel-resize-handle task-sidebar-resize-handle" role="separator" aria-label="Điều chỉnh độ rộng thông tin task" aria-orientation="vertical" aria-valuemin={280} aria-valuemax={520} aria-valuenow={sidebarResize.width} tabIndex={0} onPointerDown={sidebarResize.onPointerDown} onKeyDown={sidebarResize.onKeyDown} />
