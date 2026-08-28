@@ -9,6 +9,9 @@ export type ToolActivity = {
   output?: unknown;
   status: string;
   error?: string;
+  errorCode?: string;
+  errorMessage?: string;
+  errorDetails?: unknown;
   startedAt: string;
   finishedAt?: string;
   turnId?: string;
@@ -97,7 +100,10 @@ export function buildProcessBlocks(events: TimelineEvent[]): ProcessBlock[] {
         activity.output = payload.output;
         activity.status = stringValue(payload.status) || 'succeeded';
         activity.finishedAt = event.occurredAt;
-        activity.error = stringValue(payload.errorMessage) || stringValue(payload.errorCode);
+        activity.errorMessage = stringValue(payload.errorMessage) || undefined;
+        activity.errorCode = stringValue(payload.errorCode) || undefined;
+        activity.errorDetails = payload.errorDetails ?? payload.details ?? payload.error;
+        activity.error = activity.errorMessage || activity.errorCode;
       } else {
         currentActivities ??= [];
         if (!blocks.length || blocks.at(-1)?.type !== 'activities') {
@@ -109,6 +115,9 @@ export function buildProcessBlocks(events: TimelineEvent[]): ProcessBlock[] {
           kind: toolKind(tool),
           output: payload.output,
           status: stringValue(payload.status) || 'succeeded',
+          errorMessage: stringValue(payload.errorMessage) || undefined,
+          errorCode: stringValue(payload.errorCode) || undefined,
+          errorDetails: payload.errorDetails ?? payload.details ?? payload.error,
           error: stringValue(payload.errorMessage) || stringValue(payload.errorCode),
           startedAt: event.occurredAt,
           finishedAt: event.occurredAt,

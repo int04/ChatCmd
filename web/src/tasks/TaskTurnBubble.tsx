@@ -160,12 +160,23 @@ function ActivityRow({ activity, taskId, onStop }: { activity: ToolActivity; tas
     {open && <Modal title={activityLabel(activity)} description={`${formatClockTime(activity.startedAt)} · ${activityDuration(activity.startedAt, activity.finishedAt ?? new Date().toISOString())}`} close={closePopup}>
       <div className="activity-popup-content">
         <div className="activity-command"><FileCode2 /><code>{command}</code></div>
+        {failed && <div className="activity-error-detail" role="alert">
+          <div className="activity-error-heading"><CircleAlert aria-hidden="true" /><strong>Tool chạy thất bại</strong></div>
+          {activity.errorCode && <div className="activity-error-row"><span>Mã lỗi</span><code>{activity.errorCode}</code></div>}
+          <div className="activity-error-message">{activity.errorMessage || activity.error || 'Tool trả về trạng thái failed nhưng không có error message.'}</div>
+          {activity.errorDetails !== undefined && activity.errorDetails !== null && <pre tabIndex={0} aria-label="Chi tiết lỗi của tool"><code>{formatErrorDetails(activity.errorDetails)}</code></pre>}
+        </div>}
         {codeView
           ? <Suspense fallback={<pre tabIndex={0} aria-label={`Output của ${command}`}><code>{codeView.code}</code></pre>}><TaskCodeViewer {...codeView} label={`Output của ${command}`} /></Suspense>
           : <pre tabIndex={0} aria-label={`Output của ${command}`}><code>{output || (approvalPending ? 'Đang chờ bạn phê duyệt…' : running ? 'Đang chờ output…' : 'Lệnh không có output.')}</code></pre>}
       </div>
     </Modal>}
   </div>;
+}
+
+function formatErrorDetails(value: unknown) {
+  if (typeof value === 'string') return value;
+  try { return JSON.stringify(value, null, 2); } catch { return String(value); }
 }
 
 function BubbleTime({ value, ariaHidden = false }: { value: string; ariaHidden?: boolean }) {
