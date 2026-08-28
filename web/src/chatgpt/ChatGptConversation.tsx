@@ -61,7 +61,7 @@ export function NewChatGptConversation() {
     <section className="chatgpt-new-card">
       <header><span className="chatgpt-logo"><Bot /></span><div><span className="eyebrow">CHATGPT.COM</span><h1>Tin nhắn mới</h1><p>Gửi bằng phiên ChatGPT đã đăng nhập trong Chrome / Edge.</p></div></header>
       <ExtensionState ready={extensionReady} />
-      {extensionReady && chatGptTabOpen === false && <p className="chatgpt-input-warning" role="alert"><CircleAlert /><span><strong>Chưa có tab ChatGPT đang mở.</strong> Hãy mở chatgpt.com và đăng nhập trước khi gửi.</span></p>}
+      {extensionReady && chatGptTabOpen === false && <p className="chatgpt-input-warning" role="alert"><CircleAlert /><span><strong>Chưa có tab ChatGPT trống để tạo cuộc trò chuyện mới.</strong> Hãy mở một tab chatgpt.com mới và giữ tab đó mở sau khi gửi.</span></p>}
       <form onSubmit={(event) => void submit(event)}>
         <div className="chatgpt-form-grid">
           <label><span>Agent MCP</span><select value={agentId} onChange={(event) => setAgentId(event.target.value)} disabled={busy || agents.loading} required>
@@ -85,6 +85,7 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
   const [model, setModel] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [extensionReady, setExtensionReady] = useState<boolean | null>(null);
   const [chatGptTabOpen, setChatGptTabOpen] = useState<boolean | null>(null);
   const [retrySeconds, setRetrySeconds] = useState<number | null>(null);
   const retryGeneration = useRef(0);
@@ -94,11 +95,19 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
   useEffect(() => { if (bridge.data && !model) setModel(bridge.data.model || DEFAULT_MODEL); }, [bridge.data, model]);
   useEffect(() => {
     let disposed = false;
-    const refresh = () => void chatGptExtensionStatus().then((status) => { if (!disposed) setChatGptTabOpen(status.ready && status.chatGptTabOpen); });
+    const refresh = () => {
+      const conversationUrl = bridge.data?.conversationUrl;
+      if (!conversationUrl) return;
+      void chatGptExtensionStatus(conversationUrl).then((status) => {
+        if (disposed) return;
+        setExtensionReady(status.ready);
+        setChatGptTabOpen(status.ready && status.conversationTabOpen);
+      });
+    };
     refresh();
-    const timer = window.setInterval(refresh, 2_000);
+    const timer = window.setInterval(refresh, 1_000);
     return () => { disposed = true; window.clearInterval(timer); };
-  }, []);
+  }, [bridge.data?.conversationUrl]);
   useEffect(() => {
     const requestId = bridge.data?.activeRequestId;
     if (!requestId) return;
@@ -118,10 +127,11 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
     if (!bridge.data || generation !== retryGeneration.current) return;
     setBusy(true); setError('');
     try {
-      const status = await chatGptExtensionStatus();
-      setChatGptTabOpen(status.ready && status.chatGptTabOpen);
+      const status = await chatGptExtensionStatus(bridge.data.conversationUrl);
+      setExtensionReady(status.ready);
+      setChatGptTabOpen(status.ready && status.conversationTabOpen);
       if (!status.ready) throw new Error('ChatCMD ChatGPT Bridge extension is not ready. Enable or reload it, then try again.');
-      if (!status.chatGptTabOpen) throw new Error('Không có tab ChatGPT nào đang mở. Hãy mở chatgpt.com rồi thử lại.');
+      if (!status.conversationTabOpen) throw new Error('Tab ChatGPT của cuộc trò chuyện này không còn mở. Hãy mở lại cuộc trò chuyện ChatGPT rồi thử lại.');
       const request = await api.sendChatGptMessage(taskId, { model: model || bridge.data.model, content: message });
       await dispatchChatGptRequest({ requestId: request.id, submittedContent: request.submittedContent, model: request.model, conversationUrl: bridge.data.conversationUrl });
       const latest = await waitForDispatchState(request.id);
@@ -178,13 +188,14 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
 
   if (bridge.loading) return <div className="chatgpt-composer loading"><LoaderCircle className="spin" /><span>Đang tải ChatGPT bridge…</span></div>;
   if (!bridge.data) return <div className="chatgpt-composer error"><CircleAlert /><span>{bridge.error || 'Không có thông tin ChatGPT bridge.'}</span></div>;
+  if (extensionReady === false) return <div className="chatgpt-tab-required error" role="alert"><Unplug /><div><strong>Không kết nối được ChatGPT Bridge</strong><span>Hãy bật hoặc reload extension rồi quay lại cuộc trò chuyện này.</span></div></div>;
+  if (chatGptTabOpen === false) return <div className="chatgpt-tab-required" role="alert"><CircleAlert /><div><strong>Tab ChatGPT của cuộc trò chuyện này đang đóng</strong><span>ChatCMD cần giữ đúng tab ChatGPT này mở để gửi tin nhắn và theo dõi trạng thái phản hồi. Mở lại cuộc trò chuyện rồi giữ tab đó trong trình duyệt.</span><a href={bridge.data.conversationUrl} target="_blank" rel="noreferrer noopener"><ExternalLink />Mở cuộc trò chuyện ChatGPT</a></div></div>;
   return <form className="chatgpt-composer" onSubmit={(event) => void send(event)}>
-    {chatGptTabOpen === false && <p className="chatgpt-input-warning" role="alert"><CircleAlert /><span><strong>Không phát hiện tab ChatGPT đang mở.</strong> Hãy mở chatgpt.com để tiếp tục gửi tin nhắn.</span></p>}
     {retrySeconds !== null && <div className="chatgpt-retry-warning" role="status"><CircleAlert /><span>{SEND_DISABLED_ERROR} {retrySeconds > 0 ? `Sẽ thử lại sau ${retrySeconds}s.` : 'Đang thử lại…'}</span><button type="button" onClick={cancelRetry}>Hủy gửi</button></div>}
     <div className="chatgpt-composer-row">
       <textarea aria-label="Tin nhắn tiếp theo cho ChatGPT" rows={2} value={content} onChange={(event) => setContent(event.target.value)} disabled={active || busy || retrySeconds !== null} placeholder={active ? 'ChatGPT đang phản hồi…' : retrySeconds !== null ? 'Đang chờ gửi lại…' : 'Nhắn tiếp cho ChatGPT…'} />
       {active ? <button type="button" className="chatgpt-stop-button" onClick={() => void stop()} disabled={busy || bridge.data.activeStatus === 'stop_requested'}><CircleStop /><span>{bridge.data.activeStatus === 'stop_requested' ? 'Đang dừng…' : 'Dừng'}</span></button>
-        : <button type="submit" className="chatgpt-composer-send" disabled={busy || retrySeconds !== null || chatGptTabOpen === false || !content.trim()}><Send /><span>Gửi</span></button>}
+        : <button type="submit" className="chatgpt-composer-send" disabled={busy || retrySeconds !== null || !content.trim()}><Send /><span>Gửi</span></button>}
     </div>
     <div className="chatgpt-composer-meta"><label>Model <input list="chatgpt-composer-models" value={model} onChange={(event) => setModel(event.target.value)} disabled={active || busy || retrySeconds !== null} /></label><datalist id="chatgpt-composer-models">{MODEL_SUGGESTIONS.map((value) => <option value={value} key={value} />)}</datalist><span>Qua extension · @{bridge.data.conversationId.slice(0, 8)}…</span></div>
     {error && <p className="chatgpt-form-error" role="alert"><CircleAlert />{error}</p>}

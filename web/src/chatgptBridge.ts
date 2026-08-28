@@ -2,19 +2,25 @@ const REQUEST_TYPE = 'chatcmd-chatgpt-extension-request';
 const RESPONSE_TYPE = 'chatcmd-chatgpt-extension-response';
 
 type BridgeCommand =
-  | { action: 'ping'; nonce: string }
+  | { action: 'ping'; nonce: string; conversationUrl?: string }
   | { action: 'send'; nonce: string; requestId: string; submittedContent: string; model: string; conversationUrl?: string; localBaseUrl: string }
   | { action: 'stop'; nonce: string; requestId: string; localBaseUrl: string };
 
-type BridgeResponse = { nonce: string; ok: boolean; error?: string; chatGptTabOpen?: boolean };
-export type ChatGptExtensionStatus = { ready: boolean; chatGptTabOpen: boolean };
+type BridgeResponse = { nonce: string; ok: boolean; error?: string; chatGptTabOpen?: boolean; conversationTabOpen?: boolean; tabId?: number; tabUrl?: string };
+export type ChatGptExtensionStatus = { ready: boolean; chatGptTabOpen: boolean; conversationTabOpen: boolean; tabId?: number; tabUrl?: string };
 
-export async function chatGptExtensionStatus(): Promise<ChatGptExtensionStatus> {
+export async function chatGptExtensionStatus(conversationUrl?: string): Promise<ChatGptExtensionStatus> {
   try {
-    const response = await bridge({ action: 'ping', nonce: nonce() }, 1_500);
-    return { ready: true, chatGptTabOpen: response.chatGptTabOpen === true };
+    const response = await bridge({ action: 'ping', nonce: nonce(), conversationUrl }, 1_500);
+    return {
+      ready: true,
+      chatGptTabOpen: response.chatGptTabOpen === true,
+      conversationTabOpen: response.conversationTabOpen === true || (!conversationUrl && response.chatGptTabOpen === true),
+      tabId: response.tabId,
+      tabUrl: response.tabUrl,
+    };
   } catch {
-    return { ready: false, chatGptTabOpen: false };
+    return { ready: false, chatGptTabOpen: false, conversationTabOpen: false };
   }
 }
 

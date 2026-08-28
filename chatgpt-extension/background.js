@@ -1,11 +1,13 @@
 const REQUEST_PREFIX = 'chatcmd-request:';
+const CONVERSATION_PREFIX = 'chatcmd-conversation:';
 const CHATGPT_HOME = 'https://chatgpt.com/';
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message !== 'object') return false;
   if (message.type === 'chatcmd-local-command') {
     if (message.action === 'ping') {
-      void hasChatGptTab().then((chatGptTabOpen) => sendResponse({ ok: true, chatGptTabOpen }))
+      void chatGptTabStatus(message.conversationUrl)
+        .then((status) => sendResponse({ ok: true, ...status }))
         .catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
       return true;
     }
@@ -29,18 +31,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return false;
 });
 
+chrome.tabs.onRemoved.addListener((tabId) => {
+  void handleClosedTab(tabId);
+});
+
 async function startRequest(message) {
   if (!message.requestId || !message.submittedContent) throw new Error('Yêu cầu gửi ChatGPT không hợp lệ.');
   const target = conversationTarget(message.conversationUrl);
-  const acquired = await acquireChatGptTab(target);
+  const tab = message.conversationUrl
+    ? await acquireConversationTab(target)
+    : await acquireNewConversationTab();
   await chrome.storage.session.set({
     [requestKey(message.requestId)]: {
       localBaseUrl: message.localBaseUrl,
-      tabId: acquired.tab.id,
-      closeWhenDone: false,
+      tabId: tab.id,
+      conversationUrl: message.conversationUrl || null,
     },
   });
-  await sendToChatGpt(acquired.tab.id, {
+  await sendToChatGpt(tab.id, {
     type: 'chatcmd-chatgpt-run',
     requestId: message.requestId,
     submittedContent: message.submittedContent,
@@ -62,6 +70,7 @@ async function handleProgress(message, tabId) {
   if (!context) throw new Error('Không tìm thấy ChatCMD request context.');
   if (tabId && context.tabId !== tabId) throw new Error('ChatGPT progress đến từ tab không khớp.');
   if (message.stage === 'started') {
+    if (message.conversationId && context.tabId) await bindConversationTab(message.conversationId, context.tabId);
     await postJson(context.localBaseUrl, `/api/local/chatgpt/bridge/${encodeURIComponent(message.requestId)}/started`, {
       conversationId: message.conversationId,
       conversationUrl: message.conversationUrl,
@@ -78,7 +87,7 @@ async function handleProgress(message, tabId) {
       assistantContent: message.assistantContent,
       errorMessage: message.errorMessage,
     });
-    await releaseRequest(message.requestId, context);
+    await releaseRequest(message.requestId);
   }
 }
 
@@ -90,29 +99,93 @@ async function reportFailure(requestId, localBaseUrl, error) {
       errorMessage: errorMessage(error),
     });
   } catch { /* the local app may already be closed */ }
-  await releaseRequest(requestId, await requestContext(requestId));
+  await releaseRequest(requestId);
 }
 
-async function hasChatGptTab() {
-  const tabs = await chrome.tabs.query({ url: 'https://chatgpt.com/*' });
-  return tabs.some((tab) => Boolean(tab.id));
+async function handleClosedTab(tabId) {
+  const stored = await chrome.storage.session.get(null);
+  const removals = [];
+  const failures = [];
+  for (const [key, value] of Object.entries(stored)) {
+    if (!value || typeof value !== 'object' || value.tabId !== tabId) continue;
+    if (key.startsWith(CONVERSATION_PREFIX)) removals.push(key);
+    if (key.startsWith(REQUEST_PREFIX) && value.localBaseUrl) {
+      const requestId = key.slice(REQUEST_PREFIX.length);
+      failures.push(reportFailure(requestId, value.localBaseUrl, new Error('Tab ChatGPT liên kết với cuộc trò chuyện đã bị đóng. Mở lại cuộc trò chuyện ChatGPT để tiếp tục.')));
+    }
+  }
+  if (removals.length) await chrome.storage.session.remove(removals);
+  await Promise.allSettled(failures);
 }
 
-async function acquireChatGptTab(target) {
-  const tabs = await chrome.tabs.query({ url: 'https://chatgpt.com/*' });
-  let tab = tabs[0];
-  if (!tab?.id) throw new Error('Không có tab ChatGPT nào đang mở. Hãy mở chatgpt.com rồi thử lại.');
-  tab = await chrome.tabs.update(tab.id, { url: target });
-  if (!tab.id) throw new Error('Không tìm thấy tab ChatGPT để gửi yêu cầu.');
+async function chatGptTabStatus(conversationUrl) {
+  if (!conversationUrl) {
+    const tab = await findAvailableNewConversationTab();
+    return { chatGptTabOpen: Boolean(tab?.id), tabId: tab?.id, tabUrl: tab?.url };
+  }
+  const target = conversationTarget(conversationUrl);
+  const tab = await findConversationTab(target);
+  return { chatGptTabOpen: Boolean(tab?.id), conversationTabOpen: Boolean(tab?.id), tabId: tab?.id, tabUrl: tab?.url };
+}
+
+async function acquireNewConversationTab() {
+  const tab = await findAvailableNewConversationTab();
+  if (!tab?.id) throw new Error('Không có tab ChatGPT trống để tạo cuộc trò chuyện mới. Hãy mở một tab https://chatgpt.com/ mới rồi thử lại.');
   await waitForTab(tab.id);
-  return { tab };
+  return tab;
 }
 
-async function releaseRequest(requestId, context) {
+async function acquireConversationTab(target) {
+  const tab = await findConversationTab(target);
+  if (!tab?.id) throw new Error('Tab ChatGPT của cuộc trò chuyện này không còn mở. Hãy mở lại link cuộc trò chuyện rồi thử lại.');
+  await waitForTab(tab.id);
+  return tab;
+}
+
+async function findAvailableNewConversationTab() {
+  const tabs = await chatGptTabs();
+  const bindings = await conversationBindings();
+  const boundTabIds = new Set(Object.values(bindings).map((value) => value?.tabId).filter(Boolean));
+  return tabs.find((tab) => tab.id && !boundTabIds.has(tab.id) && isNewConversationUrl(tab.url));
+}
+
+async function findConversationTab(target) {
+  const conversationId = conversationIdFromUrl(target);
+  if (!conversationId) return null;
+  const key = conversationKey(conversationId);
+  const stored = await chrome.storage.session.get(key);
+  const bound = stored[key];
+  if (bound?.tabId) {
+    const tab = await safeTab(bound.tabId);
+    if (tab && sameConversationUrl(tab.url, target)) return tab;
+  }
+  const tabs = await chatGptTabs();
+  const discovered = tabs.find((tab) => tab.id && sameConversationUrl(tab.url, target));
+  if (discovered?.id) await bindConversationTab(conversationId, discovered.id);
+  return discovered || null;
+}
+
+async function bindConversationTab(conversationId, tabId) {
+  if (!conversationId || !tabId) return;
+  await chrome.storage.session.set({ [conversationKey(conversationId)]: { tabId } });
+}
+
+async function conversationBindings() {
+  const stored = await chrome.storage.session.get(null);
+  return Object.fromEntries(Object.entries(stored).filter(([key]) => key.startsWith(CONVERSATION_PREFIX)));
+}
+
+async function chatGptTabs() {
+  return chrome.tabs.query({ url: 'https://chatgpt.com/*' });
+}
+
+async function safeTab(tabId) {
+  try { return await chrome.tabs.get(tabId); }
+  catch { return null; }
+}
+
+async function releaseRequest(requestId) {
   await chrome.storage.session.remove(requestKey(requestId));
-  if (!context?.closeWhenDone || !context.tabId) return;
-  try { await chrome.tabs.remove(context.tabId); }
-  catch { /* tab may already be closed by the user */ }
 }
 
 async function sendToChatGpt(tabId, payload) {
@@ -163,6 +236,7 @@ async function requestContext(requestId) {
 }
 
 function requestKey(requestId) { return `${REQUEST_PREFIX}${requestId}`; }
+function conversationKey(conversationId) { return `${CONVERSATION_PREFIX}${conversationId}`; }
 function delay(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 function errorMessage(error) { return error instanceof Error ? error.message : String(error || 'Lỗi ChatGPT bridge.'); }
 
@@ -171,6 +245,24 @@ function conversationTarget(value) {
   const url = new URL(value);
   if (url.origin !== 'https://chatgpt.com') throw new Error('Conversation URL không thuộc chatgpt.com.');
   return url.href;
+}
+
+function conversationIdFromUrl(value) {
+  try { return new URL(value).pathname.match(/^\/c\/([^/?#]+)/)?.[1] || null; }
+  catch { return null; }
+}
+
+function sameConversationUrl(left, right) {
+  const leftId = conversationIdFromUrl(left || '');
+  const rightId = conversationIdFromUrl(right || '');
+  return Boolean(leftId && rightId && leftId === rightId);
+}
+
+function isNewConversationUrl(value) {
+  try {
+    const url = new URL(value || '');
+    return url.origin === 'https://chatgpt.com' && url.pathname === '/';
+  } catch { return false; }
 }
 
 function localOrigin(value) {
