@@ -34,7 +34,8 @@ export function TaskTurnBubble({ turn, taskId, subagents = [], agentLabel = 'Cod
   const processEvents = events.filter((event) => event !== response?.event && event !== userMessage?.event);
   const blocks = buildProcessBlocks(processEvents);
   const activities = blocks.flatMap((block) => block.type === 'activities' ? block.activities : []);
-  const status = turn.status ?? 'incomplete';
+  const rawStatus = turn.status ?? 'incomplete';
+  const status = response ? 'completed' : rawStatus;
   const startedAt = turn.startedAtUtc ?? events[0]?.occurredAt ?? new Date().toISOString();
   const finishedAt = turn.completedAtUtc ?? response?.event.occurredAt;
   const stateLabel = status === 'running' ? 'Đang xử lý…' : status === 'failed' ? 'Thất bại' : status === 'incomplete' ? 'Chưa hoàn tất' : 'Đã hoàn tất';
