@@ -10,6 +10,7 @@ import { TaskAccessCard } from '../tasks/TaskAccessCard';
 import { TaskConversationStopCard } from '../tasks/TaskConversationStopCard';
 import { SubagentApprovalQueue } from '../tasks/SubagentApprovalQueue';
 import { TaskTurnBubble } from '../tasks/TaskTurnBubble';
+import { useResizableWidth } from '../tasks/useResizableWidth';
 import { buildTaskTurns, mergeLiveDetail } from '../tasks/taskTimeline';
 import type { Task, TaskDetail, TimelineEvent } from '../types';
 import { useLoad } from '../useLoad';
@@ -96,6 +97,7 @@ function TaskDetailContent({ detail, realtime, onTaskChanged }: { detail: TaskDe
   const chatRef = useRef<HTMLElement>(null);
   const nearBottomRef = useRef(true);
   const [visibleTurnCount, setVisibleTurnCount] = useState(2);
+  const sidebarResize = useResizableWidth({ storageKey: 'chatcmd.layout.taskDetailSidebarWidth.v1', cssVariable: '--task-detail-sidebar-width', defaultWidth: typeof window !== 'undefined' && window.innerWidth <= 1180 ? 300 : 340, minWidth: 280, maxWidth: 520, direction: -1 });
   const visibleTurns = turns.slice(Math.max(0, turns.length - visibleTurnCount));
   useEffect(() => setVisibleTurnCount(2), [task.id]);
   const activeTaskRef = useRef<string | null>(null);
@@ -136,6 +138,7 @@ function TaskDetailContent({ detail, realtime, onTaskChanged }: { detail: TaskDe
         {turns.length ? visibleTurns.map((turn) => <TaskTurnBubble turn={turn} now={turnNow} taskId={task.id} agentLabel={chatGpt ? 'ChatGPT' : 'Codex Agent'} subagents={(detail.subagents ?? []).filter((agent) => agent.parentTurnId === turn.id)} key={turn.id} />) : <Empty title="Chưa có hoạt động" body="Agent chưa ghi nhận nội dung cho task này." />}
       </section>{chatGpt && <ChatGptTaskComposer taskId={task.id} />}</main>
       <aside className="task-detail-sidebar" aria-label="Task information">
+        <div className="panel-resize-handle task-sidebar-resize-handle" role="separator" aria-label="Điều chỉnh độ rộng thông tin task" aria-orientation="vertical" aria-valuemin={280} aria-valuemax={520} aria-valuenow={sidebarResize.width} tabIndex={0} onPointerDown={sidebarResize.onPointerDown} onKeyDown={sidebarResize.onKeyDown} />
         <header className="task-info-header"><span className={`task-info-state ${task.status}`}>{task.status === 'running' ? <LoaderCircle className="spin" /> : task.status === 'failed' ? <CircleAlert /> : <CheckCircle2 />}</span><div><h2>{conversationName(task)}</h2><p><code>#{task.id}</code> · {task.status} · {turns.length} lượt agent</p></div></header>
         <div className="task-info-duration"><Clock3 /><span>{formatTime(startedAt)} → {formatTime(task.updatedAtUtc)}</span></div>
         <section className="task-info-section"><strong>Terminal / Task</strong><div className="task-info-generation"><TerminalSquare /><div><code>Generation {task.generation ?? 1}</code><small>{task.activeSessionId ? `#${task.activeSessionId}` : 'No active terminal'}</small></div></div></section>

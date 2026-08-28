@@ -7,6 +7,7 @@ import { Empty, ErrorState, Loading } from '../components';
 import { useRealtime } from '../realtime';
 import type { Task, TimelineEvent } from '../types';
 import { upsertTaskEvent } from './taskTimeline';
+import { useResizableWidth } from './useResizableWidth';
 
 const READ_FINAL_COUNTS_KEY = 'chatcmd.tasks.readFinalCounts.v1';
 const PAGE_SIZE = 10;
@@ -33,6 +34,7 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
   const visibleTaskIds = useRef(new Set<string>());
   const loadingMoreRef = useRef(false);
   const hadStoredReadCounts = useRef(typeof localStorage !== 'undefined' && localStorage.getItem(READ_FINAL_COUNTS_KEY) !== null);
+  const railResize = useResizableWidth({ storageKey: 'chatcmd.layout.taskRailWidth.v1', cssVariable: '--task-rail-width', defaultWidth: typeof window !== 'undefined' && window.innerWidth <= 1180 ? 270 : 284, minWidth: 240, maxWidth: 480 });
 
   const applyFirstPage = useCallback(async () => {
     setLoading(true);
@@ -111,6 +113,7 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
     .filter((task) => `${conversationName(task)} ${task.id} ${task.outputPreview ?? ''}`.toLowerCase().includes(query.toLowerCase())), [query, loadedTasks]);
 
   return <aside className={`task-rail ${open ? 'open' : ''}`} aria-label="Đoạn trò chuyện">
+    <div className="panel-resize-handle task-rail-resize-handle" role="separator" aria-label="Điều chỉnh độ rộng đoạn trò chuyện" aria-orientation="vertical" aria-valuemin={240} aria-valuemax={480} aria-valuenow={railResize.width} tabIndex={0} onPointerDown={railResize.onPointerDown} onKeyDown={railResize.onKeyDown} />
     <header className="task-rail-header">
       <div className="task-rail-brand"><span className="brand-mark"><Braces /></span><strong>ChatCMD</strong><button className="icon-button mobile-only" aria-label="Close navigation" onClick={onClose}><X /></button></div>
       <Link className="task-rail-new-message" to="/tasks/new"><span className="task-rail-new-icon"><Plus /></span><span>Tin nhắn mới</span></Link>
