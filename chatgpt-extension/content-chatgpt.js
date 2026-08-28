@@ -67,10 +67,74 @@ async function runRequest(message) {
 }
 
 async function waitForComposer() {
-  return waitFor(() => {
-    const composer = document.querySelector('#prompt-textarea, [data-testid="prompt-textarea"], form textarea, form [contenteditable="true"]');
-    return composer && isVisible(composer) ? composer : null;
-  }, 20_000, 'Không tìm thấy ô nhập ChatGPT. Hãy kiểm tra bạn đã đăng nhập chatgpt.com.');
+  return waitFor(() => findComposer(), 20_000, composerMissingMessage());
+}
+
+function findComposer() {
+  const direct = findUsableComposer(document, [
+    '#prompt-textarea',
+    '[data-testid="prompt-textarea"]',
+    'textarea[name="prompt-textarea"]',
+    'form textarea',
+    'form [role="textbox"]',
+    'form .ProseMirror[contenteditable="true"]',
+    'form [contenteditable="plaintext-only"]',
+    'form [contenteditable="true"]',
+    '[role="textbox"][contenteditable="true"]',
+    '[contenteditable="plaintext-only"]',
+  ]);
+  return direct || findComposerNearSendButton();
+}
+
+function findComposerNearSendButton() {
+  const sendButton = findVisible([
+    'button[data-testid="send-button"]',
+    'button[aria-label="Send prompt"]',
+    'button[aria-label="Send message"]',
+    'button[aria-label*="send" i]',
+  ]);
+  if (!sendButton) return null;
+
+  const scopes = [];
+  const form = sendButton.closest('form');
+  if (form) scopes.push(form);
+  let parent = sendButton.parentElement;
+  for (let depth = 0; parent && depth < 6; depth += 1, parent = parent.parentElement) {
+    if (!scopes.includes(parent)) scopes.push(parent);
+  }
+
+  const genericSelectors = [
+    'textarea',
+    '[role="textbox"]',
+    '.ProseMirror[contenteditable]',
+    '[contenteditable="plaintext-only"]',
+    '[contenteditable="true"]',
+  ];
+  for (const scope of scopes) {
+    const composer = findUsableComposer(scope, genericSelectors);
+    if (composer) return composer;
+  }
+  return null;
+}
+
+function findUsableComposer(root, selectors) {
+  for (const selector of selectors) {
+    for (const element of root.querySelectorAll(selector)) {
+      if (isUsableComposer(element)) return element;
+    }
+  }
+  return null;
+}
+
+function isUsableComposer(element) {
+  if (!isVisible(element)) return false;
+  if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) return !element.disabled;
+  return element.getAttribute('aria-disabled') !== 'true' && element.getAttribute('contenteditable') !== 'false';
+}
+
+function composerMissingMessage() {
+  const path = `${window.location.pathname}${window.location.search}` || '/';
+  return `Không tìm thấy ô nhập ChatGPT trên ${path}. Hãy kiểm tra tab ChatGPT đầu tiên đang ở giao diện chat và bạn đã đăng nhập.`;
 }
 
 async function selectModel(model) {
@@ -102,6 +166,14 @@ function setComposerText(composer, text) {
     composer.dispatchEvent(new Event('change', { bubbles: true }));
     return;
   }
+  const selection = window.getSelection();
+  const range = document.createRange();
+  range.selectNodeContents(composer);
+  selection?.removeAllRanges();
+  selection?.addRange(range);
+  const inserted = document.execCommand('insertText', false, text);
+  selection?.removeAllRanges();
+  if (inserted) return;
   composer.replaceChildren();
   const paragraph = document.createElement('p');
   paragraph.textContent = text;
