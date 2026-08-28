@@ -1,9 +1,9 @@
-import { Bot, Braces, ChevronUp, LayoutDashboard, LoaderCircle, Plus, Search, Settings, Sparkles, TerminalSquare, UserRound, Wrench, X } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, NavLink, useLocation } from 'react-router-dom';
+import { AlertTriangle, Bot, Braces, ChevronUp, LayoutDashboard, LoaderCircle, Plus, Search, Settings, Sparkles, TerminalSquare, Trash2, UserRound, Wrench, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEventHandler } from 'react';
+import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 
 import { api } from '../api';
-import { Empty, ErrorState, Loading } from '../components';
+import { Empty, ErrorState, Loading, Modal } from '../components';
 import { useRealtime } from '../realtime';
 import type { Task, TimelineEvent } from '../types';
 import { upsertTaskEvent } from './taskTimeline';
@@ -22,6 +22,7 @@ const menuItems = [
 
 export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void }) {
   const location = useLocation();
+  const navigate = useNavigate();
   const taskId = activeTaskId(location.pathname);
   const [loadedTasks, setLoadedTasks] = useState<Task[]>([]);
   const [nextCursor, setNextCursor] = useState<string>();
@@ -30,6 +31,10 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{ task: Task; x: number; y: number }>();
+  const [deleteTarget, setDeleteTarget] = useState<Task>();
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
   const [readFinalCounts, setReadFinalCounts] = useState<Record<string, number>>(readStoredFinalCounts);
   const visibleTaskIds = useRef(new Set<string>());
   const loadingMoreRef = useRef(false);
@@ -106,7 +111,31 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
     setReadFinalCounts((current) => (current[taskId] ?? 0) >= count ? current : { ...current, [taskId]: count });
   }, [taskId, loadedTasks]);
 
-  useEffect(() => { setMenuOpen(false); onClose(); }, [location.pathname, onClose]);
+  useEffect(() => { setMenuOpen(false); setContextMenu(undefined); onClose(); }, [location.pathname, onClose]);
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(undefined);
+    window.addEventListener('pointerdown', close);
+    window.addEventListener('blur', close);
+    return () => { window.removeEventListener('pointerdown', close); window.removeEventListener('blur', close); };
+  }, [contextMenu]);
+
+  const deleteConversation = useCallback(async () => {
+    if (!deleteTarget || !canDeleteTask(deleteTarget)) return;
+    setDeleting(true);
+    setDeleteError('');
+    try {
+      await api.deleteTask(deleteTarget.id);
+      setLoadedTasks((current) => current.filter((task) => task.id !== deleteTarget.id));
+      setReadFinalCounts((current) => { const next = { ...current }; delete next[deleteTarget.id]; return next; });
+      if (taskId === deleteTarget.id) navigate('/tasks');
+      setDeleteTarget(undefined);
+    } catch (value) {
+      setDeleteError(value instanceof Error ? value.message : 'Không thể xóa đoạn trò chuyện.');
+    } finally {
+      setDeleting(false);
+    }
+  }, [deleteTarget, navigate, taskId]);
 
   const tasks = useMemo(() => [...loadedTasks]
     .sort((a, b) => Date.parse(b.updatedAtUtc) - Date.parse(a.updatedAtUtc))
@@ -121,18 +150,28 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
     </header>
 
     <div className="task-rail-body">
-      <div className="task-rail-section-label"><span>Đoạn trò chuyện</span><small>{tasks.length}</small></div>
+      <div className="task-rail-section-label"><span>Đoạn trò chuyện</span></div>
       <div className="task-rail-list" onScroll={(event) => {
         const target = event.currentTarget;
         if (target.scrollHeight - target.scrollTop - target.clientHeight < 180) void loadMore();
       }}>
         {loading ? <Loading label="Loading tasks" /> : error && !tasks.length ? <ErrorState message={error} retry={() => void applyFirstPage()} /> : !tasks.length ? <Empty title="Chưa có đoạn trò chuyện" body="Đoạn trò chuyện từ Agent sẽ xuất hiện tại đây." /> : <>
-          {tasks.map((task) => <TaskRailRow task={task} selected={task.id === taskId} unread={Math.max(0, (task.finalResponseCount ?? 0) - (readFinalCounts[task.id] ?? 0))} key={task.id} />)}
+          {tasks.map((task) => <TaskRailRow task={task} selected={task.id === taskId} unread={Math.max(0, (task.finalResponseCount ?? 0) - (readFinalCounts[task.id] ?? 0))} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ task, x: Math.min(event.clientX, window.innerWidth - 236), y: Math.min(event.clientY, window.innerHeight - 108) }); }} key={task.id} />)}
           {loadingMore && <div className="task-rail-load-more" role="status"><LoaderCircle className="spin" /><span>Đang tải thêm…</span></div>}
           {error && <button className="task-rail-load-retry" type="button" onClick={() => void loadMore()}>Tải lại</button>}
         </>}
       </div>
     </div>
+
+    {contextMenu && <div className="task-context-menu" role="menu" style={{ left: contextMenu.x, top: contextMenu.y }} onPointerDown={(event) => event.stopPropagation()}>
+      <button type="button" role="menuitem" className="danger" disabled={!canDeleteTask(contextMenu.task)} onClick={() => { setDeleteError(''); setDeleteTarget(contextMenu.task); setContextMenu(undefined); }}><Trash2 /><span>Xóa đoạn trò chuyện</span></button>
+      {!canDeleteTask(contextMenu.task) && <small>Chỉ xóa được khi task đã kết thúc.</small>}
+    </div>}
+    {deleteTarget && <Modal title="Xóa đoạn trò chuyện?" description={conversationName(deleteTarget)} close={() => !deleting && setDeleteTarget(undefined)} dangerous>
+      <div className="task-delete-warning"><AlertTriangle /><div><strong>Cảnh báo</strong><p>Khi xóa, đoạn trò chuyện này và dữ liệu liên kết sẽ bị gỡ khỏi danh sách. Cuộc trò chuyện này có thể không hoạt động lại trong tương lai.</p></div></div>
+      {deleteError && <p className="task-delete-error" role="alert">{deleteError}</p>}
+      <div className="modal-actions"><button className="button secondary" type="button" disabled={deleting} onClick={() => setDeleteTarget(undefined)}>Hủy</button><button className="button danger" type="button" disabled={deleting} onClick={() => void deleteConversation()}>{deleting ? 'Đang xóa…' : 'Xóa đoạn trò chuyện'}</button></div>
+    </Modal>}
 
     <footer className="task-rail-footer">
       {menuOpen && <nav className="task-rail-account-menu" aria-label="Application navigation">{menuItems.map(({ to, end, label, icon: Icon }) => <NavLink to={to} end={end} key={to}><Icon /><span>{label}</span></NavLink>)}</nav>}
@@ -145,9 +184,9 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
   </aside>;
 }
 
-function TaskRailRow({ task, selected, unread }: { task: Task; selected: boolean; unread: number }) {
+function TaskRailRow({ task, selected, unread, onContextMenu }: { task: Task; selected: boolean; unread: number; onContextMenu: MouseEventHandler<HTMLAnchorElement> }) {
   const running = task.status === 'running';
-  return <Link className={`tasks-conversation-row ${selected ? 'selected' : ''} ${unread > 0 ? 'unread' : ''}`} aria-current={selected ? 'page' : undefined} to={`/tasks/${encodeURIComponent(task.id)}`}>
+  return <Link className={`tasks-conversation-row ${selected ? 'selected' : ''} ${unread > 0 ? 'unread' : ''}`} aria-current={selected ? 'page' : undefined} to={`/tasks/${encodeURIComponent(task.id)}`} onContextMenu={onContextMenu}>
     <span className="tasks-conversation-copy">
       <span className="tasks-conversation-title-row"><strong>{conversationName(task)}</strong>{unread > 0 && <span className="task-unread-badge" aria-label={`${unread} phản hồi mới chưa đọc`}>{unread > 99 ? '99+' : unread}</span>}</span>
       <small>{task.outputPreview || `${task.turnCount ?? 0} lượt Agent`}</small>
@@ -164,6 +203,8 @@ function mergeTasks(first: Task[], second: Task[]) {
   for (const task of [...first, ...second]) if (!merged.has(task.id)) merged.set(task.id, task);
   return [...merged.values()];
 }
+
+function canDeleteTask(task: Task) { return ['completed', 'failed', 'stopped', 'interrupted'].includes(task.status); }
 
 function taskStatusLabel(status: string) {
   if (status === 'running') return 'Đang xử lý';

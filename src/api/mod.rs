@@ -6,6 +6,7 @@ mod settings;
 mod skills;
 mod subagents;
 mod task_controls;
+mod task_delete;
 
 use agents::*;
 use chatgpt::*;
@@ -14,6 +15,7 @@ use settings::*;
 use skills::*;
 use subagents::*;
 use task_controls::*;
+use task_delete::*;
 
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -26,8 +28,8 @@ use axum::{
     routing::{get, patch, post},
 };
 use chatcmd_core::{
-    AgentId, McpAgent, McpAgentStore, NewMcpAgent, Setting, SettingsStore, TaskId, TaskStore,
-    ToolCapability, ToolCatalogStore,
+    AgentId, McpAgent, McpAgentStore, NewMcpAgent, Setting, SettingsStore, TaskId, TaskStatus,
+    TaskStore, ToolCapability, ToolCatalogStore,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -56,7 +58,7 @@ pub(crate) fn router() -> Router<Arc<AppState>> {
         .route("/chatgpt/bridge/{request_id}/started", post(bridge_started))
         .route("/chatgpt/bridge/{request_id}/result", post(bridge_result))
         .route("/tasks", get(tasks))
-        .route("/tasks/{id}", get(task))
+        .route("/tasks/{id}", get(task).delete(delete_task))
         .route(
             "/tasks/{id}/command-execution-mode",
             get(task_execution_mode).put(set_task_execution_mode),
