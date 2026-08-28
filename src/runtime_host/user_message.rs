@@ -4,6 +4,7 @@ use chatcmd_core::{
 };
 use chatcmd_runtime::{OperationContext, RuntimeError, RuntimeResult};
 use serde_json::{Value, json};
+use std::{collections::BTreeSet, path::PathBuf};
 use uuid::Uuid;
 
 use super::{RuntimeHost, invalid, now_ms, storage_error};
@@ -31,6 +32,49 @@ impl RuntimeHost {
                 "call agent_user_message first with the exact current user message and the same turnId before using any other ChatCMD tool",
             ))
         }
+    }
+
+    pub(super) async fn task_user_path_scopes(
+        &self,
+        context: &OperationContext,
+    ) -> RuntimeResult<Vec<PathBuf>> {
+        let Some(task_id) = context
+            .task_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+        else {
+            return Ok(Vec::new());
+        };
+        let task_id = TaskId::new(task_id).map_err(|error| invalid("taskId", error))?;
+        let payloads = sqlx::query_scalar::<_, String>(
+            "SELECT payload_json FROM timeline_events WHERE task_id=? AND actor='user' AND kind='message' ORDER BY created_at_ms,event_id",
+        )
+        .bind(task_id.as_str())
+        .fetch_all(self.repository.pool())
+        .await
+        .map_err(|_| RuntimeError::new("storage_error", "user path grants unavailable"))?;
+        let mut scopes = BTreeSet::new();
+        for payload in payloads {
+            let content = serde_json::from_str::<Value>(&payload)
+                .ok()
+                .and_then(|value| {
+                    value
+                        .get("content")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned)
+                })
+                .unwrap_or_default();
+            for path in extract_explicit_absolute_paths(&content) {
+                scopes.insert(path);
+                if scopes.len() >= 32 {
+                    break;
+                }
+            }
+            if scopes.len() >= 32 {
+                break;
+            }
+        }
+        Ok(scopes.into_iter().collect())
     }
 
     pub(super) async fn save_user_message(
@@ -190,6 +234,52 @@ fn safe_id(prefix: &str, agent_id: &str, scope: &str) -> String {
         "{prefix}-{}",
         Uuid::new_v5(&Uuid::NAMESPACE_OID, material.as_bytes())
     )
+}
+
+fn extract_explicit_absolute_paths(content: &str) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    let mut quoted = None::<(char, usize)>;
+    for (index, ch) in content.char_indices() {
+        if matches!(ch, '`' | '"' | '\'') {
+            if let Some((delimiter, start)) = quoted {
+                if delimiter == ch {
+                    candidates.push(&content[start..index]);
+                    quoted = None;
+                }
+            } else {
+                quoted = Some((ch, index + ch.len_utf8()));
+            }
+        }
+    }
+    candidates.extend(content.split_whitespace());
+
+    let mut unique = BTreeSet::new();
+    for candidate in candidates {
+        let cleaned = candidate.trim_matches(|ch: char| {
+            matches!(
+                ch,
+                '`' | '"' | '\'' | ',' | ';' | ':' | '(' | ')' | '[' | ']' | '{' | '}'
+            )
+        });
+        if cleaned.is_empty() {
+            continue;
+        }
+        let path = PathBuf::from(cleaned);
+        if !path.is_absolute() || !path.exists() {
+            continue;
+        }
+        let Ok(canonical) = path.canonicalize() else {
+            continue;
+        };
+        if canonical.parent().is_none() {
+            continue;
+        }
+        unique.insert(canonical);
+        if unique.len() >= 16 {
+            break;
+        }
+    }
+    unique.into_iter().collect()
 }
 
 fn same_user_message(payload_json: &str, content: &str) -> bool {

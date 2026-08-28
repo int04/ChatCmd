@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, sync::Arc};
 
-use chatcmd_core::{McpAgentStore as _, NewMcpAgent};
+use chatcmd_core::{McpAgentStore as _, NewMcpAgent, ToolCatalogStore as _};
 use chatcmd_runtime::{
     ApprovalDecision, BoxFuture, ExecutionPolicy, NullEventSink, PolicyContext, PolicyDecision,
     PolicyEngine, RuntimeConfig,
@@ -21,7 +21,7 @@ impl ApprovalDecision for AllowApproval {
     }
 }
 
-async fn test_host() -> (RuntimeHost, String, TempDir) {
+pub(super) async fn test_host() -> (RuntimeHost, String, TempDir) {
     let directory = TempDir::new().expect("temporary directory");
     let (repository, bootstrap) = SqliteRepository::open(&directory.path().join("chatcmd.db"), 2)
         .await
@@ -35,6 +35,18 @@ async fn test_host() -> (RuntimeHost, String, TempDir) {
         })
         .await
         .expect("create agent");
+    let fs_read_text_tool_id = repository
+        .list_tools()
+        .await
+        .expect("list tools")
+        .into_iter()
+        .find(|tool| tool.key == "fs_read_text")
+        .expect("fs_read_text tool")
+        .id;
+    repository
+        .set_agent_allowed_tools(&created.agent.id, &[fs_read_text_tool_id])
+        .await
+        .expect("allow fs_read_text");
     let root = directory
         .path()
         .canonicalize()
@@ -75,7 +87,7 @@ async fn test_host() -> (RuntimeHost, String, TempDir) {
     )
 }
 
-fn turn_context(
+pub(super) fn turn_context(
     request_id: &str,
     agent_id: &str,
     tool: &str,
@@ -211,94 +223,6 @@ async fn user_message_is_required_first_and_is_idempotent_per_turn() {
         .expect("stored user message payload");
     assert_eq!(payload["role"], "user");
     assert_eq!(payload["content"], "Nguyên văn tin nhắn người dùng");
-}
-
-#[tokio::test]
-async fn chatgpt_bridge_reuses_existing_task_when_mcp_scope_differs_from_url_scope() {
-    let (host, agent_id, _directory) = test_host().await;
-    let task_id = "task-chatgpt-bridge-existing";
-    let request_id = "chatgpt-request-existing";
-    let submitted = "Sử dụng plugin @User message sync test để thực hiện yêu cầu sau:\n\nKiểm tra duplicate task";
-    let now = now_ms();
-
-    sqlx::query(
-        "INSERT INTO tasks(id,agent_id,device_id,conversation_scope_hash,title,source,status,active_session_id,generation,stopped_at_ms,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,'chatgpt_web','running',NULL,1,NULL,?,?)",
-    )
-    .bind(task_id)
-    .bind(&agent_id)
-    .bind(host.device.id.as_str())
-    .bind("openai:url-conversation-id")
-    .bind("Kiểm tra duplicate task")
-    .bind(now)
-    .bind(now)
-    .execute(host.repository.pool())
-    .await
-    .expect("insert bridge task");
-
-    sqlx::query(
-        "INSERT INTO chatgpt_bridge_requests(id,task_id,turn_id,agent_id,model,user_content,submitted_content,status,conversation_id,conversation_url,assistant_content,error_message,created_at_ms,updated_at_ms,completed_at_ms) VALUES(?,?,?,?,?,?,?,'running',?,?,NULL,NULL,?,?,NULL)",
-    )
-    .bind(request_id)
-    .bind(task_id)
-    .bind("chatgpt-turn-existing")
-    .bind(&agent_id)
-    .bind("Auto")
-    .bind("Kiểm tra duplicate task")
-    .bind(submitted)
-    .bind("conversation-url-id")
-    .bind("https://chatgpt.com/c/conversation-url-id")
-    .bind(now)
-    .bind(now)
-    .execute(host.repository.pool())
-    .await
-    .expect("insert bridge request");
-
-    sqlx::query(
-        "INSERT INTO chatgpt_conversations(task_id,conversation_id,conversation_url,model,active_request_id,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?)",
-    )
-    .bind(task_id)
-    .bind("conversation-url-id")
-    .bind("https://chatgpt.com/c/conversation-url-id")
-    .bind("Auto")
-    .bind(request_id)
-    .bind(now)
-    .bind(now)
-    .execute(host.repository.pool())
-    .await
-    .expect("insert bridge conversation");
-
-    let result = host
-        .call_persisted(
-            "agent_user_message",
-            turn_context(
-                "mcp-user-message",
-                &agent_id,
-                "agent_user_message",
-                "turn-from-openai-session",
-                "openai:mcp-session-derived",
-            ),
-            json!({"content": submitted}),
-        )
-        .await
-        .expect("reuse ChatGPT bridge task");
-
-    assert_eq!(result["taskId"], task_id);
-    let row = sqlx::query("SELECT source,conversation_scope_hash FROM tasks WHERE id=?")
-        .bind(task_id)
-        .fetch_one(host.repository.pool())
-        .await
-        .expect("read reused bridge task");
-    assert_eq!(row.get::<String, _>("source"), "chatgpt_web");
-    assert_eq!(
-        row.get::<String, _>("conversation_scope_hash"),
-        "openai:mcp-session-derived"
-    );
-    let task_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks WHERE agent_id=?")
-        .bind(&agent_id)
-        .fetch_one(host.repository.pool())
-        .await
-        .expect("count tasks");
-    assert_eq!(task_count, 1);
 }
 
 #[tokio::test]

@@ -299,6 +299,9 @@ pub struct TextReadResult {
     pub path: PathBuf,
     pub content: String,
     pub truncated: bool,
+    pub start_line: usize,
+    pub end_line: usize,
+    pub total_lines: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

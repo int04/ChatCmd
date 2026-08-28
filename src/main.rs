@@ -12,7 +12,8 @@ use std::{
 use anyhow::{Context, Result, bail};
 use axum::{Router, routing::get};
 use chatcmd_core::{
-    PolicyLookup, ToolCapability, ToolCatalogStore, ToolDefinition, ToolGroup, ToolPreset,
+    McpAgentStore, PolicyLookup, ToolCapability, ToolCatalogStore, ToolDefinition, ToolGroup,
+    ToolPreset,
 };
 use chatcmd_mcp::{AuthProvider, HttpSecurity, McpServer, OriginPolicy};
 use chatcmd_runtime::{
@@ -204,7 +205,7 @@ async fn seed_catalog(repository: &SqliteRepository) -> Result<(), chatcmd_core:
             .contains(name)
             {
                 vec![ToolCapability::Destructive]
-            } else if name.starts_with("fs_write") {
+            } else if name.starts_with("fs_write") || *name == "fs_replace_text" {
                 vec![ToolCapability::Write]
             } else {
                 vec![ToolCapability::Read]
@@ -224,7 +225,22 @@ async fn seed_catalog(repository: &SqliteRepository) -> Result<(), chatcmd_core:
         description: "All non-destructive local tools".to_owned(),
         tool_ids: safe_ids,
     }];
-    repository.replace_catalog(&groups, &tools, &presets).await
+    repository
+        .replace_catalog(&groups, &tools, &presets)
+        .await?;
+
+    let write_id = seeded_tool_id("fs_write_text");
+    let replace_id = seeded_tool_id("fs_replace_text");
+    for agent in repository.list_agents().await? {
+        let mut allowed = repository.agent_allowed_tool_ids(&agent.id).await?;
+        if allowed.contains(&write_id) && !allowed.contains(&replace_id) {
+            allowed.push(replace_id.clone());
+            repository
+                .set_agent_allowed_tools(&agent.id, &allowed)
+                .await?;
+        }
+    }
+    Ok(())
 }
 
 fn tool_group(id: &str, key: &str, display_name: &str, sort_order: i32) -> ToolGroup {

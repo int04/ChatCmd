@@ -2,16 +2,18 @@ use crate::{
     FsEntry, OperationContext, PolicyContext, PolicyEngine, RuntimeError, RuntimeResult,
     TextReadResult,
 };
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::{
     fs,
-    io::Write,
     path::{Path, PathBuf},
 };
+
+#[path = "filesystem_mutations.rs"]
+mod mutations;
 
 #[derive(Clone)]
 pub struct WorkspaceService {
     roots: Vec<PathBuf>,
+    allowed_scopes: Vec<PathBuf>,
     policy: PolicyEngine,
 }
 
@@ -31,7 +33,8 @@ impl WorkspaceService {
         canonical.sort();
         canonical.dedup();
         Ok(Self {
-            roots: canonical,
+            roots: canonical.clone(),
+            allowed_scopes: canonical,
             policy,
         })
     }
@@ -39,6 +42,33 @@ impl WorkspaceService {
     #[must_use]
     pub fn roots(&self) -> &[PathBuf] {
         &self.roots
+    }
+
+    pub fn with_additional_scopes(&self, scopes: &[PathBuf]) -> RuntimeResult<Self> {
+        let mut allowed_scopes = self.allowed_scopes.clone();
+        for scope in scopes {
+            if !scope.is_absolute() {
+                return Err(RuntimeError::new(
+                    "invalid_path_scope",
+                    "temporary filesystem scopes must be absolute",
+                ));
+            }
+            let resolved = scope.canonicalize().map_err(io_error)?;
+            if resolved.parent().is_none() {
+                return Err(RuntimeError::new(
+                    "path_scope_too_broad",
+                    "temporary filesystem scope cannot be a filesystem root",
+                ));
+            }
+            allowed_scopes.push(resolved);
+        }
+        allowed_scopes.sort();
+        allowed_scopes.dedup();
+        Ok(Self {
+            roots: self.roots.clone(),
+            allowed_scopes,
+            policy: self.policy.clone(),
+        })
     }
 
     pub async fn list(
@@ -113,204 +143,105 @@ impl WorkspaceService {
         path: &Path,
         max_characters: usize,
     ) -> RuntimeResult<TextReadResult> {
+        self.read_text_range(path, max_characters, 1, None).await
+    }
+
+    pub async fn read_text_range(
+        &self,
+        path: &Path,
+        max_characters: usize,
+        start_line: usize,
+        line_count: Option<usize>,
+    ) -> RuntimeResult<TextReadResult> {
+        if start_line == 0 {
+            return Err(RuntimeError::new(
+                "invalid_line_range",
+                "startLine must be at least 1",
+            ));
+        }
+        if line_count == Some(0) {
+            return Err(RuntimeError::new(
+                "invalid_line_range",
+                "lineCount must be at least 1 when provided",
+            ));
+        }
         let resolved = self.existing(path)?;
         let bytes = tokio::fs::read(&resolved).await.map_err(io_error)?;
         let content = String::from_utf8(bytes)
             .map_err(|_| RuntimeError::new("invalid_utf8", "file is not valid UTF-8"))?;
+        let total_lines = content.lines().count();
         let limit = max_characters.clamp(1, 1_000_000);
-        let truncated = content.chars().count() > limit;
+        if start_line == 1 && line_count.is_none() {
+            let truncated = content.chars().count() > limit;
+            return Ok(TextReadResult {
+                path: resolved,
+                content: content.chars().take(limit).collect(),
+                truncated,
+                start_line: 1,
+                end_line: total_lines,
+                total_lines,
+            });
+        }
+        let lines: Vec<&str> = content.lines().collect();
+        let selected = lines
+            .iter()
+            .skip(start_line.saturating_sub(1))
+            .take(line_count.unwrap_or(usize::MAX))
+            .copied()
+            .collect::<Vec<_>>();
+        let selected_content = selected.join("\n");
+        let end_line = if selected.is_empty() {
+            start_line.saturating_sub(1)
+        } else {
+            start_line + selected.len() - 1
+        };
+        let character_truncated = selected_content.chars().count() > limit;
+        let line_truncated = end_line < total_lines;
         Ok(TextReadResult {
             path: resolved,
-            content: content.chars().take(limit).collect(),
-            truncated,
+            content: selected_content.chars().take(limit).collect(),
+            truncated: character_truncated || line_truncated,
+            start_line,
+            end_line,
+            total_lines,
         })
     }
 
-    pub async fn write_text(
+    pub async fn replace_text(
         &self,
         context: &OperationContext,
         path: &Path,
-        content: &str,
-        overwrite: bool,
+        old_text: &str,
+        new_text: &str,
+        expected_occurrences: usize,
     ) -> RuntimeResult<FsEntry> {
-        self.write_bytes(context, path, content.as_bytes(), overwrite)
-            .await
-    }
-
-    pub async fn write_raw(
-        &self,
-        context: &OperationContext,
-        path: &Path,
-        base64: &str,
-        overwrite: bool,
-    ) -> RuntimeResult<FsEntry> {
-        let bytes = STANDARD.decode(base64).map_err(|_| {
-            RuntimeError::new("invalid_base64", "raw file content is not valid Base64")
-        })?;
-        self.write_bytes(context, path, &bytes, overwrite).await
-    }
-
-    async fn write_bytes(
-        &self,
-        context: &OperationContext,
-        path: &Path,
-        bytes: &[u8],
-        overwrite: bool,
-    ) -> RuntimeResult<FsEntry> {
-        let target = self.creation(path)?;
-        self.policy
-            .authorize(&PolicyContext {
-                agent_id: context.agent_id.clone(),
-                tool_name: context.tool_name.clone(),
-                root: self.containing_root(&target),
-                destructive: target.exists() && overwrite,
-            })
-            .await?;
-        if target.exists() && !overwrite {
+        if old_text.is_empty() {
             return Err(RuntimeError::new(
-                "already_exists",
-                "destination exists and overwrite is false",
+                "invalid_text_replacement",
+                "oldText cannot be empty",
             ));
         }
-        let parent = target
-            .parent()
-            .ok_or_else(|| RuntimeError::new("invalid_path", "destination has no parent"))?
-            .to_path_buf();
-        let target_clone = target.clone();
-        let bytes = bytes.to_vec();
-        tokio::task::spawn_blocking(move || -> RuntimeResult<()> {
-            let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(io_error)?;
-            temporary.write_all(&bytes).map_err(io_error)?;
-            temporary.flush().map_err(io_error)?;
-            if overwrite && target_clone.exists() {
-                fs::remove_file(&target_clone).map_err(io_error)?;
-            }
-            temporary
-                .persist(&target_clone)
-                .map_err(|error| io_error(error.error))?;
-            Ok(())
-        })
-        .await
-        .map_err(join_error)??;
-        self.stat(&target).await
-    }
-
-    pub async fn create_directory(&self, path: &Path) -> RuntimeResult<FsEntry> {
-        let target = self.creation(path)?;
-        tokio::fs::create_dir_all(&target).await.map_err(io_error)?;
-        self.stat(&target).await
-    }
-
-    pub async fn copy(
-        &self,
-        context: &OperationContext,
-        source: &Path,
-        destination: &Path,
-        overwrite: bool,
-    ) -> RuntimeResult<FsEntry> {
-        let source = self.existing(source)?;
-        let destination = self.creation(destination)?;
-        self.policy
-            .authorize(&PolicyContext {
-                agent_id: context.agent_id.clone(),
-                tool_name: "fs_copy".into(),
-                root: self.containing_root(&destination),
-                destructive: overwrite,
-            })
-            .await?;
-        if destination.exists() && !overwrite {
+        if expected_occurrences == 0 {
             return Err(RuntimeError::new(
-                "already_exists",
-                "destination exists and overwrite is false",
+                "invalid_text_replacement",
+                "expectedOccurrences must be at least 1",
             ));
         }
-        let source_clone = source.clone();
-        let destination_clone = destination.clone();
-        tokio::task::spawn_blocking(move || {
-            copy_recursive(&source_clone, &destination_clone, overwrite)
-        })
-        .await
-        .map_err(join_error)??;
-        self.stat(&destination).await
-    }
-
-    pub async fn move_path(
-        &self,
-        context: &OperationContext,
-        source: &Path,
-        destination: &Path,
-        overwrite: bool,
-    ) -> RuntimeResult<FsEntry> {
-        let source = self.existing(source)?;
-        let destination = self.creation(destination)?;
-        self.policy
-            .authorize(&PolicyContext {
-                agent_id: context.agent_id.clone(),
-                tool_name: "fs_move".into(),
-                root: self.containing_root(&source),
-                destructive: true,
-            })
-            .await?;
-        if destination.exists() {
-            if !overwrite {
-                return Err(RuntimeError::new(
-                    "already_exists",
-                    "destination exists and overwrite is false",
-                ));
-            }
-            remove_recursive(&destination)?;
-        }
-        match tokio::fs::rename(&source, &destination).await {
-            Ok(()) => {}
-            Err(_) => {
-                let source_clone = source.clone();
-                let destination_clone = destination.clone();
-                tokio::task::spawn_blocking(move || -> RuntimeResult<()> {
-                    copy_recursive(&source_clone, &destination_clone, true)?;
-                    remove_recursive(&source_clone)
-                })
-                .await
-                .map_err(join_error)??;
-            }
-        }
-        self.stat(&destination).await
-    }
-
-    pub async fn delete(
-        &self,
-        context: &OperationContext,
-        path: &Path,
-        recursive: bool,
-    ) -> RuntimeResult<bool> {
         let resolved = self.existing(path)?;
-        if self.roots.contains(&resolved) {
+        let content = tokio::fs::read_to_string(&resolved)
+            .await
+            .map_err(io_error)?;
+        let occurrences = content.matches(old_text).count();
+        if occurrences != expected_occurrences {
             return Err(RuntimeError::new(
-                "root_path_rejected",
-                "configured workspace roots cannot be deleted",
+                "text_match_count_mismatch",
+                format!(
+                    "expected {expected_occurrences} occurrence(s) of oldText but found {occurrences}"
+                ),
             ));
         }
-        self.policy
-            .authorize(&PolicyContext {
-                agent_id: context.agent_id.clone(),
-                tool_name: "fs_delete".into(),
-                root: self.containing_root(&resolved),
-                destructive: true,
-            })
-            .await?;
-        tokio::task::spawn_blocking(move || -> RuntimeResult<bool> {
-            if resolved.is_dir() {
-                if recursive {
-                    fs::remove_dir_all(resolved).map_err(io_error)?;
-                } else {
-                    fs::remove_dir(resolved).map_err(io_error)?;
-                }
-            } else {
-                fs::remove_file(resolved).map_err(io_error)?;
-            }
-            Ok(true)
-        })
-        .await
-        .map_err(join_error)?
+        let updated = content.replace(old_text, new_text);
+        self.write_text(context, &resolved, &updated, true).await
     }
 
     pub async fn find(
@@ -418,19 +349,24 @@ impl WorkspaceService {
         ))
     }
     fn ensure_allowed(&self, path: &Path) -> RuntimeResult<()> {
-        if self.roots.iter().any(|root| path.starts_with(root)) {
+        if self
+            .allowed_scopes
+            .iter()
+            .any(|scope| path.starts_with(scope))
+        {
             Ok(())
         } else {
             Err(RuntimeError::new(
                 "path_outside_allowed_scope",
-                "path escapes configured workspace roots",
+                "path escapes configured workspace roots and user-provided task path grants",
             ))
         }
     }
     fn containing_root(&self, path: &Path) -> Option<PathBuf> {
-        self.roots
+        self.allowed_scopes
             .iter()
-            .find(|root| path.starts_with(root))
+            .filter(|scope| path.starts_with(scope))
+            .max_by_key(|scope| scope.components().count())
             .cloned()
     }
 }

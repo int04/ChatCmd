@@ -287,6 +287,7 @@ export function activityCodeView(activity: ToolActivity) {
     return { code: output, path: stringValue(outputObject.path) || stringValue(input.path) || null, startLine: Number(outputObject.startLine) || Number(input.startLine) || 1 };
   }
   if (activity.tool === 'fs_write_text' && stringValue(input.content)) return { code: stringValue(input.content), path: stringValue(input.path) || null, startLine: 1 };
+  if (activity.tool === 'fs_replace_text' && stringValue(input.newText)) return { code: stringValue(input.newText), path: stringValue(input.path) || null, startLine: 1 };
   if (activity.tool === 'apply_patch' && stringValue(input.patch)) return { code: stringValue(input.patch), language: 'diff', startLine: 1 };
   return null;
 }
@@ -385,7 +386,7 @@ function isHousekeepingTool(tool: string) { return ['agent_user_message', 'agent
 function toolKind(tool: string): ActivityKind {
   if (/^(?:fs_read_text|fs_list|fs_stat|fs_directory_sizes|view_image|file_download|skill_read)$/i.test(tool)) return 'read';
   if (tool === 'fs_search' || tool === 'fs_find') return 'search';
-  if (/^(?:apply_patch|fs_write_text|file_upload)$/i.test(tool)) return 'edit';
+  if (/^(?:apply_patch|fs_write_text|fs_replace_text|file_upload)$/i.test(tool)) return 'edit';
   if (tool === 'fs_create_directory') return 'create';
   if (/^(?:file_delete|empty_directory_delete|workspace_temp_cleanup|fs_delete)$/i.test(tool)) return 'delete';
   if (tool === 'fs_copy') return 'copy';

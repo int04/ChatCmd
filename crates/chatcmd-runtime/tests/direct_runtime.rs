@@ -184,6 +184,98 @@ async fn cancellation_and_session_backpressure_are_explicit() {
 }
 
 #[tokio::test]
+async fn shell_user_granted_scope_allows_external_working_directory() {
+    let workspace = tempfile::tempdir().expect("workspace directory");
+    let external = tempfile::tempdir().expect("external directory");
+    let runtime = runtime(workspace.path().to_path_buf(), 2);
+
+    let denied = runtime
+        .create(
+            &OperationContext::new("external-denied", "agent", "shell_create"),
+            create_request(external.path().to_path_buf(), "external-denied"),
+        )
+        .await
+        .expect_err("external cwd must be denied without user grant");
+    assert_eq!(denied.code, "path_outside_allowed_scope");
+
+    let granted_scope = external
+        .path()
+        .canonicalize()
+        .expect("canonical external scope");
+    let created = runtime
+        .create_with_additional_scopes(
+            &OperationContext::new("external-granted", "agent", "shell_create"),
+            create_request(external.path().to_path_buf(), "external-granted"),
+            std::slice::from_ref(&granted_scope),
+        )
+        .await
+        .expect("user-granted external cwd");
+    assert_eq!(created.initial_working_directory, granted_scope);
+
+    runtime
+        .close(
+            &OperationContext::new("external-close", "agent", "shell_close"),
+            &created.session_id,
+            true,
+        )
+        .await
+        .expect("close granted shell");
+}
+
+#[tokio::test]
+async fn workspace_reads_line_ranges_and_replaces_text_exactly() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let workspace =
+        WorkspaceService::new(&[directory.path().to_path_buf()], policy()).expect("workspace");
+    let file = directory.path().join("sample.txt");
+    std::fs::write(&file, "one\ntwo\nthree\nfour\n").expect("write sample");
+
+    let full = workspace
+        .read_text(&file, 1_000)
+        .await
+        .expect("read full text");
+    assert_eq!(full.content, "one\ntwo\nthree\nfour\n");
+    assert!(!full.truncated);
+
+    let range = workspace
+        .read_text_range(&file, 1_000, 2, Some(2))
+        .await
+        .expect("read line range");
+    assert_eq!(range.content, "two\nthree");
+    assert_eq!(range.start_line, 2);
+    assert_eq!(range.end_line, 3);
+    assert_eq!(range.total_lines, 4);
+    assert!(range.truncated);
+
+    workspace
+        .replace_text(
+            &OperationContext::new("replace", "agent", "fs_replace_text"),
+            &file,
+            "two",
+            "TWO",
+            1,
+        )
+        .await
+        .expect("replace exact text");
+    assert_eq!(
+        std::fs::read_to_string(&file).expect("read replaced file"),
+        "one\nTWO\nthree\nfour\n"
+    );
+
+    let ambiguous = workspace
+        .replace_text(
+            &OperationContext::new("replace-ambiguous", "agent", "fs_replace_text"),
+            &file,
+            "e",
+            "E",
+            1,
+        )
+        .await
+        .expect_err("mismatched occurrence count must fail");
+    assert_eq!(ambiguous.code, "text_match_count_mismatch");
+}
+
+#[tokio::test]
 async fn workspace_traversal_is_denied() {
     let directory = tempfile::tempdir().expect("temp directory");
     let workspace =

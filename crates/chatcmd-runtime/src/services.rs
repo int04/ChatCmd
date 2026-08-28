@@ -24,6 +24,15 @@ impl GitService {
             max_characters: max_characters.max(1024),
         }
     }
+
+    #[must_use]
+    pub fn with_workspace(&self, workspace: WorkspaceService) -> Self {
+        Self {
+            workspace,
+            max_characters: self.max_characters,
+        }
+    }
+
     pub async fn status(&self, cwd: &Path) -> RuntimeResult<CommandOutput> {
         self.run(cwd, &["status", "--short", "--branch"]).await
     }

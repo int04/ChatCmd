@@ -1,4 +1,4 @@
-use std::time::Duration;
+﻿use std::time::Duration;
 
 use chatcmd_core::{
     ArtifactId, ArtifactStore, ExecutionMode, TaskExecutionMode, TaskId, TaskStore,
@@ -13,27 +13,6 @@ use super::inputs::*;
 use super::{RuntimeHost, invalid, now_ms, parse, storage_error, task_json, value};
 
 impl RuntimeHost {
-    async fn resolve_git_cwd(
-        &self,
-        context: &OperationContext,
-        explicit: Option<std::path::PathBuf>,
-    ) -> RuntimeResult<std::path::PathBuf> {
-        if let Some(cwd) = explicit {
-            return Ok(cwd);
-        }
-        if let Some(project_folder) =
-            <Self as chatcmd_mcp::RuntimeApi>::project_folder(self, &context.agent_id).await?
-        {
-            return Ok(project_folder.into());
-        }
-        self.workspace.roots().first().cloned().ok_or_else(|| {
-            RuntimeError::new(
-                "workspace_not_configured",
-                "git cwd was omitted and no project folder or workspace root is configured",
-            )
-        })
-    }
-
     pub(super) async fn authorize_tool(&self, agent_id: &str, tool: &str) -> RuntimeResult<()> {
         use chatcmd_core::{McpAgentStore as _, ToolCatalogStore as _};
 
@@ -79,6 +58,23 @@ impl RuntimeHost {
         context: OperationContext,
         arguments: Value,
     ) -> RuntimeResult<Value> {
+        let user_path_scopes =
+            if tool.starts_with("fs_") || tool.starts_with("git_") || tool == "shell_create" {
+                self.task_user_path_scopes(&context).await?
+            } else {
+                Vec::new()
+            };
+        let scoped_workspace = if tool.starts_with("fs_") || tool.starts_with("git_") {
+            Some(self.workspace.with_additional_scopes(&user_path_scopes)?)
+        } else {
+            None
+        };
+        let workspace = scoped_workspace.as_ref().unwrap_or(&self.workspace);
+        let scoped_git = scoped_workspace
+            .clone()
+            .map(|workspace| self.git.with_workspace(workspace));
+        let git = scoped_git.as_ref().unwrap_or(&self.git);
+
         match tool {
             "device_list" => value(vec![self.local_device()]),
             "device_get" => {
@@ -95,7 +91,7 @@ impl RuntimeHost {
                 let input: ShellCreate = parse(arguments)?;
                 let info = self
                     .shell
-                    .create(
+                    .create_with_additional_scopes(
                         &context,
                         ShellCreateRequest {
                             request_id: context.request_id.clone(),
@@ -106,6 +102,7 @@ impl RuntimeHost {
                             columns: input.columns,
                             rows: input.rows,
                         },
+                        &user_path_scopes,
                     )
                     .await?;
                 self.persist_shell_session(&context, &info).await?;
@@ -188,7 +185,7 @@ impl RuntimeHost {
             "fs_list" => {
                 let input: ListInput = parse(arguments)?;
                 value(
-                    self.workspace
+                    workspace
                         .list(&input.path, input.offset, input.limit)
                         .await?,
                 )
@@ -196,7 +193,7 @@ impl RuntimeHost {
             "fs_search" => {
                 let input: SearchInput = parse(arguments)?;
                 value(
-                    self.workspace
+                    workspace
                         .search(
                             &input.path,
                             &input.query,
@@ -210,7 +207,7 @@ impl RuntimeHost {
             "fs_find" => {
                 let input: FindInput = parse(arguments)?;
                 value(
-                    self.workspace
+                    workspace
                         .find(
                             &input.path,
                             &input.pattern,
@@ -223,39 +220,58 @@ impl RuntimeHost {
             "fs_read_text" => {
                 let input: ReadInput = parse(arguments)?;
                 value(
-                    self.workspace
-                        .read_text(&input.path, input.max_characters)
+                    workspace
+                        .read_text_range(
+                            &input.path,
+                            input.max_characters,
+                            input.start_line,
+                            input.line_count,
+                        )
                         .await?,
                 )
             }
             "fs_write_text" => {
                 let input: WriteTextInput = parse(arguments)?;
                 value(
-                    self.workspace
+                    workspace
                         .write_text(&context, &input.path, &input.content, input.overwrite)
+                        .await?,
+                )
+            }
+            "fs_replace_text" => {
+                let input: ReplaceTextInput = parse(arguments)?;
+                value(
+                    workspace
+                        .replace_text(
+                            &context,
+                            &input.path,
+                            &input.old_text,
+                            &input.new_text,
+                            input.expected_occurrences,
+                        )
                         .await?,
                 )
             }
             "fs_write_raw" => {
                 let input: WriteRawInput = parse(arguments)?;
                 value(
-                    self.workspace
+                    workspace
                         .write_raw(&context, &input.path, &input.base64, input.overwrite)
                         .await?,
                 )
             }
             "fs_stat" => {
                 let input: PathInput = parse(arguments)?;
-                value(self.workspace.stat(&input.path).await?)
+                value(workspace.stat(&input.path).await?)
             }
             "fs_create_directory" => {
                 let input: PathInput = parse(arguments)?;
-                value(self.workspace.create_directory(&input.path).await?)
+                value(workspace.create_directory(&input.path).await?)
             }
             "fs_copy" => {
                 let input: TransferInput = parse(arguments)?;
                 value(
-                    self.workspace
+                    workspace
                         .copy(&context, &input.source, &input.destination, input.overwrite)
                         .await?,
                 )
@@ -263,7 +279,7 @@ impl RuntimeHost {
             "fs_move" => {
                 let input: TransferInput = parse(arguments)?;
                 value(
-                    self.workspace
+                    workspace
                         .move_path(&context, &input.source, &input.destination, input.overwrite)
                         .await?,
                 )
@@ -271,50 +287,44 @@ impl RuntimeHost {
             "fs_delete" => {
                 let input: DeleteInput = parse(arguments)?;
                 Ok(json!({
-                    "deleted": self.workspace.delete(&context, &input.path, input.recursive).await?
+                    "deleted": workspace.delete(&context, &input.path, input.recursive).await?
                 }))
             }
             "git_status" => {
                 let input: CwdInput = parse(arguments)?;
                 let cwd = self.resolve_git_cwd(&context, input.cwd).await?;
-                value(self.git.status(&cwd).await?)
+                value(git.status(&cwd).await?)
             }
             "git_diff" => {
                 let input: GitDiff = parse(arguments)?;
                 let cwd = self.resolve_git_cwd(&context, input.cwd).await?;
                 value(
-                    self.git
-                        .diff(&cwd, input.staged, input.stat, input.path.as_deref())
+                    git.diff(&cwd, input.staged, input.stat, input.path.as_deref())
                         .await?,
                 )
             }
             "git_log" => {
                 let input: GitLog = parse(arguments)?;
                 let cwd = self.resolve_git_cwd(&context, input.cwd).await?;
-                value(
-                    self.git
-                        .log(&cwd, input.count, input.path.as_deref())
-                        .await?,
-                )
+                value(git.log(&cwd, input.count, input.path.as_deref()).await?)
             }
             "git_branch" => {
                 let input: CwdInput = parse(arguments)?;
                 let cwd = self.resolve_git_cwd(&context, input.cwd).await?;
-                value(self.git.branch(&cwd).await?)
+                value(git.branch(&cwd).await?)
             }
             "git_show" => {
                 let input: GitShow = parse(arguments)?;
                 let cwd = self.resolve_git_cwd(&context, input.cwd).await?;
                 value(
-                    self.git
-                        .show(&cwd, &input.revision, input.path.as_deref())
+                    git.show(&cwd, &input.revision, input.path.as_deref())
                         .await?,
                 )
             }
             "git_commit" => {
                 let input: GitCommit = parse(arguments)?;
                 let cwd = self.resolve_git_cwd(&context, input.cwd).await?;
-                value(self.git.commit(&cwd, &input.message, input.all).await?)
+                value(git.commit(&cwd, &input.message, input.all).await?)
             }
             "process_list" => value(self.process.list().await?),
             "process_inspect" => {

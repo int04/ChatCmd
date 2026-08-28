@@ -192,10 +192,18 @@ pub(super) struct ReadInput {
     pub(super) path: PathBuf,
     #[serde(default = "default_characters")]
     pub(super) max_characters: usize,
+    #[serde(default = "default_start_line")]
+    pub(super) start_line: usize,
+    #[serde(default)]
+    pub(super) line_count: Option<usize>,
 }
 
 const fn default_characters() -> usize {
     200_000
+}
+
+const fn default_start_line() -> usize {
+    1
 }
 
 input!(WriteTextInput {
@@ -204,12 +212,23 @@ input!(WriteTextInput {
     #[serde(default)]
     overwrite: bool
 });
+input!(ReplaceTextInput {
+    path: PathBuf,
+    old_text: String,
+    new_text: String,
+    #[serde(default = "default_expected_occurrences")]
+    expected_occurrences: usize
+});
 input!(WriteRawInput {
     path: PathBuf,
     base64: String,
     #[serde(default)]
     overwrite: bool
 });
+
+const fn default_expected_occurrences() -> usize {
+    1
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -240,7 +259,8 @@ const fn default_git_count() -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        CwdInput, GitCommit, GitDiff, ShellCreate, ShellRead, ShellSignalInput, ShellWrite,
+        CwdInput, GitCommit, GitDiff, ReadInput, ReplaceTextInput, ShellCreate, ShellRead,
+        ShellSignalInput, ShellWrite,
     };
 
     #[test]
@@ -320,6 +340,29 @@ mod tests {
         }))
         .expect("legacy SIGINT signal");
         assert!(matches!(input.signal, chatcmd_runtime::ShellSignal::CtrlC));
+    }
+
+    #[test]
+    fn fs_read_text_accepts_line_range_fields() {
+        let input: ReadInput = serde_json::from_value(serde_json::json!({
+            "path": "test.txt",
+            "startLine": 10,
+            "lineCount": 25
+        }))
+        .expect("line range input");
+        assert_eq!(input.start_line, 10);
+        assert_eq!(input.line_count, Some(25));
+    }
+
+    #[test]
+    fn fs_replace_text_defaults_to_one_expected_occurrence() {
+        let input: ReplaceTextInput = serde_json::from_value(serde_json::json!({
+            "path": "test.txt",
+            "oldText": "before",
+            "newText": "after"
+        }))
+        .expect("replace text input");
+        assert_eq!(input.expected_occurrences, 1);
     }
 }
 

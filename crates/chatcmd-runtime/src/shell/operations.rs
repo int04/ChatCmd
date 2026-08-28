@@ -4,7 +4,11 @@ use crate::{
     ShellWaitResult, ShellWriteRequest, TimelineEvent,
 };
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
-use std::{collections::BTreeMap, path::Path, time::Duration};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use uuid::Uuid;
 
 impl ShellRuntime {
@@ -37,6 +41,16 @@ impl ShellRuntime {
         context: &OperationContext,
         request: ShellCreateRequest,
     ) -> RuntimeResult<ShellSessionInfo> {
+        self.create_with_additional_scopes(context, request, &[])
+            .await
+    }
+
+    pub async fn create_with_additional_scopes(
+        &self,
+        context: &OperationContext,
+        request: ShellCreateRequest,
+        additional_scopes: &[PathBuf],
+    ) -> RuntimeResult<ShellSessionInfo> {
         let _permit = self.permit().await?;
         if let Some(value) = self.cached(&request.request_id)? {
             return serde_json::from_value(value).map_err(|error| {
@@ -54,7 +68,7 @@ impl ShellRuntime {
                 return Err(RuntimeError::busy("active terminal session limit reached"));
             }
         }
-        let cwd = self.resolve_cwd(request.working_directory.as_deref())?;
+        let cwd = self.resolve_cwd(request.working_directory.as_deref(), additional_scopes)?;
         let executable = request
             .executable
             .clone()
@@ -371,7 +385,11 @@ impl ShellRuntime {
         session_info(&self.session(session_id)?)
     }
 
-    fn resolve_cwd(&self, requested: Option<&Path>) -> RuntimeResult<PathBuf> {
+    fn resolve_cwd(
+        &self,
+        requested: Option<&Path>,
+        additional_scopes: &[PathBuf],
+    ) -> RuntimeResult<PathBuf> {
         let path = requested
             .or_else(|| self.inner.config.roots.first().map(PathBuf::as_path))
             .ok_or_else(|| {
@@ -381,18 +399,22 @@ impl ShellRuntime {
                 )
             })?;
         let canonical = path.canonicalize().map_err(io_error)?;
-        if !self.inner.config.roots.is_empty()
-            && !self
-                .inner
-                .config
-                .roots
-                .iter()
-                .filter_map(|root| root.canonicalize().ok())
-                .any(|root| canonical.starts_with(root))
-        {
+        let configured = self
+            .inner
+            .config
+            .roots
+            .iter()
+            .filter_map(|root| root.canonicalize().ok())
+            .any(|root| canonical.starts_with(root));
+        let user_granted = additional_scopes
+            .iter()
+            .filter_map(|scope| scope.canonicalize().ok())
+            .filter(|scope| scope.parent().is_some())
+            .any(|scope| canonical.starts_with(scope));
+        if !self.inner.config.roots.is_empty() && !configured && !user_granted {
             return Err(RuntimeError::new(
                 "path_outside_allowed_scope",
-                "working directory is outside configured roots",
+                "working directory is outside configured roots and user-provided task path grants",
             ));
         }
         Ok(canonical)

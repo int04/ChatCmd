@@ -17,6 +17,7 @@ pub const TOOL_NAMES: &[&str] = &[
     "fs_find",
     "fs_read_text",
     "fs_write_text",
+    "fs_replace_text",
     "fs_write_raw",
     "fs_stat",
     "fs_create_directory",
