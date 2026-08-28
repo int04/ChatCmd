@@ -132,7 +132,7 @@ describe('running tool stop projection', () => {
     };
     const blocks = buildProcessBlocks([started, stopRequested]);
     expect(blocks).toHaveLength(1);
-    expect(blocks[0]).toMatchObject({ type: 'activities', activities: [{ id: 'activity-1', status: 'stop_requested', error: 'Lý do dừng: Đổi cách làm' }] });
+    expect(blocks[0]).toMatchObject({ type: 'activities', activities: [{ id: 'activity-1', status: 'stop_requested', error: 'Stop reason: Đổi cách làm' }] });
   });
 
   it('finishes the same activity as stopped and preserves the agent-facing reason', () => {

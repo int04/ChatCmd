@@ -1,3 +1,4 @@
+import { appLocale, formatAppNumber, tr } from '../i18n';
 import type { Task, TaskDetail, TaskTurn, TimelineEvent } from '../types';
 
 export type ActivityKind = 'read' | 'search' | 'edit' | 'create' | 'delete' | 'copy' | 'move' | 'git' | 'command' | 'tool';
@@ -66,7 +67,7 @@ export function buildProcessBlocks(events: TimelineEvent[]): ProcessBlock[] {
         existing.status = stringValue(payload.status) || existing.status;
         if (payload.input !== undefined) existing.input = payload.input;
         const stopReason = stringValue(payload.stopReason);
-        if (stopReason) existing.error = `Lý do dừng: ${stopReason}`;
+        if (stopReason) existing.error = tr('Stop reason: {reason}', { reason: stopReason });
         continue;
       }
       const activity: ToolActivity = {
@@ -132,7 +133,8 @@ export function buildProcessBlocks(events: TimelineEvent[]): ProcessBlock[] {
     }
     const payload = payloadObject(event);
     if (event.type === 'message' && stringValue(payload.role) === 'user') {
-      currentActivities = null; continue;
+      currentActivities = null;
+      continue;
     }
     if (isVisibleAgentMessage(event)) {
       currentActivities = null;
@@ -205,32 +207,32 @@ export function activityTarget(activity: ToolActivity) {
 export function activityLabel(activity: ToolActivity) {
   const target = activityTarget(activity);
   const running = activity.status === 'started';
-  if (activity.status === 'pending_approval') return `Chờ phê duyệt để ${target}`;
-  if (activity.status === 'stop_requested') return `Đang dừng ${target}`;
-  if (activity.status === 'stopped') return `Đã dừng ${target}`;
+  if (activity.status === 'pending_approval') return tr('Waiting for approval to {target}', { target });
+  if (activity.status === 'stop_requested') return tr('Stopping {target}', { target });
+  if (activity.status === 'stopped') return tr('Stopped {target}', { target });
   if (running) {
-    if (activity.kind === 'read') return `Đang đọc ${target}`;
-    if (activity.kind === 'search') return `Đang tìm ${target}`;
-    if (activity.kind === 'edit') return `Đang sửa ${target}`;
-    if (activity.kind === 'create') return `Đang tạo ${target}`;
-    if (activity.kind === 'delete') return `Đang xóa ${target}`;
-    if (activity.kind === 'copy') return `Đang sao chép ${target}`;
-    if (activity.kind === 'move') return `Đang di chuyển ${target}`;
-    if (activity.kind === 'git') return `Đang thao tác Git: ${target}`;
-    if (activity.kind === 'command') return `Đang chạy ${target}`;
-    return `Đang dùng ${target}`;
+    if (activity.kind === 'read') return tr('Reading {target}', { target });
+    if (activity.kind === 'search') return tr('Searching {target}', { target });
+    if (activity.kind === 'edit') return tr('Editing {target}', { target });
+    if (activity.kind === 'create') return tr('Creating {target}', { target });
+    if (activity.kind === 'delete') return tr('Deleting {target}', { target });
+    if (activity.kind === 'copy') return tr('Copying {target}', { target });
+    if (activity.kind === 'move') return tr('Moving {target}', { target });
+    if (activity.kind === 'git') return tr('Running Git operation: {target}', { target });
+    if (activity.kind === 'command') return tr('Running {target}', { target });
+    return tr('Using {target}', { target });
   }
-  if (activity.status === 'failed') return `Lỗi: ${target}`;
-  if (activity.kind === 'read') return `Đã đọc ${target}`;
-  if (activity.kind === 'search') return `Đã tìm ${target}`;
-  if (activity.kind === 'edit') return `Đã sửa ${target}`;
-  if (activity.kind === 'create') return `Đã tạo ${target}`;
-  if (activity.kind === 'delete') return `Đã xóa ${target}`;
-  if (activity.kind === 'copy') return `Đã sao chép ${target}`;
-  if (activity.kind === 'move') return `Đã di chuyển ${target}`;
-  if (activity.kind === 'git') return `Đã thao tác Git: ${target}`;
-  if (activity.kind === 'command') return `Đã chạy ${target}`;
-  return `Đã dùng ${target}`;
+  if (activity.status === 'failed') return tr('Error: {target}', { target });
+  if (activity.kind === 'read') return tr('Read {target}', { target });
+  if (activity.kind === 'search') return tr('Searched {target}', { target });
+  if (activity.kind === 'edit') return tr('Edited {target}', { target });
+  if (activity.kind === 'create') return tr('Created {target}', { target });
+  if (activity.kind === 'delete') return tr('Deleted {target}', { target });
+  if (activity.kind === 'copy') return tr('Copied {target}', { target });
+  if (activity.kind === 'move') return tr('Moved {target}', { target });
+  if (activity.kind === 'git') return tr('Ran Git operation: {target}', { target });
+  if (activity.kind === 'command') return tr('Ran {target}', { target });
+  return tr('Used {target}', { target });
 }
 
 export function summarizeActivities(activities: ToolActivity[]) {
@@ -239,11 +241,11 @@ export function summarizeActivities(activities: ToolActivity[]) {
   const phrases = (['read', 'search', 'edit', 'create', 'delete', 'copy', 'move', 'git', 'command', 'tool'] as ActivityKind[]).flatMap((kind) => {
     const count = counts.get(kind) ?? 0;
     if (!count) return [];
-    const value = count.toLocaleString('vi');
-    return [kind === 'read' ? `đọc ${value} tệp` : kind === 'search' ? `tìm kiếm ${value} lần` : kind === 'edit' ? `sửa ${value} tệp` : kind === 'create' ? `tạo ${value} mục` : kind === 'delete' ? `xóa ${value} mục` : kind === 'copy' ? `sao chép ${value} mục` : kind === 'move' ? `di chuyển ${value} mục` : kind === 'git' ? `thực hiện ${value} thao tác Git` : kind === 'command' ? `chạy ${value} lệnh` : `dùng ${value} công cụ`];
+    const value = formatAppNumber(count);
+    return [kind === 'read' ? tr('read {count} files', { count: value }) : kind === 'search' ? tr('searched {count} times', { count: value }) : kind === 'edit' ? tr('edited {count} files', { count: value }) : kind === 'create' ? tr('created {count} items', { count: value }) : kind === 'delete' ? tr('deleted {count} items', { count: value }) : kind === 'copy' ? tr('copied {count} items', { count: value }) : kind === 'move' ? tr('moved {count} items', { count: value }) : kind === 'git' ? tr('performed {count} Git operations', { count: value }) : kind === 'command' ? tr('ran {count} commands', { count: value }) : tr('used {count} tools', { count: value })];
   });
   if (phrases.length < 2) return phrases[0] ?? '';
-  return `${phrases.slice(0, -1).join(', ')} và ${phrases.at(-1)}`;
+  return tr('{items} and {last}', { items: phrases.slice(0, -1).join(', '), last: phrases.at(-1) ?? '' });
 }
 
 export function activityCommand(activity: ToolActivity) {
@@ -285,11 +287,7 @@ export function activityCodeView(activity: ToolActivity) {
   if (!output.trim()) return null;
   if (activity.kind === 'git') {
     const isDiff = activity.tool === 'git_diff' || activity.tool === 'git_show';
-    return {
-      code: output,
-      path: stringValue(input.path) || null,
-      language: isDiff ? 'diff' : 'plain',
-    };
+    return { code: output, path: stringValue(input.path) || null, language: isDiff ? 'diff' : 'plain' };
   }
   if (activity.tool === 'fs_read_text') {
     const outputObject = asObject(activity.output);
@@ -317,7 +315,7 @@ export function duration(start: string, finish: string) {
 }
 
 export function formatClockTime(value: string) {
-  return new Intl.DateTimeFormat('vi', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(value));
+  return new Intl.DateTimeFormat(appLocale(), { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(value));
 }
 
 export function mergeTaskEvent(task: Task, event: TimelineEvent): Task {
@@ -339,9 +337,7 @@ export function mergeTaskEvent(task: Task, event: TimelineEvent): Task {
 export function upsertTaskEvent(tasks: Task[] | undefined, event: TimelineEvent): Task[] | undefined {
   if (!event.taskId) return tasks;
   const current = tasks ?? [];
-  if (current.some((task) => task.id === event.taskId)) {
-    return current.map((task) => task.id === event.taskId ? mergeTaskEvent(task, event) : task);
-  }
+  if (current.some((task) => task.id === event.taskId)) return current.map((task) => task.id === event.taskId ? mergeTaskEvent(task, event) : task);
   const created = taskFromRealtimeEvent(event);
   return created ? [created, ...current] : tasks;
 }
@@ -379,10 +375,7 @@ function taskStatusFromEvent(status: string, eventType: string, fallback: string
   if (eventType === 'progress' || eventType === 'tool_call') return 'running';
   return fallback;
 }
-function isUserMessage(event: TimelineEvent) {
-  const payload = payloadObject(event);
-  return event.type === 'message' && stringValue(payload.role) === 'user';
-}
+function isUserMessage(event: TimelineEvent) { const payload = payloadObject(event); return event.type === 'message' && stringValue(payload.role) === 'user'; }
 function isVisibleAgentMessage(event: TimelineEvent) {
   if (isUserMessage(event) || !['progress', 'message', 'warning', 'status'].includes(event.type)) return false;
   const payload = payloadObject(event);

@@ -1,3 +1,4 @@
+import { tr } from './i18n';
 import type { Agent, AgentInput, ChatGptBridge, ChatGptRequest, CommandExecutionMode, LocalSettings, McpStatus, Overview, ProblemDetails, SecretResult, Session, SessionDetail, Skill, SkillOptionValue, TaskDetail, TaskPage, Tool, ToolPreset, UserSkill } from './types';
 
 export class ApiError extends Error {
@@ -10,12 +11,12 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   let response: Response;
   try { response = await fetch(path, { ...init, headers }); }
-  catch { throw new ApiError('Local API is unavailable. Check that ChatCMD is running.'); }
+  catch { throw new ApiError(tr('Local API is unavailable. Check that ChatCMD is running.')); }
   if (!response.ok) {
     let problem: ProblemDetails | undefined;
     try { problem = await response.json() as ProblemDetails; } catch { /* non-JSON upstream error */ }
     const fieldErrors = problem?.errors ? Object.values(problem.errors).flat().join(' ') : '';
-    throw new ApiError(fieldErrors || problem?.detail || problem?.title || `Request failed (${response.status})`, response.status, problem);
+    throw new ApiError(fieldErrors || problem?.detail || problem?.title || tr('Request failed ({status})', { status: response.status }), response.status, problem);
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { tr } from './i18n';
 
 export function useLoad<T>(loader: () => Promise<T>, dependencies: unknown[] = []) {
   const [data, setData] = useState<T>();
@@ -12,7 +13,7 @@ export function useLoad<T>(loader: () => Promise<T>, dependencies: unknown[] = [
     try {
       setData(await loader());
     } catch (value) {
-      setError(value instanceof Error ? value.message : 'Unknown error');
+      setError(value instanceof Error ? value.message : tr('Unknown error'));
     } finally {
       setLoading(false);
     }

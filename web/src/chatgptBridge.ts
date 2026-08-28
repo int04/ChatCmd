@@ -1,3 +1,5 @@
+import { tr } from './i18n';
+
 const REQUEST_TYPE = 'chatcmd-chatgpt-extension-request';
 const RESPONSE_TYPE = 'chatcmd-chatgpt-extension-response';
 
@@ -38,10 +40,10 @@ export async function stopChatGptRequest(requestId: string) {
 
 function bridge(command: BridgeCommand, timeoutMs: number) {
   return new Promise<BridgeResponse>((resolve, reject) => {
-    const timer = window.setTimeout(() => finish(new Error('Không tìm thấy ChatCMD ChatGPT Bridge extension.')), timeoutMs);
+    const timer = window.setTimeout(() => finish(new Error(tr('ChatCMD ChatGPT Bridge extension was not found.'))), timeoutMs);
     const onMessage = (event: MessageEvent) => {
       if (event.source !== window || !isResponse(event.data) || event.data.nonce !== command.nonce) return;
-      finish(event.data.ok ? undefined : new Error(event.data.error || 'Extension không thể thực hiện yêu cầu.'), event.data);
+      finish(event.data.ok ? undefined : new Error(event.data.error || tr('The extension could not complete the request.')), event.data);
     };
     const finish = (error?: Error, response?: BridgeResponse) => {
       window.clearTimeout(timer);
