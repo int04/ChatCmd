@@ -1,5 +1,7 @@
 const STORAGE_KEY = 'chatcmd.preferences';
 
+type SoundPreference = 'newAgentSound' | 'finishedTaskSound';
+
 class SoundNotifications {
   private readonly newAgent = this.createAudio('sounds/new_agent.mp3');
   private readonly finishedTask = this.createAudio('sounds/finish_chat.mp3');
@@ -12,8 +14,8 @@ class SoundNotifications {
     window.addEventListener('keydown', prime, { once: true });
   }
 
-  playNewAgent(): void { this.play(this.newAgent); }
-  playFinishedTask(): void { this.play(this.finishedTask); }
+  playNewAgent(): void { this.play(this.newAgent, 'newAgentSound'); }
+  playFinishedTask(): void { this.play(this.finishedTask, 'finishedTaskSound'); }
 
   private createAudio(path: string): HTMLAudioElement | null {
     if (typeof Audio === 'undefined') return null;
@@ -22,17 +24,18 @@ class SoundNotifications {
     return audio;
   }
 
-  private enabled(): boolean {
+  private enabled(key: SoundPreference): boolean {
     try {
-      const value = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}') as { sound?: unknown };
+      const value = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}') as Record<string, unknown>;
+      if (typeof value[key] === 'boolean') return value[key] as boolean;
       return value.sound !== false;
     } catch {
       return true;
     }
   }
 
-  private play(audio: HTMLAudioElement | null): void {
-    if (!audio || !this.enabled()) return;
+  private play(audio: HTMLAudioElement | null, key: SoundPreference): void {
+    if (!audio || !this.enabled(key)) return;
     audio.currentTime = 0;
     void audio.play().catch(() => undefined);
   }

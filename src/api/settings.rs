@@ -74,7 +74,7 @@ pub(super) fn mcp_endpoint(state: &AppState, token: &str) -> String {
 }
 
 pub(super) async fn settings_value(state: &Arc<AppState>) -> Result<Value, Problem> {
-    let defaults = json!({ "bindAddress": state.bind_address, "port": state.port, "mcpEndpoint": mcp_endpoint_template(state), "databasePath": state.database_path, "databaseState": "ready", "executionMode": "allowAll", "workspaceRoots": [std::env::current_dir().unwrap_or_default()], "terminalExecutable": default_shell(), "taskConcurrency": 4, "sessionConcurrency": 8, "theme": "system", "language": "en", "sound": true });
+    let defaults = json!({ "bindAddress": state.bind_address, "port": state.port, "mcpEndpoint": mcp_endpoint_template(state), "databasePath": state.database_path, "databaseState": "ready", "executionMode": "allowAll", "workspaceRoots": [std::env::current_dir().unwrap_or_default()], "terminalExecutable": default_shell(), "taskConcurrency": 4, "sessionConcurrency": 8, "theme": "system", "language": "en", "sound": true, "newAgentSound": true, "finishedTaskSound": true });
     let mut object = defaults.as_object().cloned().unwrap_or_default();
     for key in [
         "executionMode",
@@ -85,6 +85,8 @@ pub(super) async fn settings_value(state: &Arc<AppState>) -> Result<Value, Probl
         "theme",
         "language",
         "sound",
+        "newAgentSound",
+        "finishedTaskSound",
     ] {
         if let Some(setting) = state
             .repository
@@ -94,6 +96,18 @@ pub(super) async fn settings_value(state: &Arc<AppState>) -> Result<Value, Probl
             && let Ok(value) = serde_json::from_str(&setting.value_json)
         {
             object.insert(key.to_owned(), value);
+        }
+    }
+    let legacy_sound = object.get("sound").cloned().unwrap_or(Value::Bool(true));
+    for key in ["newAgentSound", "finishedTaskSound"] {
+        if state
+            .repository
+            .setting(&format!("ui_{key}"))
+            .await
+            .map_err(storage_problem)?
+            .is_none()
+        {
+            object.insert(key.to_owned(), legacy_sound.clone());
         }
     }
     let execution_mode = state
