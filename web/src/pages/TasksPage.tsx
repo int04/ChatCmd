@@ -10,7 +10,6 @@ import { TaskAccessCard } from '../tasks/TaskAccessCard';
 import { TaskConversationStopCard } from '../tasks/TaskConversationStopCard';
 import { SubagentApprovalQueue } from '../tasks/SubagentApprovalQueue';
 import { TaskTurnBubble } from '../tasks/TaskTurnBubble';
-import { useTaskDocumentTitle } from '../tasks/taskDocumentTitle';
 import { buildTaskTurns, mergeLiveDetail, upsertTaskEvent } from '../tasks/taskTimeline';
 import type { Task, TaskDetail, TimelineEvent } from '../types';
 import { useLoad } from '../useLoad';
@@ -31,7 +30,6 @@ function TasksWorkspace() {
   const hiddenSubagentTaskIds = useRef(new Set<string>());
   const visibleTaskIds = useRef(new Set<string>());
   const hadStoredReadCounts = useRef(typeof localStorage !== 'undefined' && localStorage.getItem(READ_FINAL_COUNTS_KEY) !== null);
-  const updateDocumentTitle = useTaskDocumentTitle(result.data);
 
   useEffect(() => setLiveEvents([]), [taskId]);
   useEffect(() => { visibleTaskIds.current = new Set((result.data ?? []).map((task) => task.id)); }, [result.data]);
@@ -42,7 +40,6 @@ function TasksWorkspace() {
   }, [setTasks]);
 
   const handleRealtime = useCallback((event: TimelineEvent) => {
-    updateDocumentTitle(event);
     if (event.type === 'system.connected') {
       if (connectedOnce.current) { void reloadTasks(); setDetailVersion((value) => value + 1); }
       connectedOnce.current = true;
@@ -64,7 +61,7 @@ function TasksWorkspace() {
     } else if (taskId && hiddenSubagentTaskIds.current.has(event.taskId)) {
       setDetailVersion((value) => value + 1);
     }
-  }, [hideSubagentTask, reloadTasks, setTasks, taskId, updateDocumentTitle]);
+  }, [hideSubagentTask, reloadTasks, setTasks, taskId]);
   const realtime = useRealtime(handleRealtime);
 
   useEffect(() => {
