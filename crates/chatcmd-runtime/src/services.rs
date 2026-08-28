@@ -79,6 +79,7 @@ impl GitService {
         cwd: &Path,
         message: &str,
         all: bool,
+        paths: &[String],
     ) -> RuntimeResult<CommandOutput> {
         if message.trim().is_empty() {
             return Err(RuntimeError::new(
@@ -86,7 +87,16 @@ impl GitService {
                 "commit message cannot be empty",
             ));
         }
-        if all {
+        if !paths.is_empty() {
+            let cwd = self.workspace.stat(cwd).await?.path;
+            let mut command = Command::new("git");
+            command.arg("add").arg("--").args(paths).current_dir(&cwd);
+            let output = command.output().await.map_err(command_error)?;
+            let staged = bound_output(output, self.max_characters);
+            if staged.exit_code != Some(0) {
+                return Ok(staged);
+            }
+        } else if all {
             let staged = self.run(cwd, &["add", "--all"]).await?;
             if staged.exit_code != Some(0) {
                 return Ok(staged);

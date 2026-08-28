@@ -15,7 +15,10 @@ input!(DeviceGet { device_id: String });
 input!(SessionInput { session_id: String });
 input!(PathInput { path: PathBuf });
 input!(CwdInput { cwd: Option<PathBuf> });
-input!(SkillInput { skill_id: String });
+input!(SkillInput {
+    #[serde(alias = "id")]
+    skill_id: String
+});
 input!(ProcessInput { process_id: u32 });
 input!(ArtifactInput {
     artifact_id: String
@@ -47,7 +50,9 @@ input!(GitCommit {
     cwd: Option<PathBuf>,
     message: String,
     #[serde(default = "default_true")]
-    all: bool
+    all: bool,
+    #[serde(default)]
+    paths: Vec<String>
 });
 input!(ProcessKill {
     process_id: u32,
