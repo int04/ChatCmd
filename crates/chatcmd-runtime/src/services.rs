@@ -1,13 +1,8 @@
 use crate::{
     CommandOutput, OperationContext, PolicyContext, PolicyEngine, ProcessInfo, RuntimeError,
-    RuntimeResult, SkillReadResult, SkillSummary, WorkspaceService,
+    RuntimeResult, WorkspaceService,
 };
-use std::{
-    collections::{BTreeMap, HashSet},
-    fs,
-    path::{Path, PathBuf},
-    process::Stdio,
-};
+use std::{path::Path, process::Stdio};
 use tokio::process::Command;
 
 #[derive(Clone)]
@@ -245,126 +240,6 @@ impl ProcessService {
     }
 }
 
-#[derive(Clone)]
-pub struct SkillService {
-    roots: Vec<(String, PathBuf)>,
-    max_characters: usize,
-}
-
-impl SkillService {
-    #[must_use]
-    pub fn new(
-        user_home: Option<&Path>,
-        repository_root: Option<&Path>,
-        max_characters: usize,
-    ) -> Self {
-        let mut roots = Vec::new();
-        if let Some(repository) = repository_root {
-            roots.push((
-                "repository_agents".into(),
-                repository.join(".agents/skills"),
-            ));
-            roots.push(("repository_codex".into(), repository.join(".codex/skills")));
-        }
-        if let Some(home) = user_home {
-            roots.push(("user_agents".into(), home.join(".agents/skills")));
-            roots.push(("user_codex".into(), home.join(".codex/skills")));
-        }
-        Self {
-            roots,
-            max_characters: max_characters.clamp(1, 1_000_000),
-        }
-    }
-    pub async fn list(&self) -> RuntimeResult<Vec<SkillSummary>> {
-        let roots = self.roots.clone();
-        tokio::task::spawn_blocking(move || discover(&roots))
-            .await
-            .map_err(join_error)?
-    }
-    pub async fn read(&self, skill_id: &str) -> RuntimeResult<SkillReadResult> {
-        let summaries = self.list().await?;
-        let selected = summaries
-            .into_iter()
-            .find(|skill| skill.id == skill_id)
-            .ok_or_else(|| {
-                RuntimeError::new("skill_not_found", "skill is unavailable or shadowed")
-            })?;
-        let path = PathBuf::from(&selected.source).join("SKILL.md");
-        let content = tokio::fs::read_to_string(path).await.map_err(io_error)?;
-        let truncated = content.chars().count() > self.max_characters;
-        Ok(SkillReadResult {
-            id: selected.id,
-            name: selected.name,
-            source: selected.source,
-            instructions: content.chars().take(self.max_characters).collect(),
-            truncated,
-        })
-    }
-}
-
-fn discover(roots: &[(String, PathBuf)]) -> RuntimeResult<Vec<SkillSummary>> {
-    let mut shadowed = HashSet::new();
-    let mut values = Vec::new();
-    for (_source_kind, root) in roots {
-        let Ok(entries) = fs::read_dir(root) else {
-            continue;
-        };
-        let mut directories: Vec<_> = entries
-            .filter_map(Result::ok)
-            .filter(|entry| entry.path().is_dir())
-            .collect();
-        directories.sort_by_key(|entry| entry.file_name().to_string_lossy().to_lowercase());
-        for entry in directories {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if shadowed.contains(&name.to_lowercase()) {
-                continue;
-            }
-            let instructions = entry.path().join("SKILL.md");
-            if !instructions.is_file() {
-                continue;
-            }
-            let metadata =
-                parse_frontmatter(&fs::read_to_string(&instructions).unwrap_or_default());
-            let enabled = !entry.path().join(".disabled").exists();
-            if !enabled {
-                shadowed.insert(name.to_lowercase());
-                continue;
-            }
-            shadowed.insert(name.to_lowercase());
-            values.push(SkillSummary {
-                id: name.clone(),
-                name: name.clone(),
-                title: metadata
-                    .get("name")
-                    .cloned()
-                    .unwrap_or_else(|| name.clone()),
-                description: metadata.get("description").cloned().unwrap_or_default(),
-                source: entry.path().to_string_lossy().into_owned(),
-            });
-        }
-    }
-    Ok(values)
-}
-
-fn parse_frontmatter(content: &str) -> BTreeMap<String, String> {
-    let mut values = BTreeMap::new();
-    let mut lines = content.lines();
-    if lines.next() != Some("---") {
-        return values;
-    }
-    for line in lines {
-        if line == "---" {
-            break;
-        }
-        if let Some((key, value)) = line.split_once(':') {
-            values.insert(
-                key.trim().into(),
-                value.trim().trim_matches(['"', '\'']).into(),
-            );
-        }
-    }
-    values
-}
 fn bound_output(output: std::process::Output, limit: usize) -> CommandOutput {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -380,13 +255,6 @@ fn bound_output(output: std::process::Output, limit: usize) -> CommandOutput {
 fn command_error(error: std::io::Error) -> RuntimeError {
     RuntimeError::new("process_start_failed", error.to_string())
 }
-fn io_error(error: std::io::Error) -> RuntimeError {
-    RuntimeError::new("io_error", error.to_string())
-}
-fn join_error(error: tokio::task::JoinError) -> RuntimeError {
-    RuntimeError::new("worker_failed", error.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::git_diff_args;

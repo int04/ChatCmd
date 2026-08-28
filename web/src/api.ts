@@ -1,4 +1,4 @@
-import type { Agent, AgentInput, ChatGptBridge, ChatGptRequest, CommandExecutionMode, LocalSettings, McpStatus, Overview, ProblemDetails, SecretResult, Session, SessionDetail, Skill, Task, TaskDetail, Tool, ToolPreset } from './types';
+import type { Agent, AgentInput, ChatGptBridge, ChatGptRequest, CommandExecutionMode, LocalSettings, McpStatus, Overview, ProblemDetails, SecretResult, Session, SessionDetail, Skill, SkillOptionValue, Task, TaskDetail, Tool, ToolPreset, UserSkill } from './types';
 
 export class ApiError extends Error {
   constructor(message: string, public status?: number, public problem?: ProblemDetails) { super(message); this.name = 'ApiError'; }
@@ -51,8 +51,12 @@ export const api = {
   sessions: () => request<Session[]>('/api/local/sessions'),
   session: (id: string, cursor?: string) => request<SessionDetail>(`/api/local/sessions/${item(id)}${cursor ? `?cursor=${item(cursor)}` : ''}`),
   sessionAction: (id: string, action: string, body?: unknown) => request<SessionDetail>(`/api/local/sessions/${item(id)}/${action}`, { method: 'POST', body: body === undefined ? undefined : json(body) }),
-  skills: () => request<Skill[]>('/api/local/skills'),
+  skills: () => request<UserSkill[]>('/api/local/skills'),
   skill: (id: string) => request<Skill>(`/api/local/skills/${item(id)}`),
+  setSkillEnabled: (id: string, isEnabled: boolean) => request<UserSkill>(`/api/local/skills/${item(id)}/enabled`, { method: 'PATCH', body: json({ isEnabled }) }),
+  updateSkillOptions: (id: string, options: Record<string, SkillOptionValue>) => request<UserSkill>(`/api/local/skills/${item(id)}/options`, { method: 'PATCH', body: json({ options }) }),
+  installSkill: (repositoryUrl: string) => request<UserSkill>('/api/local/skills/install', { method: 'POST', body: json({ repositoryUrl }) }),
+  deleteSkill: (id: string) => request<void>(`/api/local/skills/${item(id)}`, { method: 'DELETE' }),
   settings: () => request<LocalSettings>('/api/local/settings'),
   saveSettings: (value: LocalSettings) => request<LocalSettings>('/api/local/settings', { method: 'PUT', body: json(value) }),
 };

@@ -3,6 +3,7 @@ mod chatgpt;
 mod chatgpt_support;
 mod sessions;
 mod settings;
+mod skills;
 mod subagents;
 mod task_controls;
 
@@ -10,6 +11,7 @@ use agents::*;
 use chatgpt::*;
 use sessions::*;
 use settings::*;
+use skills::*;
 use subagents::*;
 use task_controls::*;
 
@@ -71,7 +73,11 @@ pub(crate) fn router() -> Router<Arc<AppState>> {
         .route("/sessions/{id}", get(session))
         .route("/sessions/{id}/{action}", post(session_action))
         .route("/skills", get(skills))
-        .route("/skills/{id}", get(skill))
+        .route("/skills/install", post(install_skill))
+        .route("/skills/{id}", get(skill).delete(delete_skill))
+        .route("/skills/{id}/enabled", patch(set_skill_enabled))
+        .route("/skills/{id}/options", patch(set_skill_options))
+        .route("/skills/{id}/icon", get(skill_icon))
         .route("/settings", get(settings).put(save_settings))
         .layer(middleware::from_fn(management_header));
     Router::new()
@@ -303,20 +309,6 @@ async fn task_detail(state: &Arc<AppState>, id: &str) -> Result<Json<Value>, Pro
     })))
 }
 
-async fn skills(State(state): State<Arc<AppState>>) -> Result<Json<Value>, Problem> {
-    let values = state.skills.list().await.map_err(runtime_problem)?;
-    Ok(Json(Value::Array(values.into_iter().enumerate().map(|(index, skill)| json!({ "id": skill.id, "name": skill.title, "source": skill.source, "precedence": index, "enabled": true, "shadowed": false, "description": skill.description })).collect())))
-}
-async fn skill(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<Json<Value>, Problem> {
-    let skill = state.skills.read(&id).await.map_err(runtime_problem)?;
-    Ok(Json(
-        json!({ "id": skill.id, "name": skill.name, "source": skill.source, "enabled": true, "shadowed": false, "content": skill.instructions }),
-    ))
-}
-
 fn compact_preview(value: &str) -> String {
     let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
     let mut chars = normalized.chars();
@@ -376,15 +368,19 @@ pub(super) fn iso_ms(ms: i64) -> String {
 #[derive(Debug)]
 pub(super) struct Problem {
     status: StatusCode,
-    title: &'static str,
-    detail: &'static str,
+    title: String,
+    detail: String,
 }
 impl Problem {
-    pub(super) const fn new(status: StatusCode, title: &'static str, detail: &'static str) -> Self {
+    pub(super) fn new(
+        status: StatusCode,
+        title: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
         Self {
             status,
-            title,
-            detail,
+            title: title.into(),
+            detail: detail.into(),
         }
     }
 }

@@ -1,4 +1,4 @@
-﻿use std::time::Duration;
+use std::time::Duration;
 
 use chatcmd_core::{
     ArtifactId, ArtifactStore, ExecutionMode, TaskExecutionMode, TaskId, TaskStore,
@@ -324,7 +324,10 @@ impl RuntimeHost {
             "git_commit" => {
                 let input: GitCommit = parse(arguments)?;
                 let cwd = self.resolve_git_cwd(&context, input.cwd).await?;
-                value(git.commit(&cwd, &input.message, input.all, &input.paths).await?)
+                value(
+                    git.commit(&cwd, &input.message, input.all, &input.paths)
+                        .await?,
+                )
             }
             "process_list" => value(self.process.list().await?),
             "process_inspect" => {

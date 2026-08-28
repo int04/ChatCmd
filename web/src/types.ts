@@ -29,6 +29,10 @@ export interface TaskDetail { task: Task; turns?: TaskTurn[]; events?: TimelineE
 export interface TaskTurn { id: Id; generation?: number; actor?: string; status?: string; startedAtUtc?: string; completedAtUtc?: string; events?: TimelineEvent[] }
 export interface Session { kind: 'mcp' | 'terminal'; id: Id; taskId?: Id; shell?: string; processId?: number; status: string; workingDirectory?: string; createdAtUtc?: string; updatedAtUtc?: string; closedAtUtc?: string; replayCursor?: string }
 export interface SessionDetail { session: Session; events: TimelineEvent[]; nextCursor?: string; truncated?: boolean }
-export interface Skill { id: Id; name: string; source?: string; precedence?: number; enabled: boolean; shadowed?: boolean; description?: string; content?: string }
+export type SkillOptionValue = string | number | boolean;
+export interface SkillOptionChoice { value: string; label: string }
+export interface UserSkillOption { key: string; label: string; description?: string | null; type: 'select' | 'boolean' | 'text' | 'number'; value: SkillOptionValue; choices?: SkillOptionChoice[] | null }
+export interface UserSkill { id: Id; title: string; description?: string | null; iconUrl?: string | null; source: 'global' | 'workspace'; sourceUrl?: string | null; enabled: boolean; canDelete?: boolean; options: UserSkillOption[] }
+export interface Skill { id: Id; name: string; source?: string; enabled: boolean; description?: string; content?: string }
 export interface LocalSettings { bindAddress: string; port: number; mcpEndpoint: string; databasePath: string; databaseState?: HealthState; executionMode: CommandExecutionMode; workspaceRoots: string[]; terminalExecutable: string; taskConcurrency: number; sessionConcurrency: number; theme: 'system' | 'light' | 'dark'; language: 'en' | 'vi'; sound?: boolean; newAgentSound: boolean; finishedTaskSound: boolean }
 export interface ProblemDetails { type?: string; title?: string; status?: number; detail?: string; instance?: string; errors?: Record<string, string[]> }
