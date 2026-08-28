@@ -95,6 +95,9 @@ function TaskDetailContent({ detail, realtime, onTaskChanged }: { detail: TaskDe
   const startedAt = task.createdAtUtc ?? turns[0]?.startedAtUtc ?? task.updatedAtUtc;
   const chatRef = useRef<HTMLElement>(null);
   const nearBottomRef = useRef(true);
+  const [visibleTurnCount, setVisibleTurnCount] = useState(2);
+  const visibleTurns = turns.slice(Math.max(0, turns.length - visibleTurnCount));
+  useEffect(() => setVisibleTurnCount(2), [task.id]);
   const activeTaskRef = useRef<string | null>(null);
   const lastEvent = events.at(-1);
   const lastTurn = turns.at(-1);
@@ -112,7 +115,16 @@ function TaskDetailContent({ detail, realtime, onTaskChanged }: { detail: TaskDe
 
   const updateChatScrollPosition = () => {
     const root = chatRef.current;
-    if (root) nearBottomRef.current = root.scrollHeight - root.scrollTop - root.clientHeight < 96;
+    if (!root) return;
+    nearBottomRef.current = root.scrollHeight - root.scrollTop - root.clientHeight < 96;
+    if (root.scrollTop <= 40 && visibleTurnCount < turns.length) {
+      const previousHeight = root.scrollHeight;
+      setVisibleTurnCount((count) => Math.min(turns.length, count + 2));
+      window.requestAnimationFrame(() => {
+        const current = chatRef.current;
+        if (current) current.scrollTop += current.scrollHeight - previousHeight;
+      });
+    }
   };
 
   return <div className="task-detail-shell">
@@ -121,7 +133,7 @@ function TaskDetailContent({ detail, realtime, onTaskChanged }: { detail: TaskDe
       <main ref={chatRef} className="task-chat-column" onScroll={updateChatScrollPosition}><h2 className="sr-only">Activity timeline</h2>
         <SubagentApprovalQueue approvals={detail.subagentApprovals ?? []} onResolved={(activityId) => onTaskChanged({ ...detail, subagentApprovals: (detail.subagentApprovals ?? []).filter((item) => item.activityId !== activityId) })} />
         <section className="task-bubble-timeline turn-timeline" aria-label="Conversation activity">
-        {turns.length ? turns.map((turn) => <TaskTurnBubble turn={turn} now={turnNow} taskId={task.id} agentLabel={chatGpt ? 'ChatGPT' : 'Codex Agent'} subagents={(detail.subagents ?? []).filter((agent) => agent.parentTurnId === turn.id)} key={turn.id} />) : <Empty title="Chưa có hoạt động" body="Agent chưa ghi nhận nội dung cho task này." />}
+        {turns.length ? visibleTurns.map((turn) => <TaskTurnBubble turn={turn} now={turnNow} taskId={task.id} agentLabel={chatGpt ? 'ChatGPT' : 'Codex Agent'} subagents={(detail.subagents ?? []).filter((agent) => agent.parentTurnId === turn.id)} key={turn.id} />) : <Empty title="Chưa có hoạt động" body="Agent chưa ghi nhận nội dung cho task này." />}
       </section>{chatGpt && <ChatGptTaskComposer taskId={task.id} />}</main>
       <aside className="task-detail-sidebar" aria-label="Task information">
         <header className="task-info-header"><span className={`task-info-state ${task.status}`}>{task.status === 'running' ? <LoaderCircle className="spin" /> : task.status === 'failed' ? <CircleAlert /> : <CheckCircle2 />}</span><div><h2>{conversationName(task)}</h2><p><code>#{task.id}</code> · {task.status} · {turns.length} lượt agent</p></div></header>

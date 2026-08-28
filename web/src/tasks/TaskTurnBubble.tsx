@@ -1,6 +1,7 @@
 import { BookOpen, Bot, CheckCircle2, ChevronDown, CircleAlert, CircleStop, Clock3, ExternalLink, FileCode2, FilePenLine, GitBranch, LoaderCircle, MessageSquareText, Search, TerminalSquare, Wrench } from 'lucide-react';
 import { lazy, Suspense, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import { Modal } from '../components';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
 import type { SubagentRun, TaskTurn, TimelineEvent } from '../types';
@@ -124,6 +125,7 @@ function ProgressMessage({ event }: { event: TimelineEvent }) {
 }
 
 function ActivityRow({ activity, now, taskId, onStop }: { activity: ToolActivity; now: string; taskId: string; onStop: (activity: ToolActivity) => void }) {
+  const [open, setOpen] = useState(false);
   const approvalPending = activity.status === 'pending_approval';
   const stopRequested = activity.status === 'stop_requested';
   const stopped = activity.status === 'stopped';
@@ -135,12 +137,21 @@ function ActivityRow({ activity, now, taskId, onStop }: { activity: ToolActivity
   const output = activityOutput(activity);
   const codeView = activityCodeView(activity);
   return <div className={`terminal-activity ${running ? 'running' : ''} ${stopRequested ? 'stopping' : ''} ${stopped ? 'stopped' : ''} ${failed ? 'failed' : ''}`}>
-    <details open={approvalPending || undefined}><summary><span className="activity-row-icon" aria-hidden="true">{running ? <LoaderCircle className="spin" /> : <Icon />}</span><span className="activity-label">{activityLabel(activity)}</span><span className="activity-timing"><time dateTime={activity.startedAt}>{formatClockTime(activity.startedAt)}</time><span aria-label={`Thời gian thực thi ${activityDuration(activity.startedAt, activity.finishedAt ?? now)}`}>· {activityDuration(activity.startedAt, activity.finishedAt ?? now)}</span></span><ChevronDown className="activity-chevron" aria-hidden="true" /></summary>
-      <div className="activity-detail"><div className="activity-command"><FileCode2 /><code>{command}</code></div>{codeView
-        ? <Suspense fallback={<pre tabIndex={0} aria-label={`Output của ${command}`}><code>{codeView.code}</code></pre>}><TaskCodeViewer {...codeView} label={`Output của ${command}`} /></Suspense>
-        : <pre tabIndex={0} aria-label={`Output của ${command}`}><code>{output || (approvalPending ? 'Đang chờ bạn phê duyệt…' : running ? 'Đang chờ output…' : 'Lệnh không có output.')}</code></pre>}</div>
-    </details>
+    <button type="button" className="activity-popup-trigger" onClick={() => setOpen(true)} aria-haspopup="dialog">
+      <span className="activity-row-icon" aria-hidden="true">{running ? <LoaderCircle className="spin" /> : <Icon />}</span>
+      <span className="activity-label">{activityLabel(activity)}</span>
+      <span className="activity-timing"><time dateTime={activity.startedAt}>{formatClockTime(activity.startedAt)}</time><span aria-label={`Thời gian thực thi ${activityDuration(activity.startedAt, activity.finishedAt ?? now)}`}>· {activityDuration(activity.startedAt, activity.finishedAt ?? now)}</span></span>
+      <ChevronDown className="activity-chevron" aria-hidden="true" />
+    </button>
     {stoppable && <button type="button" className="activity-stop-button" aria-label={`Dừng ${activityLabel(activity)}`} onClick={(event) => { event.preventDefault(); event.stopPropagation(); onStop(activity); }}><CircleStop aria-hidden="true" /><span>Dừng</span></button>}
     {approvalPending && taskId && <ApprovalDecisionActions target={{ taskId, activityId: activity.id, turnId: activity.turnId }} />}
+    {open && <Modal title={activityLabel(activity)} description={`${formatClockTime(activity.startedAt)} · ${activityDuration(activity.startedAt, activity.finishedAt ?? now)}`} close={() => setOpen(false)}>
+      <div className="activity-popup-content">
+        <div className="activity-command"><FileCode2 /><code>{command}</code></div>
+        {codeView
+          ? <Suspense fallback={<pre tabIndex={0} aria-label={`Output của ${command}`}><code>{codeView.code}</code></pre>}><TaskCodeViewer {...codeView} label={`Output của ${command}`} /></Suspense>
+          : <pre tabIndex={0} aria-label={`Output của ${command}`}><code>{output || (approvalPending ? 'Đang chờ bạn phê duyệt…' : running ? 'Đang chờ output…' : 'Lệnh không có output.')}</code></pre>}
+      </div>
+    </Modal>}
   </div>;
 }
