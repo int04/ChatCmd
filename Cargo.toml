@@ -14,15 +14,20 @@ members = [
 resolver = "3"
 
 [dependencies]
+aes-gcm = "0.10"
 anyhow = "1"
 axum = { version = "0.8", features = ["ws"] }
+base64 = "0.22"
 chatcmd-core = { path = "crates/chatcmd-core" }
 chatcmd-mcp = { path = "crates/chatcmd-mcp" }
 chatcmd-runtime = { path = "crates/chatcmd-runtime" }
 chatcmd-storage = { path = "crates/chatcmd-storage" }
 futures-util = "0.3"
+hkdf = "0.12"
 notify = "8"
+p256 = { version = "0.13", features = ["ecdh"] }
 serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
 serde_json = "1"
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "sqlite"] }
 time = { version = "0.3", features = ["formatting"] }
