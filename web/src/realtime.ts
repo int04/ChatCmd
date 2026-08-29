@@ -8,7 +8,16 @@ type ServerHello = { type: 'crypto.serverHello'; protocol: number; publicKey: st
 const RealtimeContext = createContext<RealtimeContextValue | null>(null);
 const WS_CRYPTO_PROTOCOL = 1;
 const WS_AAD = new TextEncoder().encode('chatcmd/ws/v1');
+const WS_HANDSHAKE_AAD = new TextEncoder().encode('chatcmd/ws/handshake-obfuscation/v1');
 const WS_HKDF_INFO = new TextEncoder().encode('chatcmd/ws/aes-256-gcm/v1');
+const WS_HANDSHAKE_KEY_A = new Uint8Array([
+  0x9d, 0x23, 0x71, 0xc4, 0x5a, 0xe8, 0x16, 0x3b, 0x42, 0xaf, 0xd1, 0x67, 0x08, 0xbe, 0x95, 0xf2,
+  0x31, 0x6c, 0xa9, 0x0d, 0x77, 0xd4, 0x58, 0x83, 0xe1, 0x4f, 0xb6, 0x2a, 0xc8, 0x19, 0x65, 0x90,
+]);
+const WS_HANDSHAKE_KEY_B = new Uint8Array([
+  0x4a, 0x91, 0xc6, 0x3e, 0xeb, 0x52, 0xa7, 0xd0, 0xf5, 0x1b, 0x64, 0x92, 0xbd, 0x07, 0x2c, 0x49,
+  0xe8, 0xd3, 0x15, 0xba, 0x20, 0x6f, 0xc1, 0x34, 0x97, 0xaa, 0x03, 0xfd, 0x5e, 0xb2, 0x48, 0x27,
+]);
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
@@ -44,11 +53,13 @@ export function RealtimeProvider({ children, WebSocketImpl = WebSocket }: { chil
               ['deriveBits'],
             );
             const publicKey = await crypto.subtle.exportKey('raw', keyPair.publicKey);
-            currentSocket.send(JSON.stringify({
+            const handshakeKey = await importHandshakeKey();
+            const packet = await encryptHandshake(handshakeKey, {
               type: 'crypto.clientHello',
               protocol: WS_CRYPTO_PROTOCOL,
               publicKey: toBase64Url(new Uint8Array(publicKey)),
-            }));
+            });
+            currentSocket.send(toArrayBuffer(packet));
           } catch {
             socket?.close();
           }
@@ -58,9 +69,10 @@ export function RealtimeProvider({ children, WebSocketImpl = WebSocket }: { chil
       socket.onmessage = ({ data }) => {
         messageChain = messageChain
           .then(async () => {
-            if (typeof data === 'string') {
-              if (sessionKey || !keyPair) throw new Error('Unexpected plaintext WebSocket frame');
-              const hello = JSON.parse(data) as ServerHello;
+            if (!sessionKey) {
+              if (!keyPair || typeof data === 'string') throw new Error('Invalid WebSocket handshake frame');
+              const handshakeKey = await importHandshakeKey();
+              const hello = await decryptHandshake(handshakeKey, data);
               if (hello.type !== 'crypto.serverHello' || hello.protocol !== WS_CRYPTO_PROTOCOL) {
                 throw new Error('Unsupported WebSocket crypto handshake');
               }
@@ -71,7 +83,7 @@ export function RealtimeProvider({ children, WebSocketImpl = WebSocket }: { chil
               return;
             }
 
-            if (!sessionKey) throw new Error('Encrypted frame received before handshake');
+            if (typeof data === 'string') throw new Error('Plaintext WebSocket frame is forbidden');
             const event = await decryptEvent(sessionKey, data);
             if (!event.id || !event.type || seen.has(event.id)) return;
             seen.add(event.id);
@@ -107,6 +119,48 @@ export function RealtimeProvider({ children, WebSocketImpl = WebSocket }: { chil
   const value = useMemo<RealtimeContextValue>(() => ({ state, subscribe }), [state, subscribe]);
 
   return createElement(RealtimeContext.Provider, { value }, children);
+}
+
+async function importHandshakeKey(): Promise<CryptoKey> {
+  const keyBytes = new Uint8Array(32);
+  for (let index = 0; index < keyBytes.length; index += 1) {
+    keyBytes[index] = WS_HANDSHAKE_KEY_A[index] ^ WS_HANDSHAKE_KEY_B[index];
+  }
+  const key = await crypto.subtle.importKey(
+    'raw',
+    toArrayBuffer(keyBytes),
+    { name: 'AES-GCM' },
+    false,
+    ['encrypt', 'decrypt'],
+  );
+  keyBytes.fill(0);
+  return key;
+}
+
+async function encryptHandshake(key: CryptoKey, value: unknown): Promise<Uint8Array> {
+  const nonce = crypto.getRandomValues(new Uint8Array(12));
+  const plaintext = textEncoder.encode(JSON.stringify(value));
+  const ciphertext = new Uint8Array(await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: nonce, additionalData: WS_HANDSHAKE_AAD, tagLength: 128 },
+    key,
+    plaintext,
+  ));
+  const packet = new Uint8Array(1 + nonce.length + ciphertext.length);
+  packet[0] = WS_CRYPTO_PROTOCOL;
+  packet.set(nonce, 1);
+  packet.set(ciphertext, 13);
+  return packet;
+}
+
+async function decryptHandshake(key: CryptoKey, data: ArrayBuffer | Blob): Promise<ServerHello> {
+  const packet = await toBytes(data);
+  if (packet.length <= 13 || packet[0] !== WS_CRYPTO_PROTOCOL) throw new Error('Invalid handshake frame');
+  const plaintext = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: packet.slice(1, 13), additionalData: WS_HANDSHAKE_AAD, tagLength: 128 },
+    key,
+    packet.slice(13),
+  );
+  return JSON.parse(textDecoder.decode(plaintext)) as ServerHello;
 }
 
 async function deriveSessionKey(privateKey: CryptoKey, hello: ServerHello): Promise<CryptoKey> {

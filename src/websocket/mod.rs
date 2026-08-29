@@ -32,8 +32,22 @@ use uuid::Uuid;
 
 const WS_CRYPTO_PROTOCOL: u8 = 1;
 const WS_AAD: &[u8] = b"chatcmd/ws/v1";
+const WS_HANDSHAKE_AAD: &[u8] = b"chatcmd/ws/handshake-obfuscation/v1";
 const WS_HKDF_INFO: &[u8] = b"chatcmd/ws/aes-256-gcm/v1";
 const WS_HANDSHAKE_TIMEOUT_SECONDS: u64 = 10;
+
+// This fixed key only obfuscates the public ECDH handshake. It is intentionally
+// not used as the session security boundary; session secrecy still comes from
+// ephemeral ECDH + HKDF. Split/XOR storage merely avoids a directly searchable
+// 32-byte key literal in either client or server source.
+const WS_HANDSHAKE_KEY_A: [u8; 32] = [
+    0x9d, 0x23, 0x71, 0xc4, 0x5a, 0xe8, 0x16, 0x3b, 0x42, 0xaf, 0xd1, 0x67, 0x08, 0xbe, 0x95, 0xf2,
+    0x31, 0x6c, 0xa9, 0x0d, 0x77, 0xd4, 0x58, 0x83, 0xe1, 0x4f, 0xb6, 0x2a, 0xc8, 0x19, 0x65, 0x90,
+];
+const WS_HANDSHAKE_KEY_B: [u8; 32] = [
+    0x4a, 0x91, 0xc6, 0x3e, 0xeb, 0x52, 0xa7, 0xd0, 0xf5, 0x1b, 0x64, 0x92, 0xbd, 0x07, 0x2c, 0x49,
+    0xe8, 0xd3, 0x15, 0xba, 0x20, 0x6f, 0xc1, 0x34, 0x97, 0xaa, 0x03, 0xfd, 0x5e, 0xb2, 0x48, 0x27,
+];
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -200,10 +214,12 @@ async fn establish_encrypted_session(socket: &mut WebSocket) -> Option<Aes256Gcm
     .ok()??
     .ok()?;
 
-    let Message::Text(text) = incoming else {
+    let Message::Binary(packet) = incoming else {
         return None;
     };
-    let hello: ClientHello = serde_json::from_str(text.as_str()).ok()?;
+    let handshake_cipher = handshake_cipher()?;
+    let hello_plaintext = decrypt_handshake_payload(&handshake_cipher, packet.as_ref())?;
+    let hello: ClientHello = serde_json::from_slice(&hello_plaintext).ok()?;
     if hello.message_type != "crypto.clientHello" || hello.protocol != WS_CRYPTO_PROTOCOL {
         return None;
     }
@@ -228,9 +244,28 @@ async fn establish_encrypted_session(socket: &mut WebSocket) -> Option<Aes256Gcm
         public_key: URL_SAFE_NO_PAD.encode(server_public.to_sec1_bytes()),
         salt: URL_SAFE_NO_PAD.encode(salt),
     };
-    let response_text = serde_json::to_string(&response).ok()?;
-    socket.send(Message::Text(response_text.into())).await.ok()?;
+    let response_plaintext = serde_json::to_vec(&response).ok()?;
+    let response_packet = encrypt_handshake_payload(&handshake_cipher, &response_plaintext)?;
+    socket.send(Message::Binary(response_packet.into())).await.ok()?;
     Some(cipher)
+}
+
+fn handshake_cipher() -> Option<Aes256Gcm> {
+    let mut key = [0_u8; 32];
+    for (index, byte) in key.iter_mut().enumerate() {
+        *byte = WS_HANDSHAKE_KEY_A[index] ^ WS_HANDSHAKE_KEY_B[index];
+    }
+    let cipher = Aes256Gcm::new_from_slice(&key).ok()?;
+    key.fill(0);
+    Some(cipher)
+}
+
+fn encrypt_handshake_payload(cipher: &Aes256Gcm, plaintext: &[u8]) -> Option<Vec<u8>> {
+    encrypt_payload_with_aad(cipher, plaintext, WS_HANDSHAKE_AAD)
+}
+
+fn decrypt_handshake_payload(cipher: &Aes256Gcm, packet: &[u8]) -> Option<Vec<u8>> {
+    decrypt_payload_with_aad(cipher, packet, WS_HANDSHAKE_AAD)
 }
 
 async fn send_encrypted_json<S, T>(
@@ -248,15 +283,16 @@ where
 }
 
 fn encrypt_payload(cipher: &Aes256Gcm, plaintext: &[u8]) -> Option<Vec<u8>> {
+    encrypt_payload_with_aad(cipher, plaintext, WS_AAD)
+}
+
+fn encrypt_payload_with_aad(cipher: &Aes256Gcm, plaintext: &[u8], aad: &[u8]) -> Option<Vec<u8>> {
     let mut nonce_bytes = [0_u8; 12];
     OsRng.fill_bytes(&mut nonce_bytes);
     let ciphertext = cipher
         .encrypt(
             Nonce::from_slice(&nonce_bytes),
-            Payload {
-                msg: plaintext,
-                aad: WS_AAD,
-            },
+            Payload { msg: plaintext, aad },
         )
         .ok()?;
 
@@ -267,20 +303,24 @@ fn encrypt_payload(cipher: &Aes256Gcm, plaintext: &[u8]) -> Option<Vec<u8>> {
     Some(packet)
 }
 
-fn decrypt_client_payload(cipher: &Aes256Gcm, packet: &[u8]) -> Option<Value> {
+fn decrypt_payload_with_aad(cipher: &Aes256Gcm, packet: &[u8], aad: &[u8]) -> Option<Vec<u8>> {
     if packet.len() <= 13 || packet[0] != WS_CRYPTO_PROTOCOL {
         return None;
     }
     let nonce = Nonce::from_slice(&packet[1..13]);
-    let plaintext = cipher
+    cipher
         .decrypt(
             nonce,
             Payload {
                 msg: &packet[13..],
-                aad: WS_AAD,
+                aad,
             },
         )
-        .ok()?;
+        .ok()
+}
+
+fn decrypt_client_payload(cipher: &Aes256Gcm, packet: &[u8]) -> Option<Value> {
+    let plaintext = decrypt_payload_with_aad(cipher, packet, WS_AAD)?;
     serde_json::from_slice(&plaintext).ok()
 }
 
@@ -341,6 +381,18 @@ mod tests {
             )
             .expect("decrypt");
         assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn handshake_payload_is_binary_obfuscated_and_round_trips() {
+        let cipher = handshake_cipher().expect("handshake cipher");
+        let plaintext = br#"{\"type\":\"crypto.clientHello\",\"protocol\":1,\"publicKey\":\"visible-public-key\"}"#;
+        let packet = encrypt_handshake_payload(&cipher, plaintext).expect("encrypt handshake");
+
+        assert_eq!(packet[0], WS_CRYPTO_PROTOCOL);
+        assert!(!packet.windows(b"crypto.clientHello".len()).any(|part| part == b"crypto.clientHello"));
+        assert!(!packet.windows(b"visible-public-key".len()).any(|part| part == b"visible-public-key"));
+        assert_eq!(decrypt_handshake_payload(&cipher, &packet).expect("decrypt handshake"), plaintext);
     }
 
     #[test]
