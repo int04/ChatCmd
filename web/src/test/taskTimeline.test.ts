@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TimelineEvent } from '../types';
-import { activityCodeView, activityOutput, buildProcessBlocks, findUserMessage, type ToolActivity, upsertTaskEvent } from '../tasks/taskTimeline';
+import { activityCodeView, activityOutput, buildProcessBlocks, findUserMessage, mergeLiveDetail, type ToolActivity, upsertTaskEvent } from '../tasks/taskTimeline';
 
 describe('task realtime list updates', () => {
   it('adds a brand new conversation when its first websocket event arrives', () => {
@@ -58,6 +58,34 @@ describe('task realtime list updates', () => {
     };
     const tasks = upsertTaskEvent(upsertTaskEvent([], running), stopped);
     expect(tasks?.[0]).toMatchObject({ status: 'stopped', finalResponseCount: 0 });
+  });
+});
+
+describe('task final-response status reconciliation', () => {
+  it('treats a task as completed when persisted status is stale but the latest turn has a final response', () => {
+    const completed: TimelineEvent = {
+      id: 'final-1', type: 'status', occurredAt: '2026-08-27T08:00:05.000Z',
+      taskId: 'task-1', turnId: 'turn-1', payload: { status: 'completed', content: 'Xong rồi.' },
+    };
+    const finalizerResult: TimelineEvent = {
+      id: 'finalizer-result', type: 'tool_result', occurredAt: '2026-08-27T08:00:06.000Z',
+      taskId: 'task-1', turnId: 'turn-1', payload: { tool: 'agent_turn_complete', status: 'succeeded' },
+    };
+    const detail = mergeLiveDetail({ task: { id: 'task-1', status: 'running', updatedAtUtc: '2026-08-27T08:00:06.000Z' }, events: [completed, finalizerResult] }, []);
+    expect(detail.task.status).toBe('completed');
+  });
+
+  it('keeps running when a genuinely newer turn starts after the previous final response', () => {
+    const completed: TimelineEvent = {
+      id: 'final-1', type: 'status', occurredAt: '2026-08-27T08:00:05.000Z',
+      taskId: 'task-1', turnId: 'turn-1', payload: { status: 'completed', content: 'Xong lượt trước.' },
+    };
+    const nextTurn: TimelineEvent = {
+      id: 'next-turn', type: 'message', occurredAt: '2026-08-27T08:01:00.000Z',
+      taskId: 'task-1', turnId: 'turn-2', payload: { role: 'user', content: 'Làm tiếp.' },
+    };
+    const detail = mergeLiveDetail({ task: { id: 'task-1', status: 'running', updatedAtUtc: '2026-08-27T08:01:00.000Z' }, events: [completed, nextTurn] }, []);
+    expect(detail.task.status).toBe('running');
   });
 });
 

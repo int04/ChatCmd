@@ -87,7 +87,17 @@ function TaskRailRow({ task, selected, unread, onContextMenu }: { task: Task; se
 }
 function pageItems(page: { items?: Task[] } | Task[]) { return Array.isArray(page) ? page : page.items ?? []; }
 function pageCursor(page: { nextCursor?: string } | Task[]) { return Array.isArray(page) ? undefined : page.nextCursor; }
-function mergeTasks(first: Task[], second: Task[]) { const merged = new Map<string, Task>(); for (const task of [...first, ...second]) if (!merged.has(task.id)) merged.set(task.id, task); return [...merged.values()]; }
+export function mergeTasks(first: Task[], second: Task[]) {
+  const merged = new Map<string, Task>();
+  for (const task of [...first, ...second]) {
+    const current = merged.get(task.id);
+    if (!current) { merged.set(task.id, task); continue; }
+    const currentTime = Date.parse(current.updatedAtUtc) || 0;
+    const nextTime = Date.parse(task.updatedAtUtc) || 0;
+    if (nextTime > currentTime) merged.set(task.id, task);
+  }
+  return [...merged.values()];
+}
 function canDeleteTask(task: Task) { return ['completed', 'failed', 'stopped', 'interrupted'].includes(task.status); }
 function taskStatusLabel(status: string) { if (status === 'running') return tr('Processing'); if (status === 'completed') return tr('Complete'); if (status === 'failed') return tr('Has errors'); if (status === 'stopped') return tr('Stopped'); return status; }
 function activeTaskId(pathname: string) { if (!pathname.startsWith('/tasks/')) return undefined; const value = pathname.slice('/tasks/'.length).split('/')[0]; if (!value || value === 'new') return undefined; try { return decodeURIComponent(value); } catch { return value; } }

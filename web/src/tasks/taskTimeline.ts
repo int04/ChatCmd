@@ -400,13 +400,31 @@ export function taskFromRealtimeEvent(event: TimelineEvent): Task | null {
 }
 
 export function mergeLiveDetail(detail: TaskDetail, liveEvents: TimelineEvent[]): TaskDetail {
-  if (!liveEvents.length) return detail;
   const events = [...(detail.events ?? [])];
   const seen = new Set(events.map((event) => event.id));
   for (const event of liveEvents) if (!seen.has(event.id)) { events.push(event); seen.add(event.id); }
   events.sort((left, right) => Date.parse(left.occurredAt) - Date.parse(right.occurredAt) || left.id.localeCompare(right.id));
-  const task = liveEvents.reduce(mergeTaskEvent, detail.task);
+  const mergedTask = liveEvents.reduce(mergeTaskEvent, detail.task);
+  const task = reconcileTaskStatusFromEvents(mergedTask, events);
+  if (!liveEvents.length && task === detail.task) return detail;
   return { ...detail, task, turns: undefined, events };
+}
+
+function reconcileTaskStatusFromEvents(task: Task, events: TimelineEvent[]) {
+  if (task.status !== 'running') return task;
+  const final = findFinalResponse(events);
+  if (!final) return task;
+  const finalIndex = events.indexOf(final.event);
+  const finalTurnId = final.event.turnId;
+  const hasLaterWork = events.slice(finalIndex + 1).some((event) => {
+    if (event.turnId && finalTurnId && event.turnId !== finalTurnId) return true;
+    const payload = payloadObject(event);
+    if (event.type === 'message' && stringValue(payload.role) === 'user') return true;
+    if (event.type === 'progress') return true;
+    if (event.type === 'tool_call') return stringValue(payload.tool) !== 'agent_turn_complete';
+    return false;
+  });
+  return hasLaterWork ? task : { ...task, status: 'completed' };
 }
 
 function taskStatusFromEvent(status: string, eventType: string, fallback: string) {
