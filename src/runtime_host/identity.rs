@@ -61,7 +61,6 @@ impl RuntimeHost {
                 })
             })
         });
-        let logical_session = safe_id("mcp-session", &context.agent_id, &task);
         let turn = context.turn_id.clone().unwrap_or_else(|| {
             safe_id(
                 "turn",
@@ -71,25 +70,32 @@ impl RuntimeHost {
         });
         context.task_id = Some(task.clone());
         context.turn_id = Some(turn);
-        context.mcp_session_id = Some(logical_session.clone());
 
-        let task_id = TaskId::new(task).map_err(|error| invalid("taskId", error))?;
-        let session_id =
-            SessionId::new(logical_session).map_err(|error| invalid("sessionId", error))?;
+        let task_id = TaskId::new(&task).map_err(|error| invalid("taskId", error))?;
         let current = self
             .repository
             .task(&task_id)
             .await
             .map_err(storage_error)?;
-        if current
+        let reopening_stopped = current
             .as_ref()
-            .is_some_and(|task| task.status == TaskStatus::Stopped)
-        {
-            return Err(RuntimeError::new(
-                "conversation_stopped",
-                "this conversation was stopped by the user and cannot continue",
-            ));
-        }
+            .is_some_and(|task| task.status == TaskStatus::Stopped);
+        let generation = current.as_ref().map_or(1, |task| {
+            if reopening_stopped {
+                task.generation.saturating_add(1)
+            } else {
+                task.generation
+            }
+        });
+        let logical_session_scope = if generation > 1 {
+            format!("{task}\0generation:{generation}")
+        } else {
+            task
+        };
+        let logical_session = safe_id("mcp-session", &context.agent_id, &logical_session_scope);
+        context.mcp_session_id = Some(logical_session.clone());
+        let session_id =
+            SessionId::new(logical_session).map_err(|error| invalid("sessionId", error))?;
         if current
             .as_ref()
             .is_some_and(|task| task.allow_execute == Some(false))
@@ -97,7 +103,6 @@ impl RuntimeHost {
             return Err(conversation_approval_denied());
         }
         let now = now_ms();
-        let generation = current.as_ref().map_or(1, |task| task.generation);
         let allow_execute = if let Some(task) = current.as_ref() {
             task.allow_execute
         } else if self.approve_new_conversations_enabled().await? {

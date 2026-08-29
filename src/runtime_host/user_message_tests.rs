@@ -447,8 +447,12 @@ async fn repeated_subagent_registration_is_idempotent_with_new_request_id() {
 }
 
 #[tokio::test]
-async fn stopped_conversation_cannot_be_resurrected_by_later_mcp_calls() {
+async fn stopped_conversation_reopens_with_a_new_logical_session() {
     let (host, agent_id, _directory) = test_host().await;
+    sqlx::query("INSERT INTO settings(key,value_json,updated_at_ms) VALUES('ui_approveNewConversations','false',0) ON CONFLICT(key) DO UPDATE SET value_json='false',updated_at_ms=0")
+        .execute(host.repository.pool())
+        .await
+        .expect("disable conversation approval for test");
     let scope = "conversation-stop-guard";
     let first = host
         .call_persisted(
@@ -465,13 +469,16 @@ async fn stopped_conversation_cannot_be_resurrected_by_later_mcp_calls() {
         .await
         .expect("initial user message");
     let task_id = first["taskId"].as_str().expect("task id");
-    sqlx::query("UPDATE tasks SET status='stopped',stopped_at_ms=1 WHERE id=?")
-        .bind(task_id)
-        .execute(host.repository.pool())
-        .await
-        .expect("stop task");
+    let first_session_id = first["sessionId"].as_str().expect("session id").to_owned();
+    sqlx::query(
+        "UPDATE tasks SET status='stopped',active_session_id=NULL,stopped_at_ms=1 WHERE id=?",
+    )
+    .bind(task_id)
+    .execute(host.repository.pool())
+    .await
+    .expect("stop task");
 
-    let error = host
+    let reopened = host
         .call_persisted(
             "agent_user_message",
             turn_context(
@@ -484,6 +491,48 @@ async fn stopped_conversation_cannot_be_resurrected_by_later_mcp_calls() {
             json!({"content":"Try to continue"}),
         )
         .await
-        .expect_err("stopped task must remain stopped");
-    assert_eq!(error.code, "conversation_stopped");
+        .expect("stopped task should reopen");
+    assert_eq!(reopened["taskId"], task_id);
+    assert_ne!(reopened["sessionId"], first_session_id);
+
+    let task = sqlx::query(
+        "SELECT status,generation,stopped_at_ms,active_session_id FROM tasks WHERE id=?",
+    )
+    .bind(task_id)
+    .fetch_one(host.repository.pool())
+    .await
+    .expect("read reopened task");
+    assert_eq!(
+        task.try_get::<String, _>("status").expect("status"),
+        "running"
+    );
+    assert_eq!(task.try_get::<i64, _>("generation").expect("generation"), 2);
+    assert!(
+        task.try_get::<Option<i64>, _>("stopped_at_ms")
+            .expect("stopped_at_ms")
+            .is_none()
+    );
+    assert_eq!(
+        task.try_get::<Option<String>, _>("active_session_id")
+            .expect("active_session_id")
+            .as_deref(),
+        reopened["sessionId"].as_str()
+    );
+
+    let continued = host
+        .call_persisted(
+            "agent_user_message",
+            turn_context(
+                "stop-user-third",
+                &agent_id,
+                "agent_user_message",
+                "turn-stop-3",
+                scope,
+            ),
+            json!({"content":"Run a command"}),
+        )
+        .await
+        .expect("later turns after reopen should reuse generation session without conflict");
+    assert_eq!(continued["taskId"], task_id);
+    assert_eq!(continued["sessionId"], reopened["sessionId"]);
 }
