@@ -45,10 +45,7 @@ export function useTaskDocumentTitle(tasks: Task[] | undefined) {
       document.title = `ChatCMD · ${tr('Local Control')}`;
       return;
     }
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      document.title = `${active.label} · ChatCMD`;
-      return;
-    }
+
     let frame = 0;
     const render = () => { document.title = `${TITLE_FRAMES[frame++ % TITLE_FRAMES.length]} ${active.label} · ChatCMD`; };
     render();
