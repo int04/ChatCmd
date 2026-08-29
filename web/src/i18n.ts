@@ -371,6 +371,8 @@ const vi: Record<string, string> = {
   'Waiting for approval to {target}': 'Chờ phê duyệt để {target}',
   'Stopping {target}': 'Đang dừng {target}',
   'Stopped {target}': 'Đã dừng {target}',
+  'Interrupted {target}': 'Đã gián đoạn {target}',
+  'Tool ended without a terminal result before the turn completed.': 'Tool không gửi trạng thái kết thúc trước khi lượt hoàn tất.',
   'Reading {target}': 'Đang đọc {target}',
   'Searching {target}': 'Đang tìm {target}',
   'Editing {target}': 'Đang sửa {target}',

@@ -37,7 +37,7 @@ export function TaskTurnBubble({ turn, taskId, subagents = [], agentLabel = 'Cod
   const autoFinalized = completion?.payload.autoFinalized === true;
   const userMessage = findUserMessage(events);
   const visibleUserMessage = userMessage?.text.replace(/^\s*CMDGPT_SUBAGENT_ID=subagent-[A-Za-z0-9_-]+\s*$/gm, '').trim();
-  const processEvents = events.filter((event) => event !== response?.event && event !== userMessage?.event);
+  const processEvents = events.filter((event) => event !== userMessage?.event);
   const blocks = buildProcessBlocks(processEvents);
   const activities = blocks.flatMap((block) => block.type === 'activities' ? block.activities : []);
   const rawStatus = turn.status ?? 'incomplete';
@@ -202,16 +202,18 @@ function ActivityRow({ activity, taskId, onStop }: { activity: ToolActivity; tas
   const approvalPending = activity.status === 'pending_approval';
   const stopRequested = activity.status === 'stop_requested';
   const stopped = activity.status === 'stopped';
+  const interrupted = activity.status === 'interrupted';
+  const ended = stopped || interrupted;
   const running = activity.status === 'started' || approvalPending || stopRequested;
   const failed = activity.status === 'failed';
   const stoppable = activity.status === 'started';
-  const Icon = stopped ? CircleStop : failed ? CircleAlert : activity.kind === 'read' ? BookOpen : activity.kind === 'search' ? Search : ['edit', 'create', 'delete', 'copy', 'move'].includes(activity.kind) ? FilePenLine : activity.kind === 'git' ? GitBranch : activity.kind === 'tool' ? Wrench : TerminalSquare;
+  const Icon = ended ? CircleStop : failed ? CircleAlert : activity.kind === 'read' ? BookOpen : activity.kind === 'search' ? Search : ['edit', 'create', 'delete', 'copy', 'move'].includes(activity.kind) ? FilePenLine : activity.kind === 'git' ? GitBranch : activity.kind === 'tool' ? Wrench : TerminalSquare;
   const command = activityCommand(activity);
   const output = activityOutput(activity);
   const searchCodeViews = fsSearchCodeViews(activity);
   const diffView = activityDiffView(activity);
   const codeView = activityCodeView(activity);
-  return <div className={`terminal-activity ${running ? 'running' : ''} ${stopRequested ? 'stopping' : ''} ${stopped ? 'stopped' : ''} ${failed ? 'failed' : ''} ${recentlyViewed ? 'recently-viewed' : ''}`}>
+  return <div className={`terminal-activity ${running ? 'running' : ''} ${stopRequested ? 'stopping' : ''} ${ended ? 'stopped' : ''} ${failed ? 'failed' : ''} ${recentlyViewed ? 'recently-viewed' : ''}`}>
     <button type="button" className="activity-popup-trigger" onClick={() => setOpen(true)} aria-haspopup="dialog">
       <span className="activity-row-icon" aria-hidden="true">{running ? <LoaderCircle className="spin" /> : <Icon />}</span>
       <span className="activity-label">{activityLabel(activity)}</span>

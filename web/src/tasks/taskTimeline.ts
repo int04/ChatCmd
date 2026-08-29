@@ -143,6 +143,17 @@ export function buildProcessBlocks(events: TimelineEvent[]): ProcessBlock[] {
       blocks.push({ type: 'progress', key: event.id, event });
     }
   }
+  const completion = findCompletionSignal(events);
+  if (completion) {
+    for (const activity of pending.values()) {
+      if (activity.finishedAt || !['started', 'pending_approval', 'stop_requested'].includes(activity.status)) continue;
+      activity.status = 'interrupted';
+      activity.finishedAt = completion.event.occurredAt;
+      activity.errorCode = 'tool_result_missing';
+      activity.errorMessage = tr('Tool ended without a terminal result before the turn completed.');
+      activity.error = activity.errorMessage;
+    }
+  }
   return blocks.filter((block) => block.type === 'progress' || block.activities.length > 0);
 }
 
@@ -216,6 +227,7 @@ export function activityLabel(activity: ToolActivity) {
   if (activity.status === 'pending_approval') return tr('Waiting for approval to {target}', { target });
   if (activity.status === 'stop_requested') return tr('Stopping {target}', { target });
   if (activity.status === 'stopped') return tr('Stopped {target}', { target });
+  if (activity.status === 'interrupted') return tr('Interrupted {target}', { target });
   if (running) {
     if (activity.kind === 'read') return tr('Reading {target}', { target });
     if (activity.kind === 'search') return tr('Searching {target}', { target });

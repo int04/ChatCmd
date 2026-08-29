@@ -140,6 +140,17 @@ impl RuntimeHost {
         .map_err(watchdog_storage_error)?;
         tx.commit().await.map_err(watchdog_storage_error)?;
 
+        if let Err(error) = self
+            .reconcile_orphaned_tool_calls(task_id, turn_id, session_id, "finalizer_timeout", now)
+            .await
+        {
+            tracing::warn!(
+                task_id,
+                turn_id,
+                error = ?error,
+                "failed to reconcile orphaned tool calls after watchdog completion"
+            );
+        }
         self.publish_event(
             event_id,
             "status",

@@ -186,4 +186,21 @@ describe('running tool stop projection', () => {
     const blocks = buildProcessBlocks([started, stopped]);
     expect(blocks[0]).toMatchObject({ type: 'activities', activities: [{ id: 'activity-1', status: 'stopped', error: 'the user stopped this activity. Reason: Đổi cách làm' }] });
   });
+
+  it('interrupts an orphaned running activity when the turn has already completed', () => {
+    const completed: TimelineEvent = {
+      id: 'turn-completed', type: 'status', occurredAt: '2026-08-27T08:00:03.000Z',
+      taskId: 'task-1', turnId: 'turn-1', payload: { status: 'completed', content: 'Xong.' },
+    };
+    const blocks = buildProcessBlocks([started, completed]);
+    expect(blocks[0]).toMatchObject({
+      type: 'activities',
+      activities: [{
+        id: 'activity-1',
+        status: 'interrupted',
+        finishedAt: completed.occurredAt,
+        errorCode: 'tool_result_missing',
+      }],
+    });
+  });
 });
