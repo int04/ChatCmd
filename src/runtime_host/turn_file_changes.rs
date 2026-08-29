@@ -29,6 +29,8 @@ struct ChangeState {
     after: Option<String>,
     kind_hint: Option<&'static str>,
     exact_before: bool,
+    created_in_turn: bool,
+    removed_after_create: bool,
 }
 
 impl RuntimeHost {
@@ -132,12 +134,15 @@ impl RuntimeHost {
                 continue;
             }
             let current = read_text_snapshot(&path);
+            let exists_now = path.is_file();
+            if change.created_in_turn && change.removed_after_create && !exists_now {
+                continue;
+            }
             if change.after.is_none() {
                 change.after = current.clone();
             }
             let before = change.before.unwrap_or_default();
             let after = change.after.unwrap_or_default();
-            let exists_now = path.is_file();
             let kind = if !exists_now {
                 "deleted"
             } else if change.kind_hint == Some("added") && before.is_empty() {
@@ -207,6 +212,12 @@ fn record_watcher_event(
             continue;
         }
         let change = turn.changes.entry(path.clone()).or_default();
+        if hint == Some("added") {
+            change.created_in_turn = true;
+            change.removed_after_create = false;
+        } else if hint == Some("deleted") && change.created_in_turn {
+            change.removed_after_create = true;
+        }
         if change.before.is_none() {
             if hint == Some("added") {
                 change.before = Some(String::new());
