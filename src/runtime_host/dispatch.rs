@@ -1,6 +1,7 @@
 use std::{
+    collections::HashSet,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
     time::Duration,
@@ -202,6 +203,7 @@ impl RuntimeHost {
                 let host = self.clone();
                 let progress_context = context.clone();
                 let progress_sequence = Arc::new(AtomicU64::new(0));
+                let emitted_paths = Arc::new(Mutex::new(HashSet::new()));
                 value(
                     workspace
                         .search(
@@ -213,18 +215,19 @@ impl RuntimeHost {
                             input.include_ignored,
                             input.exclude,
                             move |progress: SearchProgress| {
+                                if progress.matched.is_none() {
+                                    return;
+                                }
+                                let Ok(mut paths) = emitted_paths.lock() else {
+                                    return;
+                                };
+                                if !paths.insert(progress.path.clone()) {
+                                    return;
+                                }
+                                drop(paths);
                                 let sequence =
                                     progress_sequence.fetch_add(1, Ordering::Relaxed) + 1;
-                                let text = if let Some(matched) = progress.matched {
-                                    format!("MATCH {}\n", matched)
-                                } else {
-                                    format!(
-                                        "Scanning {} files · {} matches\n{}\n",
-                                        progress.files_scanned,
-                                        progress.matches_found,
-                                        progress.path.display()
-                                    )
-                                };
+                                let text = format!("{}\n", progress.path.display());
                                 host.publish_event(
                                     format!(
                                         "{}:search-progress:{sequence}",

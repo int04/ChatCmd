@@ -261,6 +261,10 @@ export function activityCommand(activity: ToolActivity) {
 
 export function activityOutput(activity: ToolActivity) {
   if (activity.output === undefined) return activity.error ? activity.error : '';
+  if (activity.tool === 'fs_search' && Array.isArray(activity.output)) {
+    const paths = new Set(activity.output.map((item) => stringValue(asObject(item).path)).filter(Boolean));
+    return [...paths].join('\n');
+  }
   if (typeof activity.output === 'string') return stripAnsi(activity.output);
   const value = asObject(activity.output);
   if (activity.kind === 'git') {
@@ -279,6 +283,17 @@ export function activityOutput(activity: ToolActivity) {
     return key === 'code' ? text : stripAnsi(text);
   }
   return formatValue(activity.output);
+}
+
+export function fsSearchCodeViews(activity: ToolActivity) {
+  if (activity.tool !== 'fs_search' || !Array.isArray(activity.output)) return [];
+  return activity.output.flatMap((item) => {
+    const value = asObject(item);
+    const path = stringValue(value.path);
+    const text = stringValue(value.text);
+    if (!path || !text) return [];
+    return [{ code: text, path, startLine: Math.max(1, Number(value.line) || 1) }];
+  });
 }
 
 export function activityCodeView(activity: ToolActivity) {

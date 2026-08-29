@@ -20,6 +20,7 @@ import {
   findFinalResponse,
   findUserMessage,
   formatClockTime,
+  fsSearchCodeViews,
   latestMessage,
   summarizeActivities,
   type ToolActivity,
@@ -141,6 +142,7 @@ function ActivityRow({ activity, taskId, onStop }: { activity: ToolActivity; tas
   const Icon = stopped ? CircleStop : failed ? CircleAlert : activity.kind === 'read' ? BookOpen : activity.kind === 'search' ? Search : ['edit', 'create', 'delete', 'copy', 'move'].includes(activity.kind) ? FilePenLine : activity.kind === 'git' ? GitBranch : activity.kind === 'tool' ? Wrench : TerminalSquare;
   const command = activityCommand(activity);
   const output = activityOutput(activity);
+  const searchCodeViews = fsSearchCodeViews(activity);
   const codeView = activityCodeView(activity);
   return <div className={`terminal-activity ${running ? 'running' : ''} ${stopRequested ? 'stopping' : ''} ${stopped ? 'stopped' : ''} ${failed ? 'failed' : ''} ${recentlyViewed ? 'recently-viewed' : ''}`}>
     <button type="button" className="activity-popup-trigger" onClick={() => setOpen(true)} aria-haspopup="dialog">
@@ -160,9 +162,11 @@ function ActivityRow({ activity, taskId, onStop }: { activity: ToolActivity; tas
           <div className="activity-error-message">{activity.errorMessage || activity.error || tr('Tool returned failed status without an error message.')}</div>
           {activity.errorDetails !== undefined && activity.errorDetails !== null && <pre tabIndex={0} aria-label={tr('Tool error details')}><code>{formatErrorDetails(activity.errorDetails)}</code></pre>}
         </div>}
-        {codeView
-          ? <Suspense fallback={<pre tabIndex={0} aria-label={tr('Output of {command}', { command })}><code>{codeView.code}</code></pre>}><TaskCodeViewer {...codeView} label={tr('Output of {command}', { command })} /></Suspense>
-          : <pre tabIndex={0} aria-label={tr('Output of {command}', { command })}><code>{output || (approvalPending ? tr('Waiting for your approval…') : running ? tr('Waiting for output…') : tr('Command produced no output.'))}</code></pre>}
+        {searchCodeViews.length > 0
+          ? <div className="fs-search-code-results">{searchCodeViews.map((view, index) => <div className="fs-search-code-result" key={`${view.path}:${view.startLine}:${index}`}><code className="fs-search-result-path">{view.path}</code><Suspense fallback={<pre tabIndex={0} aria-label={tr('Output of {command}', { command })}><code>{view.code}</code></pre>}><TaskCodeViewer {...view} label={view.path} /></Suspense></div>)}</div>
+          : codeView
+            ? <Suspense fallback={<pre tabIndex={0} aria-label={tr('Output of {command}', { command })}><code>{codeView.code}</code></pre>}><TaskCodeViewer {...codeView} label={tr('Output of {command}', { command })} /></Suspense>
+            : <pre tabIndex={0} aria-label={tr('Output of {command}', { command })}><code>{output || (approvalPending ? tr('Waiting for your approval…') : running ? tr('Waiting for output…') : tr('Command produced no output.'))}</code></pre>}
       </div>
     </Modal>}
   </div>;
