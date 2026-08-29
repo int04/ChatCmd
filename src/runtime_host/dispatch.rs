@@ -1,11 +1,18 @@
-use std::time::Duration;
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 
 use chatcmd_core::{
     ArtifactId, ArtifactStore, ExecutionMode, TaskExecutionMode, TaskId, TaskStore,
 };
 use chatcmd_mcp::RuntimeApi as _;
 use chatcmd_runtime::{
-    OperationContext, RuntimeError, RuntimeResult, ShellCreateRequest, ShellWriteRequest,
+    OperationContext, RuntimeError, RuntimeResult, SearchProgress, ShellCreateRequest,
+    ShellWriteRequest,
 };
 use serde_json::{Value, json};
 
@@ -192,6 +199,9 @@ impl RuntimeHost {
             }
             "fs_search" => {
                 let input: SearchInput = parse(arguments)?;
+                let host = self.clone();
+                let progress_context = context.clone();
+                let progress_sequence = Arc::new(AtomicU64::new(0));
                 value(
                     workspace
                         .search(
@@ -200,6 +210,36 @@ impl RuntimeHost {
                             input.case_sensitive,
                             input.max_results,
                             input.max_file_bytes,
+                            move |progress: SearchProgress| {
+                                let sequence =
+                                    progress_sequence.fetch_add(1, Ordering::Relaxed) + 1;
+                                let text = if let Some(matched) = progress.matched {
+                                    format!("MATCH {}\n", matched)
+                                } else {
+                                    format!(
+                                        "Scanning {} files · {} matches\n{}\n",
+                                        progress.files_scanned,
+                                        progress.matches_found,
+                                        progress.path.display()
+                                    )
+                                };
+                                host.publish_event(
+                                    format!(
+                                        "{}:search-progress:{sequence}",
+                                        progress_context.request_id
+                                    ),
+                                    "terminal_output",
+                                    progress_context.task_id.clone(),
+                                    progress_context.mcp_session_id.clone(),
+                                    progress_context.turn_id.clone(),
+                                    json!({
+                                        "text": text,
+                                        "stream": "tool",
+                                        "encoding": "utf-8",
+                                        "activityId": progress_context.request_id
+                                    }),
+                                );
+                            },
                         )
                         .await?,
                 )

@@ -7,7 +7,7 @@ mod shell;
 mod skill_service;
 mod types;
 
-pub use filesystem::WorkspaceService;
+pub use filesystem::{SearchProgress, WorkspaceService};
 pub use policy::{
     ApprovalDecision, ExecutionPolicy, PolicyAuthorizer, PolicyContext, PolicyDecision,
     PolicyEngine,
