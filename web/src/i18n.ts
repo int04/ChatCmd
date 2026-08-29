@@ -294,6 +294,8 @@ const vi: Record<string, string> = {
   'Waiting for your approval…': 'Đang chờ bạn phê duyệt…',
   'Waiting for output…': 'Đang chờ output…',
   'Command produced no output.': 'Lệnh không có output.',
+  'Original file': 'File gốc',
+  'Modified file': 'File sau khi sửa',
   '{count} seconds ago': '{count} giây trước',
   '{count} minutes ago': '{count} phút trước',
   'at {time}': 'lúc {time}',

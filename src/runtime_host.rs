@@ -1,6 +1,7 @@
 mod activity_control;
 mod approval;
 mod dispatch;
+mod filesystem_dispatch;
 mod git_support;
 #[cfg(test)]
 mod git_tests;

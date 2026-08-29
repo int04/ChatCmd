@@ -10,6 +10,7 @@ import { ApprovalDecisionActions } from './ApprovalDecisionActions';
 import { StopActivityDialog } from './StopActivityDialog';
 import {
   activityCodeView,
+  activityDiffView,
   activityCommand,
   activityDuration,
   activityLabel,
@@ -143,6 +144,7 @@ function ActivityRow({ activity, taskId, onStop }: { activity: ToolActivity; tas
   const command = activityCommand(activity);
   const output = activityOutput(activity);
   const searchCodeViews = fsSearchCodeViews(activity);
+  const diffView = activityDiffView(activity);
   const codeView = activityCodeView(activity);
   return <div className={`terminal-activity ${running ? 'running' : ''} ${stopRequested ? 'stopping' : ''} ${stopped ? 'stopped' : ''} ${failed ? 'failed' : ''} ${recentlyViewed ? 'recently-viewed' : ''}`}>
     <button type="button" className="activity-popup-trigger" onClick={() => setOpen(true)} aria-haspopup="dialog">
@@ -153,7 +155,7 @@ function ActivityRow({ activity, taskId, onStop }: { activity: ToolActivity; tas
     </button>
     {stoppable && <button type="button" className="activity-stop-button" aria-label={tr('Stop {name}', { name: activityLabel(activity) })} onClick={(event) => { event.preventDefault(); event.stopPropagation(); onStop(activity); }}><CircleStop aria-hidden="true" /><span>{tr('Stop')}</span></button>}
     {approvalPending && taskId && <ApprovalDecisionActions target={{ taskId, activityId: activity.id, turnId: activity.turnId }} />}
-    {open && <Modal title={activityLabel(activity)} description={`${formatClockTime(activity.startedAt)} · ${activityDuration(activity.startedAt, activity.finishedAt ?? new Date().toISOString())}`} close={closePopup}>
+    {open && <Modal className="tool-activity-modal" title={activityLabel(activity)} description={`${formatClockTime(activity.startedAt)} · ${activityDuration(activity.startedAt, activity.finishedAt ?? new Date().toISOString())}`} close={closePopup}>
       <div className="activity-popup-content">
         <div className="activity-command"><FileCode2 /><code>{command}</code></div>
         {failed && <div className="activity-error-detail" role="alert">
@@ -162,7 +164,9 @@ function ActivityRow({ activity, taskId, onStop }: { activity: ToolActivity; tas
           <div className="activity-error-message">{activity.errorMessage || activity.error || tr('Tool returned failed status without an error message.')}</div>
           {activity.errorDetails !== undefined && activity.errorDetails !== null && <pre tabIndex={0} aria-label={tr('Tool error details')}><code>{formatErrorDetails(activity.errorDetails)}</code></pre>}
         </div>}
-        {searchCodeViews.length > 0
+        {diffView
+          ? <div className="tool-diff-view"><div className="tool-diff-pane"><div className="tool-diff-tab removed">{tr('Original file')}</div><code className="tool-diff-path">{diffView.path}</code><Suspense fallback={<pre><code>{diffView.before}</code></pre>}><TaskCodeViewer code={diffView.before} path={diffView.path} highlightedLines={diffView.beforeMarks} label={tr('Original file')} /></Suspense></div><div className="tool-diff-pane"><div className="tool-diff-tab added">{tr('Modified file')}</div><code className="tool-diff-path">{diffView.path}</code><Suspense fallback={<pre><code>{diffView.after}</code></pre>}><TaskCodeViewer code={diffView.after} path={diffView.path} highlightedLines={diffView.afterMarks} label={tr('Modified file')} /></Suspense></div></div>
+          : searchCodeViews.length > 0
           ? <div className="fs-search-code-results">{searchCodeViews.map((view, index) => <div className="fs-search-code-result" key={`${view.path}:${view.startLine}:${index}`}><code className="fs-search-result-path">{view.path}</code><Suspense fallback={<pre tabIndex={0} aria-label={tr('Output of {command}', { command })}><code>{view.code}</code></pre>}><TaskCodeViewer {...view} label={view.path} /></Suspense></div>)}</div>
           : codeView
             ? <Suspense fallback={<pre tabIndex={0} aria-label={tr('Output of {command}', { command })}><code>{codeView.code}</code></pre>}><TaskCodeViewer {...codeView} label={tr('Output of {command}', { command })} /></Suspense>

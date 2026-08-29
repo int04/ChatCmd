@@ -296,6 +296,28 @@ export function fsSearchCodeViews(activity: ToolActivity) {
   });
 }
 
+export function activityDiffView(activity: ToolActivity) {
+  const output = asObject(activity.output);
+  const diff = asObject(output.__chatcmdDiff);
+  const path = stringValue(diff.path);
+  if (!path || diff.before === undefined || diff.after === undefined) return null;
+  const before = typeof diff.before === 'string' ? diff.before : '';
+  const after = typeof diff.after === 'string' ? diff.after : '';
+  const beforeLines = before.replace(/\r\n?/g, '\n').split('\n');
+  const afterLines = after.replace(/\r\n?/g, '\n').split('\n');
+  let prefix = 0;
+  while (prefix < beforeLines.length && prefix < afterLines.length && beforeLines[prefix] === afterLines[prefix]) prefix++;
+  let suffix = 0;
+  while (suffix < beforeLines.length - prefix && suffix < afterLines.length - prefix && beforeLines[beforeLines.length - 1 - suffix] === afterLines[afterLines.length - 1 - suffix]) suffix++;
+  const beforeMarks: Record<number, 'removed' | 'changed'> = {};
+  const afterMarks: Record<number, 'added' | 'changed'> = {};
+  const beforeChanged = Math.max(0, beforeLines.length - prefix - suffix);
+  const afterChanged = Math.max(0, afterLines.length - prefix - suffix);
+  for (let index = 0; index < beforeChanged; index++) beforeMarks[prefix + index + 1] = index < afterChanged ? 'changed' : 'removed';
+  for (let index = 0; index < afterChanged; index++) afterMarks[prefix + index + 1] = index < beforeChanged ? 'changed' : 'added';
+  return { path, before, after, beforeMarks, afterMarks };
+}
+
 export function activityCodeView(activity: ToolActivity) {
   const input = asObject(activity.input);
   const output = activityOutput(activity);

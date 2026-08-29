@@ -1,22 +1,15 @@
-use std::{
-    collections::HashSet,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
-    time::Duration,
-};
+use std::time::Duration;
 
 use chatcmd_core::{
     ArtifactId, ArtifactStore, ExecutionMode, TaskExecutionMode, TaskId, TaskStore,
 };
 use chatcmd_mcp::RuntimeApi as _;
 use chatcmd_runtime::{
-    OperationContext, RuntimeError, RuntimeResult, SearchProgress, ShellCreateRequest,
-    ShellWriteRequest,
+    OperationContext, RuntimeError, RuntimeResult, ShellCreateRequest, ShellWriteRequest,
 };
 use serde_json::{Value, json};
 
+use super::filesystem_dispatch;
 use super::inputs::*;
 use super::{RuntimeHost, invalid, now_ms, parse, storage_error, task_json, value};
 
@@ -199,55 +192,7 @@ impl RuntimeHost {
                 )
             }
             "fs_search" => {
-                let input: SearchInput = parse(arguments)?;
-                let host = self.clone();
-                let progress_context = context.clone();
-                let progress_sequence = Arc::new(AtomicU64::new(0));
-                let emitted_paths = Arc::new(Mutex::new(HashSet::new()));
-                value(
-                    workspace
-                        .search(
-                            &input.path,
-                            &input.query,
-                            input.case_sensitive,
-                            input.max_results,
-                            input.max_file_bytes,
-                            input.include_ignored,
-                            input.exclude,
-                            move |progress: SearchProgress| {
-                                if progress.matched.is_none() {
-                                    return;
-                                }
-                                let Ok(mut paths) = emitted_paths.lock() else {
-                                    return;
-                                };
-                                if !paths.insert(progress.path.clone()) {
-                                    return;
-                                }
-                                drop(paths);
-                                let sequence =
-                                    progress_sequence.fetch_add(1, Ordering::Relaxed) + 1;
-                                let text = format!("{}\n", progress.path.display());
-                                host.publish_event(
-                                    format!(
-                                        "{}:search-progress:{sequence}",
-                                        progress_context.request_id
-                                    ),
-                                    "terminal_output",
-                                    progress_context.task_id.clone(),
-                                    progress_context.mcp_session_id.clone(),
-                                    progress_context.turn_id.clone(),
-                                    json!({
-                                        "text": text,
-                                        "stream": "tool",
-                                        "encoding": "utf-8",
-                                        "activityId": progress_context.request_id
-                                    }),
-                                );
-                            },
-                        )
-                        .await?,
-                )
+                filesystem_dispatch::search(self, workspace, &context, parse(arguments)?).await
             }
             "fs_find" => {
                 let input: FindInput = parse(arguments)?;
@@ -276,26 +221,10 @@ impl RuntimeHost {
                 )
             }
             "fs_write_text" => {
-                let input: WriteTextInput = parse(arguments)?;
-                value(
-                    workspace
-                        .write_text(&context, &input.path, &input.content, input.overwrite)
-                        .await?,
-                )
+                filesystem_dispatch::write_text(workspace, &context, parse(arguments)?).await
             }
             "fs_replace_text" => {
-                let input: ReplaceTextInput = parse(arguments)?;
-                value(
-                    workspace
-                        .replace_text(
-                            &context,
-                            &input.path,
-                            &input.old_text,
-                            &input.new_text,
-                            input.expected_occurrences,
-                        )
-                        .await?,
-                )
+                filesystem_dispatch::replace_text(workspace, &context, parse(arguments)?).await
             }
             "fs_write_raw" => {
                 let input: WriteRawInput = parse(arguments)?;
@@ -330,10 +259,7 @@ impl RuntimeHost {
                 )
             }
             "fs_delete" => {
-                let input: DeleteInput = parse(arguments)?;
-                Ok(json!({
-                    "deleted": workspace.delete(&context, &input.path, input.recursive).await?
-                }))
+                filesystem_dispatch::delete(workspace, &context, parse(arguments)?).await
             }
             "git_status" => {
                 let input: CwdInput = parse(arguments)?;
