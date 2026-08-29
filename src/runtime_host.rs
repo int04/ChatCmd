@@ -9,6 +9,7 @@ mod identity;
 mod inputs;
 mod persistence;
 mod subagents;
+mod turn_file_changes;
 mod user_message;
 #[cfg(test)]
 mod user_message_path_tests;
@@ -28,6 +29,7 @@ use tokio::sync::broadcast;
 
 use crate::websocket::AppEvent;
 pub(crate) use activity_control::{ActivityRegistry, StopActivityResult};
+use turn_file_changes::TurnFileChangeTracker;
 
 #[derive(Clone)]
 pub(crate) struct RuntimeHost {
@@ -40,6 +42,7 @@ pub(crate) struct RuntimeHost {
     skills: SkillService,
     events: broadcast::Sender<AppEvent>,
     activities: ActivityRegistry,
+    file_changes: TurnFileChangeTracker,
 }
 
 impl RuntimeHost {
@@ -63,6 +66,7 @@ impl RuntimeHost {
             skills,
             events,
             activities: ActivityRegistry::default(),
+            file_changes: TurnFileChangeTracker::default(),
         }
     }
 

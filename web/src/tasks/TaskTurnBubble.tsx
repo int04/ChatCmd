@@ -45,6 +45,8 @@ export function TaskTurnBubble({ turn, taskId, subagents = [], agentLabel = 'Cod
   const isThinking = status === 'running' && !response && !activities.some((activity) => activity.status === 'started' || activity.status === 'pending_approval');
   const headingId = `turn-${turn.id}`;
   const [stopTarget, setStopTarget] = useState<ToolActivity | null>(null);
+  const [changeTarget, setChangeTarget] = useState<ToolActivity | null>(null);
+  const fileChanges = response ? responseFileChanges(response.event) : [];
 
   return <div className="turn-item">
     {userMessage && <article className="turn-user-message">
@@ -77,9 +79,68 @@ export function TaskTurnBubble({ turn, taskId, subagents = [], agentLabel = 'Cod
         : <div className="turn-error" role="alert"><CircleAlert /><div><strong>{tr('Agent turn failed')}</strong><p>{latestMessage(events) || tr('The Agent could not complete this turn. Review the activity above to find the cause.')}</p></div></div>)}
       {status === 'incomplete' && <div className="turn-warning" role="status"><CircleAlert /><div><strong>{tr('This turn may have been interrupted')}</strong><p>{latestMessage(events) || tr('No new activity or completion signal was received for a long time. The turn may have been interrupted or delayed; its state will recover automatically if new data arrives.')}</p></div></div>}
       {status === 'completed' && response && <div className="turn-response"><div className="turn-response-label"><CheckCircle2 /> {tr('Final response')}</div><div className="turn-response-content"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]} components={{ a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer noopener" /> }}>{response.text}</ReactMarkdown></div></div>}
+      {status === 'completed' && fileChanges.length > 0 && <TurnFileChanges changes={fileChanges} onOpen={(activity) => setChangeTarget(activity)} />}
     </article>
     {stopTarget && taskId && <StopActivityDialog taskId={taskId} activity={stopTarget} onClose={() => setStopTarget(null)} />}
+    {changeTarget && <ActivityDiffModal activity={changeTarget} close={() => setChangeTarget(null)} />}
   </div>;
+}
+
+type TurnFileChange = { path: string; fileName: string; extension: string; kind: 'added' | 'deleted' | 'modified'; additions: number; deletions: number; activity: ToolActivity };
+
+function responseFileChanges(event: TimelineEvent): TurnFileChange[] {
+  const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload) ? event.payload as Record<string, unknown> : {};
+  const raw = Array.isArray(payload.fileChanges) ? payload.fileChanges : [];
+  return raw.flatMap((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
+    const value = item as Record<string, unknown>;
+    const path = typeof value.path === 'string' ? value.path : '';
+    const before = typeof value.before === 'string' ? value.before : '';
+    const after = typeof value.after === 'string' ? value.after : '';
+    const kind = value.kind === 'added' || value.kind === 'deleted' ? value.kind : 'modified';
+    if (!path) return [];
+    const fileName = path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
+    const extension = fileName.includes('.') ? fileName.split('.').at(-1)?.toUpperCase() || 'FILE' : 'FILE';
+    const tool = kind === 'deleted' ? 'fs_delete' : 'fs_write_text';
+    const activity: ToolActivity = {
+      id: `file-change-${index}-${path}`,
+      tool,
+      kind: kind === 'deleted' ? 'delete' : 'edit',
+      input: { path },
+      output: { __chatcmdDiff: { path, before, after, beforeAvailable: value.beforeAvailable !== false } },
+      status: 'succeeded',
+      startedAt: event.occurredAt,
+      finishedAt: event.occurredAt,
+      turnId: event.turnId,
+    };
+    return [{ path, fileName, extension, kind, additions: Number(value.additions) || 0, deletions: Number(value.deletions) || 0, activity }];
+  });
+}
+
+function TurnFileChanges({ changes, onOpen }: { changes: TurnFileChange[]; onOpen: (activity: ToolActivity) => void }) {
+  return <section className="turn-file-changes" aria-label={tr('Changed files')}>
+    <div className="turn-file-changes-heading"><FilePenLine aria-hidden="true" /><strong>{tr('Changed files')}</strong><span>{changes.length}</span></div>
+    <div className="turn-file-change-list">{changes.map((change, index) => {
+      const action = change.kind === 'added' ? tr('Added') : change.kind === 'deleted' ? tr('Deleted') : tr('Modified');
+      return <button type="button" className={`turn-file-change-card ${change.kind}`} onClick={() => onOpen(change.activity)} key={`${change.path}:${index}`}>
+        <span className="turn-file-change-icon"><FileCode2 aria-hidden="true" /><small>{change.extension}</small></span>
+        <span className="turn-file-change-copy"><strong>{action} {change.fileName}</strong><small>{change.path}</small></span>
+        <span className="turn-file-change-lines"><b>+{change.additions}</b><i>-{change.deletions}</i></span>
+      </button>;
+    })}</div>
+  </section>;
+}
+
+function ActivityDiffModal({ activity, close }: { activity: ToolActivity; close: () => void }) {
+  const diffView = activityDiffView(activity);
+  if (!diffView) return null;
+  const command = activityCommand(activity);
+  return <Modal className="tool-activity-modal" title={activityLabel(activity)} description={`${formatClockTime(activity.startedAt)} · ${activityDuration(activity.startedAt, activity.finishedAt ?? new Date().toISOString())}`} close={close}>
+    <div className="activity-popup-content">
+      <div className="activity-command"><FileCode2 /><code>{command}</code></div>
+      <div className="tool-diff-view"><div className="tool-diff-pane"><div className="tool-diff-tab removed">{tr('Original file')}</div><code className="tool-diff-path">{diffView.path}</code>{diffView.beforeAvailable ? <Suspense fallback={<pre><code>{diffView.before}</code></pre>}><TaskCodeViewer code={diffView.before} path={diffView.path} highlightedLines={diffView.beforeMarks} label={tr('Original file')} /></Suspense> : <div className="tool-diff-unavailable">{tr('The original content was not available for this shell change.')}</div>}</div><div className="tool-diff-pane"><div className="tool-diff-tab added">{tr('Modified file')}</div><code className="tool-diff-path">{diffView.path}</code><Suspense fallback={<pre><code>{diffView.after}</code></pre>}><TaskCodeViewer code={diffView.after} path={diffView.path} highlightedLines={diffView.afterMarks} label={tr('Modified file')} /></Suspense></div></div>
+    </div>
+  </Modal>;
 }
 
 function SubagentList({ agents }: { agents: SubagentRun[] }) {
@@ -225,3 +286,4 @@ function bubbleTimeLabel(value: string, nowMs: number) {
   return new Intl.DateTimeFormat(appLocale(), { hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(timestamp));
 }
 function bubbleTimeHint(value: string) { const timestamp = Date.parse(value); if (!Number.isFinite(timestamp)) return value; return new Intl.DateTimeFormat(appLocale(), { hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(timestamp)); }
+

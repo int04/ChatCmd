@@ -316,7 +316,8 @@ export function activityDiffView(activity: ToolActivity) {
   const afterChanged = Math.max(0, afterLines.length - prefix - suffix);
   for (let index = 0; index < beforeChanged; index++) beforeMarks[prefix + index + 1] = index < afterChanged ? 'changed' : 'removed';
   for (let index = 0; index < afterChanged; index++) afterMarks[prefix + index + 1] = index < beforeChanged ? 'changed' : 'added';
-  return { path, before, after, beforeMarks, afterMarks };
+  const beforeAvailable = diff.beforeAvailable !== false;
+  return { path, before, after, beforeMarks, afterMarks, beforeAvailable };
 }
 
 export function activityCodeView(activity: ToolActivity) {

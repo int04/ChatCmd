@@ -92,6 +92,9 @@ impl RuntimeHost {
             payload["input"] = value.clone();
         }
         if let Some(value) = output {
+            if status == "succeeded" {
+                self.record_tool_diff(context, value);
+            }
             payload["output"] = value.clone();
         }
         if let Some(value) = error {
@@ -275,7 +278,12 @@ impl RuntimeHost {
         } else {
             EventKind::Progress
         };
-        let payload = json!({"tool": context.tool_name, "status": status, "content": content, "title": applied_title.as_deref()});
+        let file_changes = if status == "completed" {
+            self.finish_turn_file_tracking(context).await
+        } else {
+            Vec::new()
+        };
+        let payload = json!({"tool": context.tool_name, "status": status, "content": content, "title": applied_title.as_deref(), "fileChanges": file_changes});
         self.repository
             .append_timeline_events(&[TimelineEvent {
                 id: EventId::new(key.clone()).map_err(|error| invalid("eventId", error))?,

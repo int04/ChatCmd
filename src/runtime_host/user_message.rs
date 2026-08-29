@@ -99,6 +99,7 @@ impl RuntimeHost {
             &context.agent_id,
             &format!("{}\0{}", task_id.as_str(), turn_id.as_str()),
         );
+        self.begin_turn_file_tracking(context).await;
         let payload = json!({
             "tool": context.tool_name,
             "role": "user",
