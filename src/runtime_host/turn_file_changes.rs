@@ -317,9 +317,36 @@ fn transient_file(path: &Path) -> bool {
     let name = path
         .file_name()
         .and_then(|value| value.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    name.starts_with(".tmp_") || name.starts_with("tmp_agent_")
+        .unwrap_or_default();
+    let lower = name.to_ascii_lowercase();
+    lower.starts_with(".tmp_")
+        || lower.starts_with("tmp_agent_")
+        || is_named_tempfile_name(name)
+}
+
+fn is_named_tempfile_name(name: &str) -> bool {
+    let Some(suffix) = name.strip_prefix(".tmp") else {
+        return false;
+    };
+    suffix.len() == 6 && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_named_tempfile_name;
+
+    #[test]
+    fn recognizes_tempfile_named_temp_files() {
+        assert!(is_named_tempfile_name(".tmp0GV0Gk"));
+        assert!(is_named_tempfile_name(".tmp9wyOqd"));
+    }
+
+    #[test]
+    fn keeps_normal_dot_tmp_files_trackable() {
+        assert!(!is_named_tempfile_name(".tmp"));
+        assert!(!is_named_tempfile_name(".tmp_config"));
+        assert!(!is_named_tempfile_name(".tmp-long-lived-file"));
+    }
 }
 
 fn read_text_snapshot(path: &Path) -> Option<String> {
