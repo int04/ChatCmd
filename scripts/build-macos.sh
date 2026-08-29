@@ -6,16 +6,15 @@ cd "$ROOT"
 
 VERSION="$(date '+%y.%m.%d.%H%M')"
 export CHATCMD_BUILD_VERSION="$VERSION"
-ARCH="$(uname -m)"
-OUTPUT="$ROOT/release/ChatCMD-$VERSION-macos-$ARCH"
-APP="$OUTPUT/ChatCMD.app"
-CONTENTS="$APP/Contents"
-MACOS="$CONTENTS/MacOS"
-RESOURCES="$CONTENTS/Resources"
+ICON_SOURCE="$ROOT/assets/icons/logo-icon-master-1024.png"
 ICONSET="$ROOT/target/chatcmd.iconset"
-ICNS="$RESOURCES/ChatCMD.icns"
 
-printf 'Building ChatCMD %s for macOS %s\n' "$VERSION" "$ARCH"
+TARGETS=(
+  "aarch64-apple-darwin|apple-silicon"
+  "x86_64-apple-darwin|intel"
+)
+
+printf 'Building ChatCMD %s for macOS Apple Silicon + Intel\n' "$VERSION"
 
 cd "$ROOT/web"
 npm ci
@@ -26,26 +25,51 @@ if find "$ROOT/web/dist" -type f -name '*.map' -print -quit | grep -q .; then
 fi
 cd "$ROOT"
 
-cargo build --release --features embedded-web
-
-rm -rf "$OUTPUT"
-mkdir -p "$MACOS" "$RESOURCES"
-cp "$ROOT/target/release/chat-cmd-client" "$MACOS/ChatCMD"
-chmod +x "$MACOS/ChatCMD"
-
-if command -v sips >/dev/null 2>&1 && command -v iconutil >/dev/null 2>&1; then
-  rm -rf "$ICONSET"
-  mkdir -p "$ICONSET"
-  SOURCE="$ROOT/assets/icons/logo-icon-master-1024.png"
-  for size in 16 32 128 256 512; do
-    sips -z "$size" "$size" "$SOURCE" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
-    double=$((size * 2))
-    sips -z "$double" "$double" "$SOURCE" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
-  done
-  iconutil -c icns "$ICONSET" -o "$ICNS"
+if ! command -v rustup >/dev/null 2>&1; then
+  echo "rustup is required to install both macOS Rust targets" >&2
+  exit 1
 fi
 
-cat > "$CONTENTS/Info.plist" <<EOF
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+
+create_icns() {
+  local destination="$1"
+  if ! command -v sips >/dev/null 2>&1 || ! command -v iconutil >/dev/null 2>&1; then
+    echo "sips/iconutil not found; macOS app icon cannot be generated" >&2
+    return 0
+  fi
+
+  rm -rf "$ICONSET"
+  mkdir -p "$ICONSET"
+  for size in 16 32 128 256 512; do
+    sips -z "$size" "$size" "$ICON_SOURCE" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
+    local double=$((size * 2))
+    sips -z "$double" "$double" "$ICON_SOURCE" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
+  done
+  iconutil -c icns "$ICONSET" -o "$destination"
+}
+
+package_target() {
+  local target="$1"
+  local label="$2"
+  local output="$ROOT/release/ChatCMD-$VERSION-macos-$label"
+  local app="$output/ChatCMD.app"
+  local contents="$app/Contents"
+  local macos="$contents/MacOS"
+  local resources="$contents/Resources"
+  local binary="$ROOT/target/$target/release/chat-cmd-client"
+  local archive="$output.zip"
+
+  printf '\nBuilding Rust target %s (%s)...\n' "$target" "$label"
+  cargo build --release --features embedded-web --target "$target"
+
+  rm -rf "$output"
+  mkdir -p "$macos" "$resources"
+  cp "$binary" "$macos/ChatCMD"
+  chmod +x "$macos/ChatCMD"
+  create_icns "$resources/ChatCMD.icns"
+
+  cat > "$contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -63,9 +87,18 @@ cat > "$CONTENTS/Info.plist" <<EOF
 </plist>
 EOF
 
-ARCHIVE="$OUTPUT.zip"
-rm -f "$ARCHIVE"
-cd "$ROOT/release"
-zip -qry "$ARCHIVE" "$(basename "$OUTPUT")"
+  rm -f "$archive"
+  cd "$ROOT/release"
+  zip -qry "$archive" "$(basename "$output")"
+  cd "$ROOT"
 
-printf 'Build completed: %s\nArchive: %s\n' "$OUTPUT" "$ARCHIVE"
+  printf 'Build completed: %s\nArchive: %s\n' "$output" "$archive"
+}
+
+for entry in "${TARGETS[@]}"; do
+  IFS='|' read -r target label <<< "$entry"
+  package_target "$target" "$label"
+done
+
+rm -rf "$ICONSET"
+printf '\nAll macOS builds completed.\n'
