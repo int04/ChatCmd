@@ -32,6 +32,7 @@ function TasksWorkspace() {
       const childTaskId = subagentChildTaskId(event); if (childTaskId) hideSubagentTask(childTaskId); if (event.taskId === taskId) setDetailVersion((value) => value + 1); return;
     }
     if (!event.taskId) return;
+    if (event.taskId === taskId && event.type === 'conversation.approval_pending') { setDetailVersion((value) => value + 1); return; }
     if (event.taskId === taskId) setLiveEvents((current) => current.some((item) => item.id === event.id) ? current : [...current, event]);
     else if (taskId && hiddenSubagentTaskIds.current.has(event.taskId)) setDetailVersion((value) => value + 1);
   }, [hideSubagentTask, taskId]);
@@ -47,7 +48,7 @@ function TaskConversationDetail({ taskId, refreshVersion, realtime, liveEvents, 
   const refresh = result.refresh;
   useEffect(() => { if (refreshVersion > 0) void refresh(); }, [refreshVersion, refresh]);
   useEffect(() => { if (result.data?.task.isSubagent) onSubagentTask(result.data.task.id); for (const subagent of result.data?.subagents ?? []) if (subagent.taskId) onSubagentTask(subagent.taskId); }, [onSubagentTask, result.data?.subagents, result.data?.task.id, result.data?.task.isSubagent]);
-  const approvalPolling = result.data?.executionMode === 'approval' && (result.data.task.status === 'running' || (result.data.subagents ?? []).some((subagent) => subagent.status === 'pending' || subagent.status === 'running'));
+  const approvalPolling = result.data?.task.allowExecute === null || (result.data?.executionMode === 'approval' && (result.data.task.status === 'running' || (result.data.subagents ?? []).some((subagent) => subagent.status === 'pending' || subagent.status === 'running')));
   useEffect(() => { if (!approvalPolling) return; const timer = window.setInterval(() => void refresh(), 1500); return () => window.clearInterval(timer); }, [approvalPolling, refresh]);
   if (result.loading) return <Loading label={tr('Loading task')} />;
   if (result.error || !result.data) return <ErrorState message={result.error} retry={() => void result.reload()} />;
@@ -98,6 +99,7 @@ function TaskDetailContent({ detail, realtime, onTaskChanged }: { detail: TaskDe
     </div>
   </div>;
 }
+
 
 function subagentChildTaskId(event: TimelineEvent) { if (!event.payload || typeof event.payload !== 'object' || Array.isArray(event.payload)) return ''; const value = (event.payload as Record<string, unknown>).childTaskId; return typeof value === 'string' ? value.trim() : ''; }
 function conversationName(task: Task) { return task.agentName?.trim() || task.title?.trim() || generatedConversationName(task.id); }

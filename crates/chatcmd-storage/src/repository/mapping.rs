@@ -92,6 +92,9 @@ pub(super) fn map_task(row: &sqlx::sqlite::SqliteRow) -> Result<Task, StorageErr
         source: row
             .try_get("source")
             .map_err(|error| backend("map task source", error))?,
+        allow_execute: row
+            .try_get("allow_execute")
+            .map_err(|error| backend("map task execution approval", error))?,
         status: TaskStatus::from_str(
             &row.try_get::<String, _>("status")
                 .map_err(|error| backend("map task status", error))?,

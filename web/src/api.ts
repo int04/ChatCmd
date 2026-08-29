@@ -1,5 +1,5 @@
 import { tr } from './i18n';
-import type { Agent, AgentInput, ChatGptBridge, ChatGptRequest, CommandExecutionMode, LocalSettings, McpStatus, Overview, ProblemDetails, SecretResult, Session, SessionDetail, Skill, SkillOptionValue, TaskDetail, TaskPage, Tool, ToolPreset, UserSkill } from './types';
+import type { Agent, AgentInput, ChatGptBridge, ChatGptRequest, CommandExecutionMode, LocalSettings, McpStatus, Overview, ProblemDetails, SecretResult, Session, SessionDetail, Skill, SkillOptionValue, Task, TaskDetail, TaskPage, Tool, ToolPreset, UserSkill } from './types';
 
 export class ApiError extends Error {
   constructor(message: string, public status?: number, public problem?: ProblemDetails) { super(message); this.name = 'ApiError'; }
@@ -42,6 +42,7 @@ export const api = {
   sendChatGptMessage: (taskId: string, input: { model?: string; content: string }) => request<ChatGptRequest>(`/api/local/chatgpt/tasks/${item(taskId)}/messages`, { method: 'POST', body: json(input) }),
   stopChatGptMessage: (taskId: string) => request<ChatGptRequest>(`/api/local/chatgpt/tasks/${item(taskId)}/stop`, { method: 'POST', body: '{}' }),
   tasks: (cursor?: string, limit = 10) => request<TaskPage>(`/api/local/tasks?limit=${limit}${cursor ? `&cursor=${item(cursor)}` : ''}`),
+  pendingConversationApprovals: () => request<Task[]>('/api/local/tasks/approvals/pending'),
   task: (id: string) => request<TaskDetail>(`/api/local/tasks/${item(id)}`),
   deleteTask: (id: string) => request<void>(`/api/local/tasks/${item(id)}`, { method: 'DELETE' }),
   taskAction: (id: string, action: string, body?: unknown) => request<TaskDetail>(`/api/local/tasks/${item(id)}/${action}`, { method: 'POST', body: body === undefined ? undefined : json(body) }),

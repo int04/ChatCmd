@@ -256,6 +256,7 @@ pub struct Task {
     pub conversation_scope_hash: Option<String>,
     pub title: Option<String>,
     pub source: Option<String>,
+    pub allow_execute: Option<bool>,
     pub status: TaskStatus,
     pub active_session_id: Option<SessionId>,
     pub generation: i32,

@@ -2,9 +2,9 @@ use super::*;
 
 impl TaskStore for SqliteRepository {
     async fn upsert_task(&self, task: &Task) -> Result<(), StorageError> {
-        sqlx::query("INSERT INTO tasks(id,agent_id,device_id,conversation_scope_hash,title,source,status,active_session_id,generation,stopped_at_ms,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET agent_id=excluded.agent_id,device_id=excluded.device_id,conversation_scope_hash=excluded.conversation_scope_hash,title=excluded.title,source=excluded.source,status=excluded.status,active_session_id=excluded.active_session_id,generation=excluded.generation,stopped_at_ms=excluded.stopped_at_ms,updated_at_ms=excluded.updated_at_ms")
+        sqlx::query("INSERT INTO tasks(id,agent_id,device_id,conversation_scope_hash,title,source,allow_execute,status,active_session_id,generation,stopped_at_ms,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET agent_id=excluded.agent_id,device_id=excluded.device_id,conversation_scope_hash=excluded.conversation_scope_hash,title=excluded.title,source=excluded.source,allow_execute=excluded.allow_execute,status=excluded.status,active_session_id=excluded.active_session_id,generation=excluded.generation,stopped_at_ms=excluded.stopped_at_ms,updated_at_ms=excluded.updated_at_ms")
             .bind(task.id.as_str()).bind(task.agent_id.as_ref().map(AgentId::as_str)).bind(task.device_id.as_str())
-            .bind(&task.conversation_scope_hash).bind(&task.title).bind(&task.source).bind(task.status.as_str())
+            .bind(&task.conversation_scope_hash).bind(&task.title).bind(&task.source).bind(task.allow_execute).bind(task.status.as_str())
             .bind(task.active_session_id.as_ref().map(SessionId::as_str)).bind(task.generation).bind(task.stopped_at_ms)
             .bind(task.created_at_ms).bind(task.updated_at_ms).execute(&self.pool).await
             .map_err(|error| map_sqlx_conflict("upsert task", error))?;
@@ -12,13 +12,13 @@ impl TaskStore for SqliteRepository {
     }
 
     async fn task(&self, id: &TaskId) -> Result<Option<Task>, StorageError> {
-        let row = sqlx::query("SELECT id,agent_id,device_id,conversation_scope_hash,title,source,status,active_session_id,generation,stopped_at_ms,created_at_ms,updated_at_ms FROM tasks WHERE id=?")
+        let row = sqlx::query("SELECT id,agent_id,device_id,conversation_scope_hash,title,source,allow_execute,status,active_session_id,generation,stopped_at_ms,created_at_ms,updated_at_ms FROM tasks WHERE id=?")
             .bind(id.as_str()).fetch_optional(&self.pool).await.map_err(|error| backend("read task", error))?;
         row.as_ref().map(map_task).transpose()
     }
 
     async fn list_tasks(&self, limit: u32) -> Result<Vec<Task>, StorageError> {
-        let rows = sqlx::query("SELECT id,agent_id,device_id,conversation_scope_hash,title,source,status,active_session_id,generation,stopped_at_ms,created_at_ms,updated_at_ms FROM tasks WHERE NOT EXISTS (SELECT 1 FROM subagent_runs WHERE subagent_runs.child_task_id=tasks.id) ORDER BY updated_at_ms DESC,id LIMIT ?")
+        let rows = sqlx::query("SELECT id,agent_id,device_id,conversation_scope_hash,title,source,allow_execute,status,active_session_id,generation,stopped_at_ms,created_at_ms,updated_at_ms FROM tasks WHERE NOT EXISTS (SELECT 1 FROM subagent_runs WHERE subagent_runs.child_task_id=tasks.id) ORDER BY updated_at_ms DESC,id LIMIT ?")
             .bind(i64::from(limit.clamp(1, 1000)))
             .fetch_all(&self.pool)
             .await

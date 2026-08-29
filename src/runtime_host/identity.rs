@@ -1,5 +1,5 @@
 use chatcmd_core::{
-    AgentId, SessionId, Task, TaskId, TaskSession, TaskStatus, TaskStore as _,
+    AgentId, SessionId, SettingsStore as _, Task, TaskId, TaskSession, TaskStatus, TaskStore as _,
     TerminalSessionStatus, TurnBinding, TurnId,
 };
 use chatcmd_runtime::{OperationContext, RuntimeError, RuntimeResult};
@@ -90,8 +90,21 @@ impl RuntimeHost {
                 "this conversation was stopped by the user and cannot continue",
             ));
         }
+        if current
+            .as_ref()
+            .is_some_and(|task| task.allow_execute == Some(false))
+        {
+            return Err(conversation_approval_denied());
+        }
         let now = now_ms();
         let generation = current.as_ref().map_or(1, |task| task.generation);
+        let allow_execute = if let Some(task) = current.as_ref() {
+            task.allow_execute
+        } else if self.approve_new_conversations_enabled().await? {
+            None
+        } else {
+            Some(true)
+        };
         self.repository
             .upsert_task(&Task {
                 id: task_id.clone(),
@@ -107,8 +120,13 @@ impl RuntimeHost {
                     .as_ref()
                     .and_then(|task| task.source.clone())
                     .or_else(|| Some("mcp".to_owned())),
-                status: TaskStatus::Running,
-                active_session_id: Some(session_id.clone()),
+                allow_execute,
+                status: if allow_execute.is_none() {
+                    TaskStatus::Pending
+                } else {
+                    TaskStatus::Running
+                },
+                active_session_id: allow_execute.map(|_| session_id.clone()),
                 generation,
                 stopped_at_ms: None,
                 created_at_ms: current.as_ref().map_or(now, |task| task.created_at_ms),
@@ -116,6 +134,40 @@ impl RuntimeHost {
             })
             .await
             .map_err(storage_error)?;
+        if allow_execute.is_none() {
+            self.publish_event(
+                format!("conversation-approval-pending-{}", task_id.as_str()),
+                "conversation.approval_pending",
+                Some(task_id.as_str().to_owned()),
+                None,
+                context.turn_id.clone(),
+                serde_json::json!({
+                    "allowExecute": serde_json::Value::Null,
+                    "approvalDeadlineUtc": time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(now.saturating_add(60_000)) * 1_000_000)
+                        .ok()
+                        .and_then(|value| value.format(&time::format_description::well_known::Rfc3339).ok())
+                }),
+            );
+            self.wait_for_conversation_approval(&task_id).await?;
+            let Some(mut approved_task) = self
+                .repository
+                .task(&task_id)
+                .await
+                .map_err(storage_error)?
+            else {
+                return Err(RuntimeError::new(
+                    "not_found",
+                    "task missing after approval",
+                ));
+            };
+            approved_task.status = TaskStatus::Running;
+            approved_task.active_session_id = Some(session_id.clone());
+            approved_task.updated_at_ms = now_ms();
+            self.repository
+                .upsert_task(&approved_task)
+                .await
+                .map_err(storage_error)?;
+        }
         self.claim_subagent_from_message(context, task_id.as_str(), first_user_message)
             .await?;
         self.repository
@@ -144,6 +196,43 @@ impl RuntimeHost {
             })
             .await
             .map_err(storage_error)
+    }
+
+    async fn approve_new_conversations_enabled(&self) -> RuntimeResult<bool> {
+        let setting = self
+            .repository
+            .setting("ui_approveNewConversations")
+            .await
+            .map_err(storage_error)?;
+        Ok(setting
+            .and_then(|value| serde_json::from_str::<bool>(&value.value_json).ok())
+            .unwrap_or(true))
+    }
+
+    async fn wait_for_conversation_approval(&self, task_id: &TaskId) -> RuntimeResult<()> {
+        const APPROVAL_WINDOW_MS: i64 = 60_000;
+        loop {
+            let Some(task) = self.repository.task(task_id).await.map_err(storage_error)? else {
+                return Err(RuntimeError::new(
+                    "not_found",
+                    "task missing while waiting for approval",
+                ));
+            };
+            match task.allow_execute {
+                Some(true) => return Ok(()),
+                Some(false) => return Err(conversation_approval_denied()),
+                None if now_ms().saturating_sub(task.created_at_ms) >= APPROVAL_WINDOW_MS => {
+                    sqlx::query("UPDATE tasks SET allow_execute=0,status='failed',updated_at_ms=? WHERE id=? AND allow_execute IS NULL")
+                        .bind(now_ms())
+                        .bind(task_id.as_str())
+                        .execute(self.repository.pool())
+                        .await
+                        .map_err(|_| RuntimeError::new("storage_error", "conversation approval timeout could not be persisted"))?;
+                    return Err(conversation_approval_denied());
+                }
+                None => tokio::time::sleep(std::time::Duration::from_millis(250)).await,
+            }
+        }
     }
 
     async fn bound_task_for_conversation_scope(
@@ -212,6 +301,13 @@ impl RuntimeHost {
         .await
         .map_err(|_| RuntimeError::new("storage_error", "turn binding lookup failed"))
     }
+}
+
+fn conversation_approval_denied() -> RuntimeError {
+    RuntimeError::new(
+        "conversation_approval_denied",
+        "Anti-hack verification mode is enabled. This conversation was not approved or the 60-second approval window expired, so it cannot execute.",
+    )
 }
 
 fn select_task_identity(

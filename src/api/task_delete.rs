@@ -34,7 +34,10 @@ pub(super) async fn delete_task(
             .fetch_optional(state.repository.pool())
             .await
             .map_err(db_problem)?;
-        if status.as_deref().is_some_and(|value| matches!(value, "pending" | "running")) {
+        if status
+            .as_deref()
+            .is_some_and(|value| matches!(value, "pending" | "running"))
+        {
             return Err(Problem::new(
                 StatusCode::CONFLICT,
                 "Subagent task is still active",

@@ -58,6 +58,10 @@ pub(crate) fn router() -> Router<Arc<AppState>> {
         .route("/chatgpt/bridge/{request_id}/started", post(bridge_started))
         .route("/chatgpt/bridge/{request_id}/result", post(bridge_result))
         .route("/tasks", get(tasks))
+        .route(
+            "/tasks/approvals/pending",
+            get(pending_conversation_approvals),
+        )
         .route("/tasks/{id}", get(task).delete(delete_task))
         .route(
             "/tasks/{id}/command-execution-mode",
@@ -230,6 +234,37 @@ async fn tasks(
     Ok(Json(json!({ "items": items, "nextCursor": next_cursor })))
 }
 
+async fn pending_conversation_approvals(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Value>, Problem> {
+    let rows = sqlx::query(
+        "SELECT id FROM tasks WHERE allow_execute IS NULL ORDER BY created_at_ms ASC,id ASC",
+    )
+    .fetch_all(state.repository.pool())
+    .await
+    .map_err(db_problem)?;
+    let mut items = Vec::with_capacity(rows.len());
+    for row in rows {
+        let id = row.get::<String, _>("id");
+        let task = state
+            .repository
+            .task(&TaskId::new(&id).map_err(|_| bad_id())?)
+            .await
+            .map_err(storage_problem)?
+            .ok_or_else(not_found)?;
+        let approval_deadline_ms = task.created_at_ms.saturating_add(60_000);
+        let mut value = task_value(task);
+        if let Some(object) = value.as_object_mut() {
+            object.insert(
+                "approvalDeadlineUtc".to_owned(),
+                Value::String(iso_ms(approval_deadline_ms)),
+            );
+        }
+        items.push(value);
+    }
+    Ok(Json(Value::Array(items)))
+}
+
 async fn task(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -243,6 +278,37 @@ async fn task_action(
 ) -> Result<Json<Value>, Problem> {
     if action == "stop" {
         return stop_conversation(&state, &id).await;
+    }
+    if matches!(action.as_str(), "approve-execution" | "reject-execution") {
+        let allow_execute = action == "approve-execution";
+        let status = if allow_execute { "pending" } else { "failed" };
+        let affected = sqlx::query("UPDATE tasks SET allow_execute=?,status=?,updated_at_ms=? WHERE id=? AND allow_execute IS NULL")
+            .bind(allow_execute)
+            .bind(status)
+            .bind(now_ms())
+            .bind(&id)
+            .execute(state.repository.pool())
+            .await
+            .map_err(db_problem)?
+            .rows_affected();
+        if affected == 0 {
+            let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks WHERE id=?")
+                .bind(&id)
+                .fetch_one(state.repository.pool())
+                .await
+                .map_err(db_problem)?;
+            if exists == 0 {
+                return Err(not_found());
+            }
+        } else {
+            let mut event = AppEvent::new(
+                "conversation.approval_resolved",
+                json!({ "allowExecute": allow_execute }),
+            );
+            event.task_id = Some(id.clone());
+            state.publish(event);
+        }
+        return task_detail(&state, &id).await;
     }
     let status = match action.as_str() {
         "retry" | "resume" => "pending",
@@ -347,7 +413,11 @@ fn compact_preview(value: &str) -> String {
 }
 
 fn task_value(task: chatcmd_core::Task) -> Value {
-    json!({"id":task.id.as_str(),"title":task.title,"source":task.source,"status":task.status.as_str(),"updatedAtUtc":iso_ms(task.updated_at_ms),"createdAtUtc":iso_ms(task.created_at_ms),"generation":task.generation,"activeSessionId":task.active_session_id.map(|id|id.into_string())})
+    let approval_deadline_utc = task
+        .allow_execute
+        .is_none()
+        .then(|| iso_ms(task.created_at_ms.saturating_add(60_000)));
+    json!({"id":task.id.as_str(),"title":task.title,"source":task.source,"allowExecute":task.allow_execute,"approvalDeadlineUtc":approval_deadline_utc,"status":task.status.as_str(),"updatedAtUtc":iso_ms(task.updated_at_ms),"createdAtUtc":iso_ms(task.created_at_ms),"generation":task.generation,"activeSessionId":task.active_session_id.map(|id|id.into_string())})
 }
 pub(super) fn timeline_row(row: &sqlx::sqlite::SqliteRow) -> Value {
     json!({"id":row.get::<String,_>("event_id"),"type":row.get::<String,_>("kind"),"occurredAt":iso_ms(row.get("created_at_ms")),"turnId":row.get::<Option<String>,_>("turn_id"),"sessionId":row.get::<Option<String>,_>("session_id"),"payload":serde_json::from_str::<Value>(&row.get::<String,_>("payload_json")).unwrap_or(Value::Null)})

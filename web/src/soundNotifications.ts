@@ -5,6 +5,7 @@ type SoundPreference = 'newAgentSound' | 'finishedTaskSound';
 class SoundNotifications {
   private readonly newAgent = this.createAudio('sounds/new_agent.mp3');
   private readonly finishedTask = this.createAudio('sounds/finish_chat.mp3');
+  private readonly approval = this.createAudio('sounds/sound_exe.mp3');
   private primed = false;
 
   constructor() {
@@ -16,6 +17,7 @@ class SoundNotifications {
 
   playNewAgent(): void { this.play(this.newAgent, 'newAgentSound'); }
   playFinishedTask(): void { this.play(this.finishedTask, 'finishedTaskSound'); }
+  playApproval(): void { this.play(this.approval, 'newAgentSound'); }
 
   private createAudio(path: string): HTMLAudioElement | null {
     if (typeof Audio === 'undefined') return null;
@@ -43,7 +45,7 @@ class SoundNotifications {
   private async prime(): Promise<void> {
     if (this.primed) return;
     this.primed = true;
-    await Promise.all([this.unlock(this.newAgent), this.unlock(this.finishedTask)]);
+    await Promise.all([this.unlock(this.newAgent), this.unlock(this.finishedTask), this.unlock(this.approval)]);
   }
 
   private async unlock(audio: HTMLAudioElement | null): Promise<void> {

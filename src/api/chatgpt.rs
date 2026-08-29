@@ -210,7 +210,7 @@ pub(super) async fn bridge_started(
     };
     let now = now_ms();
     let title = compact_title(&user_content);
-    sqlx::query("INSERT INTO tasks(id,agent_id,device_id,conversation_scope_hash,title,source,status,active_session_id,generation,stopped_at_ms,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,'chatgpt_web','running',NULL,1,NULL,?,?) ON CONFLICT(id) DO UPDATE SET conversation_scope_hash=excluded.conversation_scope_hash,title=COALESCE(tasks.title,excluded.title),source='chatgpt_web',status='running',stopped_at_ms=NULL,updated_at_ms=excluded.updated_at_ms")
+    sqlx::query("INSERT INTO tasks(id,agent_id,device_id,conversation_scope_hash,title,source,allow_execute,status,active_session_id,generation,stopped_at_ms,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,'chatgpt_web',1,'running',NULL,1,NULL,?,?) ON CONFLICT(id) DO UPDATE SET conversation_scope_hash=excluded.conversation_scope_hash,title=COALESCE(tasks.title,excluded.title),source='chatgpt_web',allow_execute=1,status='running',stopped_at_ms=NULL,updated_at_ms=excluded.updated_at_ms")
         .bind(&task_id)
         .bind(&agent_id)
         .bind(state.device.id.as_str())
