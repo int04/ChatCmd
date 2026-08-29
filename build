@@ -1,0 +1,3 @@
+﻿powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1
+
+
