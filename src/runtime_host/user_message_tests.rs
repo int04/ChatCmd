@@ -478,6 +478,22 @@ async fn stopped_conversation_reopens_with_a_new_logical_session() {
     .await
     .expect("stop task");
 
+    let stopped_agent_call = host
+        .call_persisted(
+            "agent_progress",
+            turn_context(
+                "stop-agent-progress",
+                &agent_id,
+                "agent_progress",
+                "turn-stop-agent",
+                scope,
+            ),
+            json!({"message":"Agent is still working"}),
+        )
+        .await
+        .expect_err("agent calls must not reopen a stopped conversation");
+    assert_eq!(stopped_agent_call.code, "conversation_stopped");
+
     let reopened = host
         .call_persisted(
             "agent_user_message",
@@ -491,7 +507,7 @@ async fn stopped_conversation_reopens_with_a_new_logical_session() {
             json!({"content":"Try to continue"}),
         )
         .await
-        .expect("stopped task should reopen");
+        .expect("a new user message should reopen the stopped task");
     assert_eq!(reopened["taskId"], task_id);
     assert_ne!(reopened["sessionId"], first_session_id);
 

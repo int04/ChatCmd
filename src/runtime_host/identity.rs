@@ -80,6 +80,12 @@ impl RuntimeHost {
         let reopening_stopped = current
             .as_ref()
             .is_some_and(|task| task.status == TaskStatus::Stopped);
+        if reopening_stopped && first_user_message.is_none() {
+            return Err(RuntimeError::new(
+                "conversation_stopped",
+                "this conversation was stopped by the user; only a new user message can reopen it",
+            ));
+        }
         let generation = current.as_ref().map_or(1, |task| {
             if reopening_stopped {
                 task.generation.saturating_add(1)
