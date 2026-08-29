@@ -10,6 +10,9 @@ pub(super) fn map_device(row: &sqlx::sqlite::SqliteRow) -> Result<LocalDevice, S
         installation_id: row
             .try_get("installation_id")
             .map_err(|error| backend("map installation id", error))?,
+        machine_id: row
+            .try_get("machine_id")
+            .map_err(|error| backend("map machine id", error))?,
         name: row
             .try_get("name")
             .map_err(|error| backend("map device name", error))?,

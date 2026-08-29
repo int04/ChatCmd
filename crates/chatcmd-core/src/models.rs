@@ -152,6 +152,7 @@ pub struct ToolGroup {
 pub struct LocalDevice {
     pub id: DeviceId,
     pub installation_id: String,
+    pub machine_id: Option<String>,
     pub name: String,
     pub platform: String,
     pub os_version: Option<String>,

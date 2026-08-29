@@ -97,6 +97,20 @@ async fn run_server(ready: Option<std::sync::mpsc::Sender<()>>) -> Result<()> {
     let (repository, bootstrap) = SqliteRepository::open(&database_path, 4)
         .await
         .context("open and bootstrap SQLite")?;
+    #[cfg(debug_assertions)]
+    info!(
+        device_id = %bootstrap.device.id,
+        installation_id = %bootstrap.device.installation_id,
+        machine_id = bootstrap.device.machine_id.as_deref().unwrap_or("unavailable"),
+        name = %bootstrap.device.name,
+        platform = %bootstrap.device.platform,
+        os_version = bootstrap.device.os_version.as_deref().unwrap_or("unknown"),
+        architecture = %bootstrap.device.architecture,
+        app_version = %bootstrap.device.app_version,
+        created_at_ms = bootstrap.device.created_at_ms,
+        updated_at_ms = bootstrap.device.updated_at_ms,
+        "Debug device information"
+    );
     seed_catalog(&repository)
         .await
         .context("seed MCP tool catalog")?;

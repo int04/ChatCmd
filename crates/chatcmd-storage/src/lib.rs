@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+mod device_identity;
 mod importer;
 mod path;
 mod repository;

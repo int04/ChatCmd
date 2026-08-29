@@ -25,7 +25,7 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 5;
+pub const CURRENT_SCHEMA_VERSION: i64 = 6;
 pub const MAX_TERMINAL_CHUNK_BYTES: usize = 65_536;
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
@@ -95,30 +95,59 @@ impl SqliteRepository {
 
     async fn seed(transaction: &mut Transaction<'_, Sqlite>) -> Result<LocalDevice, StorageError> {
         let now = now_ms()?;
-        let existing = sqlx::query("SELECT device_id, installation_id, name, platform, os_version, architecture, app_version, created_at_ms, updated_at_ms FROM local_device WHERE singleton_id=1")
+        let machine_id = crate::device_identity::machine_id();
+        let os_version = crate::device_identity::os_version();
+        let existing = sqlx::query("SELECT device_id, installation_id, machine_id, name, platform, os_version, architecture, app_version, created_at_ms, updated_at_ms FROM local_device WHERE singleton_id=1")
             .fetch_optional(&mut **transaction)
             .await
             .map_err(|error| backend("read local device", error))?;
         let device = if let Some(row) = existing {
-            map_device(&row)?
+            let existing_device = map_device(&row)?;
+            let resolved_machine_id = machine_id.or_else(|| existing_device.machine_id.clone());
+            let resolved_os_version = os_version.or_else(|| existing_device.os_version.clone());
+            let app_version = env!("CARGO_PKG_VERSION").to_owned();
+            let identity_changed = existing_device.machine_id != resolved_machine_id
+                || existing_device.os_version != resolved_os_version
+                || existing_device.app_version != app_version;
+            if identity_changed {
+                sqlx::query("UPDATE local_device SET machine_id=?, os_version=?, app_version=?, updated_at_ms=? WHERE singleton_id=1")
+                    .bind(&resolved_machine_id)
+                    .bind(&resolved_os_version)
+                    .bind(&app_version)
+                    .bind(now)
+                    .execute(&mut **transaction)
+                    .await
+                    .map_err(|error| backend("refresh local device", error))?;
+                LocalDevice {
+                    machine_id: resolved_machine_id,
+                    os_version: resolved_os_version,
+                    app_version,
+                    updated_at_ms: now,
+                    ..existing_device
+                }
+            } else {
+                existing_device
+            }
         } else {
             let identifier = uuid::Uuid::new_v4().to_string();
             let device = LocalDevice {
                 id: DeviceId::new(identifier.clone()).map_err(invalid_data)?,
                 installation_id: identifier,
+                machine_id,
                 name: std::env::var("COMPUTERNAME")
                     .or_else(|_| std::env::var("HOSTNAME"))
                     .unwrap_or_else(|_| "Local device".to_owned()),
                 platform: std::env::consts::OS.to_owned(),
-                os_version: None,
+                os_version,
                 architecture: std::env::consts::ARCH.to_owned(),
                 app_version: env!("CARGO_PKG_VERSION").to_owned(),
                 created_at_ms: now,
                 updated_at_ms: now,
             };
-            sqlx::query("INSERT INTO local_device(singleton_id, device_id, installation_id, name, platform, os_version, architecture, app_version, created_at_ms, updated_at_ms) VALUES(1,?,?,?,?,?,?,?,?,?)")
+            sqlx::query("INSERT INTO local_device(singleton_id, device_id, installation_id, machine_id, name, platform, os_version, architecture, app_version, created_at_ms, updated_at_ms) VALUES(1,?,?,?,?,?,?,?,?,?,?)")
                 .bind(device.id.as_str())
                 .bind(&device.installation_id)
+                .bind(&device.machine_id)
                 .bind(&device.name)
                 .bind(&device.platform)
                 .bind(&device.os_version)
@@ -335,7 +364,7 @@ impl Recovery for SqliteRepository {
 
 impl LocalDeviceStore for SqliteRepository {
     async fn local_device(&self) -> Result<LocalDevice, StorageError> {
-        let row = sqlx::query("SELECT device_id, installation_id, name, platform, os_version, architecture, app_version, created_at_ms, updated_at_ms FROM local_device WHERE singleton_id=1")
+        let row = sqlx::query("SELECT device_id, installation_id, machine_id, name, platform, os_version, architecture, app_version, created_at_ms, updated_at_ms FROM local_device WHERE singleton_id=1")
             .fetch_optional(&self.pool).await.map_err(|error| backend("read local device", error))?
             .ok_or_else(|| StorageError::NotFound("local device".to_owned()))?;
         map_device(&row)

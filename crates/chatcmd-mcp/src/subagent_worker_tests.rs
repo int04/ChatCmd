@@ -101,6 +101,7 @@ impl crate::RuntimeApi for FakeRuntime {
     fn local_device(&self) -> chatcmd_runtime::DeviceDescriptor {
         chatcmd_runtime::DeviceDescriptor {
             device_id: "device-test".to_owned(),
+            machine_id: Some("machine-test".to_owned()),
             name: "Test".to_owned(),
             platform: "test".to_owned(),
             os_version: String::new(),

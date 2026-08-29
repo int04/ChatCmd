@@ -106,6 +106,7 @@ impl RuntimeApi for RuntimeHost {
     fn local_device(&self) -> DeviceDescriptor {
         DeviceDescriptor {
             device_id: self.device.id.as_str().to_owned(),
+            machine_id: self.device.machine_id.clone(),
             name: self.device.name.clone(),
             platform: self.device.platform.clone(),
             os_version: self.device.os_version.clone().unwrap_or_default(),

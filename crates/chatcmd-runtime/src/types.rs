@@ -9,6 +9,7 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 #[serde(rename_all = "camelCase")]
 pub struct DeviceDescriptor {
     pub device_id: String,
+    pub machine_id: Option<String>,
     pub name: String,
     pub platform: String,
     pub os_version: String,
@@ -36,6 +37,7 @@ impl SystemLocalDevice {
         Self {
             descriptor: DeviceDescriptor {
                 device_id: "local".to_owned(),
+                machine_id: None,
                 name,
                 platform: std::env::consts::OS.to_owned(),
                 os_version: std::env::var("OS").unwrap_or_else(|_| std::env::consts::OS.to_owned()),
