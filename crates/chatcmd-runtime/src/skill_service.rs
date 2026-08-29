@@ -122,19 +122,15 @@ impl SkillService {
     }
 
     pub async fn list(&self) -> RuntimeResult<Vec<SkillSummary>> {
-        let all = self.discover_all()?;
-        let mut seen = HashSet::new();
-        Ok(all
-            .into_iter()
-            .filter(|skill| skill.enabled && seen.insert(skill.name.to_lowercase()))
-            .map(|skill| SkillSummary {
-                id: skill.name.clone(),
-                name: skill.name,
-                title: skill.title,
-                description: skill.description,
-                source: skill.directory.to_string_lossy().into_owned(),
-            })
-            .collect())
+        self.list_from_roots(&self.roots)
+    }
+
+    pub async fn list_for_workspace(
+        &self,
+        repository_root: Option<&Path>,
+    ) -> RuntimeResult<Vec<SkillSummary>> {
+        let roots = self.roots_for_workspace(repository_root);
+        self.list_from_roots(&roots)
     }
 
     pub async fn read(&self, skill_id: &str) -> RuntimeResult<SkillReadResult> {
@@ -146,6 +142,26 @@ impl SkillService {
             .ok_or_else(|| {
                 RuntimeError::new("skill_not_found", "skill is unavailable or shadowed")
             })?;
+        self.read_selected(selected).await
+    }
+
+    pub async fn read_for_workspace(
+        &self,
+        skill_id: &str,
+        repository_root: Option<&Path>,
+    ) -> RuntimeResult<SkillReadResult> {
+        let selected = self
+            .list_for_workspace(repository_root)
+            .await?
+            .into_iter()
+            .find(|skill| skill.id == skill_id)
+            .ok_or_else(|| {
+                RuntimeError::new("skill_not_found", "skill is unavailable or shadowed")
+            })?;
+        self.read_selected(selected).await
+    }
+
+    async fn read_selected(&self, selected: SkillSummary) -> RuntimeResult<SkillReadResult> {
         let content = tokio::fs::read_to_string(PathBuf::from(&selected.source).join("SKILL.md"))
             .await
             .map_err(io_error)?;
@@ -384,10 +400,48 @@ impl SkillService {
             .find(|skill| skill.source == "global" && skill.name.eq_ignore_ascii_case(name)))
     }
 
+    fn roots_for_workspace(&self, repository_root: Option<&Path>) -> Vec<(String, PathBuf)> {
+        let mut roots = Vec::new();
+        if let Some(repository) = repository_root {
+            roots.push(("workspace".into(), repository.join(".agents/skills")));
+            roots.push(("workspace".into(), repository.join(".codex/skills")));
+        }
+        roots.extend(
+            self.global_roots
+                .iter()
+                .cloned()
+                .map(|root| ("global".into(), root)),
+        );
+        roots
+    }
+
+    fn list_from_roots(&self, roots: &[(String, PathBuf)]) -> RuntimeResult<Vec<SkillSummary>> {
+        let all = self.discover_from_roots(roots)?;
+        let mut seen = HashSet::new();
+        Ok(all
+            .into_iter()
+            .filter(|skill| skill.enabled && seen.insert(skill.name.to_lowercase()))
+            .map(|skill| SkillSummary {
+                id: skill.name.clone(),
+                name: skill.name,
+                title: skill.title,
+                description: skill.description,
+                source: skill.directory.to_string_lossy().into_owned(),
+            })
+            .collect())
+    }
+
     fn discover_all(&self) -> RuntimeResult<Vec<DiscoveredSkill>> {
+        self.discover_from_roots(&self.roots)
+    }
+
+    fn discover_from_roots(
+        &self,
+        roots: &[(String, PathBuf)],
+    ) -> RuntimeResult<Vec<DiscoveredSkill>> {
         let settings = self.load_settings()?;
         let mut values = Vec::new();
-        for (index, (source, root)) in self.roots.iter().enumerate() {
+        for (index, (source, root)) in roots.iter().enumerate() {
             let Ok(entries) = fs::read_dir(root) else {
                 continue;
             };
@@ -495,5 +549,50 @@ impl SkillService {
                 .map_err(|error| RuntimeError::new("skill_settings_invalid", error.to_string()))?,
         )
         .map_err(io_error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_skill(root: &Path, name: &str, marker: &str) {
+        let directory = root.join(".codex/skills").join(name);
+        fs::create_dir_all(&directory).expect("create skill directory");
+        fs::write(
+            directory.join("SKILL.md"),
+            format!(
+                "---\nname: {name}\ndescription: test skill\n---\n\n{marker}\n"
+            ),
+        )
+        .expect("write skill");
+    }
+
+    #[tokio::test]
+    async fn workspace_can_switch_without_recreating_skill_service() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        let startup = temp.path().join("startup");
+        let project_a = temp.path().join("project-a");
+        let project_b = temp.path().join("project-b");
+        write_skill(&home, "shared-skill", "global");
+        write_skill(&startup, "startup-skill", "startup");
+        write_skill(&project_a, "shared-skill", "project-a");
+        write_skill(&project_b, "shared-skill", "project-b");
+
+        let service = SkillService::new(Some(&home), Some(&startup), 10_000);
+        let from_a = service
+            .read_for_workspace("shared-skill", Some(&project_a))
+            .await
+            .expect("read project a skill");
+        let from_b = service
+            .read_for_workspace("shared-skill", Some(&project_b))
+            .await
+            .expect("read project b skill");
+
+        assert!(from_a.instructions.contains("project-a"));
+        assert!(from_b.instructions.contains("project-b"));
+        assert!(from_a.source.starts_with(project_a.to_string_lossy().as_ref()));
+        assert!(from_b.source.starts_with(project_b.to_string_lossy().as_ref()));
     }
 }

@@ -322,10 +322,30 @@ impl RuntimeHost {
                     .await?;
                 Ok(json!({ "killed": true }))
             }
-            "skills_list" => value(self.skills.list().await?),
+            "skills_list" => {
+                let project_folder =
+                    <Self as chatcmd_mcp::RuntimeApi>::project_folder(self, &context.agent_id)
+                        .await?
+                        .map(std::path::PathBuf::from)
+                        .or_else(|| self.workspace.roots().first().cloned());
+                value(
+                    self.skills
+                        .list_for_workspace(project_folder.as_deref())
+                        .await?,
+                )
+            }
             "skill_read" => {
                 let input: SkillInput = parse(arguments)?;
-                value(self.skills.read(&input.skill_id).await?)
+                let project_folder =
+                    <Self as chatcmd_mcp::RuntimeApi>::project_folder(self, &context.agent_id)
+                        .await?
+                        .map(std::path::PathBuf::from)
+                        .or_else(|| self.workspace.roots().first().cloned());
+                value(
+                    self.skills
+                        .read_for_workspace(&input.skill_id, project_folder.as_deref())
+                        .await?,
+                )
             }
             "task_get" => {
                 let id = context_task_id(&context)?;
