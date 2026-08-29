@@ -1,5 +1,6 @@
 import { appLocale, formatAppNumber, tr } from '../i18n';
 import type { Task, TaskDetail, TaskTurn, TimelineEvent } from '../types';
+import { formatToolOutput } from './taskToolOutput';
 
 export type ActivityKind = 'read' | 'search' | 'edit' | 'create' | 'delete' | 'copy' | 'move' | 'git' | 'command' | 'tool';
 export type ToolActivity = {
@@ -282,7 +283,7 @@ export function activityOutput(activity: ToolActivity) {
     }
     return key === 'code' ? text : stripAnsi(text);
   }
-  return formatValue(activity.output);
+  return formatToolOutput(activity.tool, activity.output);
 }
 
 export function fsSearchCodeViews(activity: ToolActivity) {
