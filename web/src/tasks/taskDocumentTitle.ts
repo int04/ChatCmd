@@ -66,7 +66,10 @@ export function titleLabelForEvent(event: TimelineEvent) {
     const status = stringValue(payload.status);
     return ['completed', 'failed', 'stopped', 'interrupted'].includes(status) ? null : tr('Thinking');
   }
-  if (event.type === 'tool_result') return tr('Thinking');
+  if (event.type === 'tool_result') {
+    const tool = stringValue(payload.tool);
+    return tool === 'agent_turn_complete' ? null : tr('Thinking');
+  }
   if (event.type !== 'tool_call') return null;
   const status = stringValue(payload.status);
   if (status && status !== 'started') return tr('Thinking');
@@ -107,12 +110,17 @@ function updateTitleActivity(activities: Map<string, TitleActivity>, commandBuff
   }
   if (event.type === 'tool_call') {
     const tool = stringValue(payload.tool);
+    if (tool === 'agent_turn_complete') return false;
     if (isCommandInputTool(tool)) commandBuffers.set(taskId, { sessionId: event.sessionId ?? 'unknown', tail: '' });
     else commandBuffers.delete(taskId);
   }
   if (event.type === 'progress') commandBuffers.delete(taskId);
   if (event.type === 'tool_result') {
     const tool = stringValue(payload.tool);
+    if (tool === 'agent_turn_complete') {
+      commandBuffers.delete(taskId);
+      return activities.delete(taskId);
+    }
     const command = commandBuffers.get(taskId);
     if (command && isCommandInputTool(tool) && command.sessionId === (event.sessionId ?? 'unknown')) return false;
   }

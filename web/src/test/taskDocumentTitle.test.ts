@@ -24,4 +24,8 @@ describe('task document title labels', () => {
     expect(titleLabelForEvent(event('progress', { message: 'Checking files' }))).toBe('Thinking');
     expect(titleLabelForEvent(event('status', { status: 'completed' }))).toBeNull();
   });
+
+  it('does not restore Thinking after the final-response tool finishes', () => {
+    expect(titleLabelForEvent(event('tool_result', { tool: 'agent_turn_complete', status: 'succeeded' }))).toBeNull();
+  });
 });
