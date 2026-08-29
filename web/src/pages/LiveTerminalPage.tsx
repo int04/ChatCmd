@@ -20,7 +20,11 @@ export function LiveTerminalPage() {
   const terminalRef = useRef<Terminal | null>(null);
   const lastSequenceRef = useRef(0);
   const inputQueueRef = useRef(Promise.resolve());
+  const inputBufferRef = useRef('');
+  const inputTimerRef = useRef<number | undefined>(undefined);
+  const resizeQueueRef = useRef(Promise.resolve());
   const [problem, setProblem] = useState('');
+  const [terminalReady, setTerminalReady] = useState(false);
 
   useEffect(() => {
     if (metadata.loading || !hostRef.current) return;
@@ -47,13 +51,31 @@ export function LiveTerminalPage() {
     fit.fit();
     terminal.focus();
     terminalRef.current = terminal;
-    const dataDisposable = terminal.onData((data) => {
+    setTerminalReady(true);
+    const flushInput = () => {
+      inputTimerRef.current = undefined;
+      const data = inputBufferRef.current;
+      inputBufferRef.current = '';
+      if (!data) return;
       inputQueueRef.current = inputQueueRef.current
         .then(() => api.writeTerminalInput(sessionId, data))
         .then(() => undefined)
         .catch((error) => { setProblem(error instanceof Error ? error.message : tr('Terminal input failed')); });
+    };
+    const dataDisposable = terminal.onData((data) => {
+      inputBufferRef.current += data;
+      if (inputTimerRef.current === undefined) inputTimerRef.current = window.setTimeout(flushInput, 4);
     });
-    const resize = () => fit.fit();
+    const resize = () => {
+      fit.fit();
+      const columns = terminal.cols;
+      const rows = terminal.rows;
+      resizeQueueRef.current = resizeQueueRef.current
+        .then(() => api.resizeTerminal(sessionId, columns, rows))
+        .then(() => undefined)
+        .catch(() => undefined);
+    };
+    resize();
     window.addEventListener('resize', resize);
     const observer = new ResizeObserver(resize);
     observer.observe(hostRef.current);
@@ -61,12 +83,17 @@ export function LiveTerminalPage() {
       observer.disconnect();
       window.removeEventListener('resize', resize);
       dataDisposable.dispose();
+      if (inputTimerRef.current !== undefined) window.clearTimeout(inputTimerRef.current);
+      inputTimerRef.current = undefined;
+      inputBufferRef.current = '';
+      setTerminalReady(false);
       terminal.dispose();
       terminalRef.current = null;
     };
   }, [sessionId, metadata.loading]);
 
   useEffect(() => {
+    if (!terminalReady) return;
     lastSequenceRef.current = 0;
     let cancelled = false;
     let timer = 0;
@@ -80,12 +107,12 @@ export function LiveTerminalPage() {
       } catch (error) {
         if (!cancelled) setProblem(error instanceof Error ? error.message : tr('Terminal stream is unavailable'));
       } finally {
-        if (!cancelled) timer = window.setTimeout(read, 180);
+        if (!cancelled) timer = window.setTimeout(read, 0);
       }
     };
     void read();
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [sessionId]);
+  }, [sessionId, terminalReady]);
 
   useEffect(() => {
     const timer = window.setInterval(() => void metadata.refresh(), 2000);

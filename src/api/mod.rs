@@ -82,6 +82,7 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/sessions/terminals/live", get(live_terminals))
         .route("/sessions/{id}/live", get(terminal_live_output))
         .route("/sessions/{id}/input", post(terminal_input))
+        .route("/sessions/{id}/resize", post(terminal_resize))
         .route("/sessions/{id}", get(session))
         .route("/sessions/{id}/{action}", post(session_action))
         .route("/skills", get(skills))

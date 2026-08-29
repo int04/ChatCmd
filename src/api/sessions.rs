@@ -69,11 +69,19 @@ pub(super) struct Cursor {
 pub(super) struct LiveCursor {
     #[serde(rename = "afterSequence")]
     after_sequence: Option<u64>,
+    #[serde(rename = "waitMs")]
+    wait_ms: Option<u64>,
 }
 
 #[derive(Deserialize)]
 pub(super) struct TerminalInput {
     text: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct TerminalResize {
+    columns: u16,
+    rows: u16,
 }
 
 pub(super) async fn session(
@@ -91,7 +99,12 @@ pub(super) async fn terminal_live_output(
 ) -> Result<Json<Value>, Problem> {
     let result = state
         .shell
-        .read(&id, cursor.after_sequence.unwrap_or(0), 2_000)
+        .read_when_available(
+            &id,
+            cursor.after_sequence.unwrap_or(0),
+            2_000,
+            std::time::Duration::from_millis(cursor.wait_ms.unwrap_or(20_000).clamp(0, 25_000)),
+        )
         .await
         .map_err(runtime_problem)?;
     Ok(Json(json!({
@@ -106,6 +119,23 @@ pub(super) async fn terminal_live_output(
             "data": event.data
         })).collect::<Vec<_>>()
     })))
+}
+
+pub(super) async fn terminal_resize(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(input): Json<TerminalResize>,
+) -> Result<Json<Value>, Problem> {
+    let columns = input.columns.clamp(20, 500);
+    let rows = input.rows.clamp(5, 200);
+    state
+        .shell
+        .resize(&id, columns, rows)
+        .await
+        .map_err(runtime_problem)?;
+    Ok(Json(
+        json!({ "accepted": true, "columns": columns, "rows": rows }),
+    ))
 }
 
 pub(super) async fn terminal_input(
