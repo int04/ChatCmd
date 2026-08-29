@@ -28,8 +28,10 @@ export interface SubagentRun { id: Id; parentTurnId: Id; taskId?: Id; name: stri
 export interface SubagentApproval { activityId: Id; childTaskId: Id; subagentId: Id; agentName: string; parentTurnId: Id; childTurnId?: Id; tool?: string; input?: unknown; createdAtUtc: string }
 export interface TaskDetail { task: Task; turns?: TaskTurn[]; events?: TimelineEvent[]; subagents?: SubagentRun[]; subagentApprovals?: SubagentApproval[]; executionMode?: CommandExecutionMode; executionModeSourceTaskId?: Id }
 export interface TaskTurn { id: Id; generation?: number; actor?: string; status?: string; startedAtUtc?: string; completedAtUtc?: string; events?: TimelineEvent[] }
-export interface Session { kind: 'mcp' | 'terminal'; id: Id; taskId?: Id; shell?: string; processId?: number; status: string; workingDirectory?: string; createdAtUtc?: string; updatedAtUtc?: string; closedAtUtc?: string; replayCursor?: string }
+export interface Session { kind: 'mcp' | 'terminal'; id: Id; taskId?: Id; turnId?: Id; shell?: string; processId?: number; status: string; workingDirectory?: string; createdAtUtc?: string; updatedAtUtc?: string; closedAtUtc?: string; replayCursor?: string; cpuPercent?: number; memoryBytes?: number; busy?: boolean; lastSequence?: number }
 export interface SessionDetail { session: Session; events: TimelineEvent[]; nextCursor?: string; truncated?: boolean }
+export interface LiveTerminalEvent { sequence: number; occurredAtUtc: string; stream: string; data: string }
+export interface LiveTerminalOutput { sessionId: Id; oldestAvailableSequence: number; latestAvailableSequence: number; replayTruncated: boolean; events: LiveTerminalEvent[] }
 export type SkillOptionValue = string | number | boolean;
 export interface SkillOptionChoice { value: string; label: string }
 export interface UserSkillOption { key: string; label: string; description?: string | null; type: 'select' | 'boolean' | 'text' | 'number'; value: SkillOptionValue; choices?: SkillOptionChoice[] | null }

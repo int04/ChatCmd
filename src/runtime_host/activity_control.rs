@@ -93,6 +93,14 @@ impl ActivityRegistry {
         active.get(activity_id)?.stop_reason.lock().ok()?.clone()
     }
 
+    pub(crate) fn is_shell_busy(&self, session_id: &str) -> bool {
+        self.active.lock().is_ok_and(|active| {
+            active
+                .values()
+                .any(|activity| activity.shell_session_id.as_deref() == Some(session_id))
+        })
+    }
+
     fn remove(&self, activity_id: &str) {
         if let Ok(mut active) = self.active.lock() {
             active.remove(activity_id);
