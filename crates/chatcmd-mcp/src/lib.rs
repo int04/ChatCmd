@@ -1,4 +1,4 @@
-﻿//! Official `rmcp` server surface for direct local ChatCMD execution.
+//! Official `rmcp` server surface for direct local ChatCMD execution.
 
 mod request_identity;
 mod server_contract;
@@ -251,7 +251,10 @@ tool_methods!(
     (shell_inspect, "Inspect a PTY session"),
     (workspace_roots, "List canonical workspace roots"),
     (fs_list, "List workspace directory entries"),
-    (fs_search, "Search text within the workspace"),
+    (
+        fs_search,
+        "Search text within the workspace. Fields: path, query; optional caseSensitive, maxResults, maxFileBytes, includeIgnored, exclude. By default respects safe generated/cache ignores and project .gitignore; explicit exclude patterns always apply."
+    ),
     (fs_find, "Find workspace paths"),
     (
         fs_read_text,

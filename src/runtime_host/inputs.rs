@@ -170,6 +170,10 @@ pub(super) struct SearchInput {
     pub(super) max_results: usize,
     #[serde(default = "default_file_bytes")]
     pub(super) max_file_bytes: u64,
+    #[serde(default)]
+    pub(super) include_ignored: bool,
+    #[serde(default)]
+    pub(super) exclude: Vec<String>,
 }
 
 const fn default_file_bytes() -> u64 {

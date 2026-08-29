@@ -276,6 +276,101 @@ async fn workspace_reads_line_ranges_and_replaces_text_exactly() {
 }
 
 #[tokio::test]
+async fn workspace_search_respects_default_gitignore_exclude_and_direct_root_override() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let root = directory.path();
+    std::fs::create_dir_all(root.join("src")).expect("create src");
+    std::fs::create_dir_all(root.join("node_modules")).expect("create node_modules");
+    std::fs::create_dir_all(root.join("ignored")).expect("create ignored");
+    std::fs::create_dir_all(root.join("keep")).expect("create keep");
+    std::fs::write(root.join(".gitignore"), "ignored/\n").expect("write gitignore");
+    std::fs::write(root.join("src/source.txt"), "needle source\n").expect("write source");
+    std::fs::write(
+        root.join("node_modules/dependency.txt"),
+        "needle dependency\n",
+    )
+    .expect("write dependency");
+    std::fs::write(root.join("ignored/generated.txt"), "needle ignored\n").expect("write ignored");
+    std::fs::write(root.join("keep/excluded.txt"), "needle excluded\n").expect("write exclude");
+
+    let workspace = WorkspaceService::new(&[root.to_path_buf()], policy()).expect("workspace");
+    let normal = workspace
+        .search(
+            root,
+            "needle",
+            false,
+            100,
+            1_048_576,
+            false,
+            vec!["keep/".to_owned()],
+            |_| {},
+        )
+        .await
+        .expect("normal search");
+    assert_eq!(normal.len(), 1);
+    assert!(
+        normal[0]["path"]
+            .as_str()
+            .is_some_and(|path| path.contains("source.txt"))
+    );
+
+    let include_ignored = workspace
+        .search(
+            root,
+            "needle",
+            false,
+            100,
+            1_048_576,
+            true,
+            vec!["keep/".to_owned()],
+            |_| {},
+        )
+        .await
+        .expect("include ignored search");
+    let include_paths = include_ignored
+        .iter()
+        .filter_map(|value| value["path"].as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(include_paths.len(), 3);
+    assert!(include_paths.iter().any(|path| path.contains("source.txt")));
+    assert!(
+        include_paths
+            .iter()
+            .any(|path| path.contains("dependency.txt"))
+    );
+    assert!(
+        include_paths
+            .iter()
+            .any(|path| path.contains("generated.txt"))
+    );
+    assert!(
+        !include_paths
+            .iter()
+            .any(|path| path.contains("excluded.txt"))
+    );
+
+    let direct_ignored_root = workspace
+        .search(
+            &root.join("node_modules"),
+            "needle",
+            false,
+            100,
+            1_048_576,
+            false,
+            Vec::new(),
+            |_| {},
+        )
+        .await
+        .expect("direct ignored root search");
+    assert_eq!(direct_ignored_root.len(), 1);
+    assert!(
+        direct_ignored_root[0]["path"]
+            .as_str()
+            .is_some_and(|path| path.contains("dependency.txt"))
+    );
+}
+
+#[tokio::test]
 async fn workspace_traversal_is_denied() {
     let directory = tempfile::tempdir().expect("temp directory");
     let workspace =

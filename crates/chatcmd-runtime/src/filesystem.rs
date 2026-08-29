@@ -7,16 +7,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-#[derive(Debug, Clone)]
-pub struct SearchProgress {
-    pub path: PathBuf,
-    pub files_scanned: usize,
-    pub matches_found: usize,
-    pub matched: Option<serde_json::Value>,
-}
-
 #[path = "filesystem_mutations.rs"]
 mod mutations;
+#[path = "filesystem_search.rs"]
+mod search;
+pub use search::SearchProgress;
 
 #[derive(Clone)]
 pub struct WorkspaceService {
@@ -280,59 +275,6 @@ impl WorkspaceService {
         .map_err(join_error)?
     }
 
-    pub async fn search(
-        &self,
-        path: &Path,
-        query: &str,
-        case_sensitive: bool,
-        max_results: usize,
-        max_file_bytes: u64,
-        progress: impl Fn(SearchProgress) + Send + Sync + 'static,
-    ) -> RuntimeResult<Vec<serde_json::Value>> {
-        let root = self.existing(path)?;
-        let query = query.to_owned();
-        tokio::task::spawn_blocking(move || -> RuntimeResult<Vec<serde_json::Value>> {
-            let mut found = Vec::new();
-            let mut files_scanned = 0usize;
-            let limit = max_results.clamp(1, 2_000);
-            let query_cmp = if case_sensitive { query } else { query.to_lowercase() };
-            visit_search(&root, 0, 64, &mut |path, metadata| {
-                if !metadata.is_file() || metadata.len() > max_file_bytes || found.len() >= limit {
-                    return Ok(());
-                }
-                files_scanned = files_scanned.saturating_add(1);
-                if files_scanned == 1 || files_scanned % 250 == 0 {
-                    progress(SearchProgress {
-                        path: path.to_path_buf(),
-                        files_scanned,
-                        matches_found: found.len(),
-                        matched: None,
-                    });
-                }
-                if let Ok(content) = fs::read_to_string(path) {
-                    for (index, line) in content.lines().enumerate() {
-                        let matches = if case_sensitive { line.contains(&query_cmp) } else { line.to_lowercase().contains(&query_cmp) };
-                        if matches {
-                            let matched = serde_json::json!({ "path": path, "line": index + 1, "text": line });
-                            found.push(matched.clone());
-                            progress(SearchProgress {
-                                path: path.to_path_buf(),
-                                files_scanned,
-                                matches_found: found.len(),
-                                matched: Some(matched),
-                            });
-                            if found.len() >= limit { break; }
-                        }
-                    }
-                }
-                Ok(())
-            })?;
-            Ok(found)
-        })
-        .await
-        .map_err(join_error)?
-    }
-
     fn existing(&self, path: &Path) -> RuntimeResult<PathBuf> {
         let resolved = path.canonicalize().map_err(io_error)?;
         self.ensure_allowed(&resolved)?;
@@ -380,55 +322,6 @@ impl WorkspaceService {
             .max_by_key(|scope| scope.components().count())
             .cloned()
     }
-}
-
-fn visit_search(
-    path: &Path,
-    depth: usize,
-    max_depth: usize,
-    callback: &mut impl FnMut(&Path, &fs::Metadata) -> RuntimeResult<()>,
-) -> RuntimeResult<()> {
-    if depth > max_depth {
-        return Ok(());
-    }
-    let metadata = fs::symlink_metadata(path).map_err(io_error)?;
-    if metadata.file_type().is_symlink() {
-        return Ok(());
-    }
-    if depth > 0 && metadata.is_dir() && is_ignored_search_directory(path) {
-        return Ok(());
-    }
-    callback(path, &metadata)?;
-    if metadata.is_dir() {
-        for child in fs::read_dir(path).map_err(io_error)? {
-            visit_search(
-                &child.map_err(io_error)?.path(),
-                depth + 1,
-                max_depth,
-                callback,
-            )?;
-        }
-    }
-    Ok(())
-}
-
-fn is_ignored_search_directory(path: &Path) -> bool {
-    let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
-        return false;
-    };
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        ".git"
-            | ".idea"
-            | ".next"
-            | ".nuxt"
-            | ".turbo"
-            | ".vite"
-            | "coverage"
-            | "dist"
-            | "node_modules"
-            | "target"
-    )
 }
 
 fn visit(

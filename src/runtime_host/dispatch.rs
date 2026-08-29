@@ -210,6 +210,8 @@ impl RuntimeHost {
                             input.case_sensitive,
                             input.max_results,
                             input.max_file_bytes,
+                            input.include_ignored,
+                            input.exclude,
                             move |progress: SearchProgress| {
                                 let sequence =
                                     progress_sequence.fetch_add(1, Ordering::Relaxed) + 1;
