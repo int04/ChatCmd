@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TimelineEvent } from '../types';
-import { activityCodeView, activityOutput, buildProcessBlocks, findUserMessage, mergeLiveDetail, type ToolActivity, upsertTaskEvent } from '../tasks/taskTimeline';
+import { activityCodeView, activityOutput, buildProcessBlocks, buildTaskTurns, findFinalResponse, findUserMessage, mergeLiveDetail, type ToolActivity, upsertTaskEvent } from '../tasks/taskTimeline';
 
 describe('task realtime list updates', () => {
   it('adds a brand new conversation when its first websocket event arrives', () => {
@@ -58,6 +58,21 @@ describe('task realtime list updates', () => {
     };
     const tasks = upsertTaskEvent(upsertTaskEvent([], running), stopped);
     expect(tasks?.[0]).toMatchObject({ status: 'stopped', finalResponseCount: 0 });
+  });
+
+  it('auto-finalizes a stale turn without inventing a final response', () => {
+    const running: TimelineEvent = {
+      id: 'event-running-watchdog', type: 'progress', occurredAt: '2026-08-27T08:00:00.000Z',
+      taskId: 'task-watchdog', turnId: 'turn-watchdog', payload: { status: 'running', content: 'Working' },
+    };
+    const watchdog: TimelineEvent = {
+      id: 'event-watchdog-completed', type: 'status', occurredAt: '2026-08-27T08:02:00.000Z',
+      taskId: 'task-watchdog', turnId: 'turn-watchdog', payload: { status: 'completed', autoFinalized: true, finalizerMissing: true, reason: 'finalizer_timeout' },
+    };
+    const tasks = upsertTaskEvent(upsertTaskEvent([], running), watchdog);
+    expect(tasks?.[0]).toMatchObject({ status: 'completed', finalResponseCount: 0 });
+    expect(findFinalResponse([running, watchdog])).toBeNull();
+    expect(buildTaskTurns([running, watchdog], tasks![0])[0]).toMatchObject({ status: 'completed', completedAtUtc: watchdog.occurredAt });
   });
 });
 

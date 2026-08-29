@@ -18,6 +18,7 @@ import {
   buildProcessBlocks,
   duration,
   eventText,
+  findCompletionSignal,
   findFinalResponse,
   findUserMessage,
   formatClockTime,
@@ -31,16 +32,18 @@ const TaskCodeViewer = lazy(async () => ({ default: (await import('../TaskCodeVi
 
 export function TaskTurnBubble({ turn, taskId, subagents = [], agentLabel = 'Codex Agent' }: { turn: TaskTurn; taskId: string; subagents?: SubagentRun[]; agentLabel?: string }) {
   const events = turn.events ?? [];
+  const completion = findCompletionSignal(events);
   const response = findFinalResponse(events);
+  const autoFinalized = completion?.payload.autoFinalized === true;
   const userMessage = findUserMessage(events);
   const visibleUserMessage = userMessage?.text.replace(/^\s*CMDGPT_SUBAGENT_ID=subagent-[A-Za-z0-9_-]+\s*$/gm, '').trim();
   const processEvents = events.filter((event) => event !== response?.event && event !== userMessage?.event);
   const blocks = buildProcessBlocks(processEvents);
   const activities = blocks.flatMap((block) => block.type === 'activities' ? block.activities : []);
   const rawStatus = turn.status ?? 'incomplete';
-  const status = response ? 'completed' : rawStatus;
+  const status = completion ? 'completed' : rawStatus;
   const startedAt = turn.startedAtUtc ?? events[0]?.occurredAt ?? new Date().toISOString();
-  const finishedAt = turn.completedAtUtc ?? response?.event.occurredAt;
+  const finishedAt = turn.completedAtUtc ?? response?.event.occurredAt ?? completion?.event.occurredAt;
   const stateLabel = status === 'running' ? tr('Processing…') : status === 'failed' ? tr('Failed') : status === 'incomplete' ? tr('Incomplete') : tr('Completed');
   const isThinking = status === 'running' && !response && !activities.some((activity) => activity.status === 'started' || activity.status === 'pending_approval');
   const headingId = `turn-${turn.id}`;
@@ -78,6 +81,7 @@ export function TaskTurnBubble({ turn, taskId, subagents = [], agentLabel = 'Cod
         ? <div className="turn-warning" role="status"><CircleAlert /><div><strong>{tr('Waiting to retry')}</strong><p>{tr('The ChatGPT send button is temporarily disabled. The system will retry in 10 seconds; you can cancel the send below.')}</p></div></div>
         : <div className="turn-error" role="alert"><CircleAlert /><div><strong>{tr('Agent turn failed')}</strong><p>{latestMessage(events) || tr('The Agent could not complete this turn. Review the activity above to find the cause.')}</p></div></div>)}
       {status === 'incomplete' && <div className="turn-warning" role="status"><CircleAlert /><div><strong>{tr('This turn may have been interrupted')}</strong><p>{latestMessage(events) || tr('No new activity or completion signal was received for a long time. The turn may have been interrupted or delayed; its state will recover automatically if new data arrives.')}</p></div></div>}
+      {status === 'completed' && autoFinalized && !response && <div className="turn-warning" role="status"><CircleAlert /><div><strong>{tr('Finalizer was not received')}</strong><p>{tr('No completion callback arrived from the Agent. ChatCMD stopped waiting after the inactivity grace period; later Agent activity will reopen the turn automatically.')}</p></div></div>}
       {status === 'completed' && response && <div className="turn-response"><div className="turn-response-label"><CheckCircle2 /> {tr('Final response')}</div><div className="turn-response-content"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]} components={{ a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer noopener" /> }}>{response.text}</ReactMarkdown></div></div>}
       {status === 'completed' && fileChanges.length > 0 && <TurnFileChanges changes={fileChanges} onOpen={(activity) => setChangeTarget(activity)} />}
     </article>

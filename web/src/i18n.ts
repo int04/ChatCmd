@@ -290,6 +290,8 @@ const vi: Record<string, string> = {
   'The Agent could not complete this turn. Review the activity above to find the cause.': 'Agent không thể hoàn tất lượt này. Xem hoạt động phía trên để kiểm tra nguyên nhân.',
   'This turn may have been interrupted': 'Có thể lượt đã bị gián đoạn',
   'No new activity or completion signal was received for a long time. The turn may have been interrupted or delayed; its state will recover automatically if new data arrives.': 'Không nhận được hoạt động mới hoặc tín hiệu hoàn tất trong một thời gian dài. Có thể lượt bị gián đoạn hoặc tín hiệu đến muộn; trạng thái sẽ tự phục hồi khi có dữ liệu mới.',
+  'Finalizer was not received': 'Không nhận được tín hiệu hoàn tất',
+  'No completion callback arrived from the Agent. ChatCMD stopped waiting after the inactivity grace period; later Agent activity will reopen the turn automatically.': 'Agent không gửi callback hoàn tất. ChatCMD đã ngừng chờ sau khoảng thời gian im lặng; nếu Agent có hoạt động mới, lượt sẽ tự chuyển lại sang đang chạy.',
   'Final response': 'Phản hồi cuối',
   'Subagents': 'Agent phụ',
   'Waiting to start': 'Chờ khởi chạy',

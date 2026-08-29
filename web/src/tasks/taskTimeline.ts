@@ -35,9 +35,10 @@ export function buildTaskTurns(events: TimelineEvent[], task: Task): TaskTurn[] 
       events: [],
     };
     current.events!.push(event);
-    if (findFinalResponse(current.events!)) {
+    const completion = findCompletionSignal(current.events!);
+    if (completion) {
       current.status = 'completed';
-      current.completedAtUtc = event.occurredAt;
+      current.completedAtUtc = completion.event.occurredAt;
     }
     groups.set(id, current);
     if (!event.turnId && index === 0) current.startedAtUtc = event.occurredAt;
@@ -155,16 +156,20 @@ export function findUserMessage(events: TimelineEvent[]) {
   return null;
 }
 
-export function findFinalResponse(events: TimelineEvent[]) {
+export function findCompletionSignal(events: TimelineEvent[]) {
   for (let index = events.length - 1; index >= 0; index--) {
     const event = events[index];
     const payload = payloadObject(event);
-    if (event.type === 'status' && stringValue(payload.status) === 'completed') {
-      const text = stringValue(payload.content) || stringValue(payload.response) || stringValue(payload.message);
-      if (text) return { event, text };
-    }
+    if (event.type === 'status' && stringValue(payload.status) === 'completed') return { event, payload };
   }
   return null;
+}
+
+export function findFinalResponse(events: TimelineEvent[]) {
+  const completion = findCompletionSignal(events);
+  if (!completion) return null;
+  const text = stringValue(completion.payload.content) || stringValue(completion.payload.response) || stringValue(completion.payload.message);
+  return text ? { event: completion.event, text } : null;
 }
 
 export function eventText(event?: TimelineEvent) {
@@ -361,7 +366,8 @@ export function mergeTaskEvent(task: Task, event: TimelineEvent): Task {
   const payload = payloadObject(event);
   const status = stringValue(payload.status);
   const title = stringValue(payload.title);
-  const finalCompleted = event.type === 'status' && status === 'completed';
+  const finalCompleted = event.type === 'status' && status === 'completed'
+    && Boolean(stringValue(payload.content) || stringValue(payload.response) || stringValue(payload.message));
   const nextStatus = taskStatusFromEvent(status, event.type, task.status);
   return {
     ...task,
@@ -385,7 +391,8 @@ export function taskFromRealtimeEvent(event: TimelineEvent): Task | null {
   if (!event.taskId) return null;
   const payload = payloadObject(event);
   const status = stringValue(payload.status);
-  const finalCompleted = event.type === 'status' && status === 'completed';
+  const finalCompleted = event.type === 'status' && status === 'completed'
+    && Boolean(stringValue(payload.content) || stringValue(payload.response) || stringValue(payload.message));
   return {
     id: event.taskId,
     title: stringValue(payload.title) || undefined,

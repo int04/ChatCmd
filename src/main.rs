@@ -140,6 +140,7 @@ async fn run_server(ready: Option<std::sync::mpsc::Sender<()>>) -> Result<()> {
         event_tx.clone(),
     ));
     let activity_registry = runtime.activity_registry();
+    let _finalization_watchdog = runtime.start_finalization_watchdog();
     let security = HttpSecurity::new(
         Arc::new(DatabaseAuth(repository.clone())),
         Arc::new(LocalOrigins {

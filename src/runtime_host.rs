@@ -2,6 +2,7 @@ mod activity_control;
 mod approval;
 mod dispatch;
 mod filesystem_dispatch;
+mod finalization_watchdog;
 mod git_support;
 #[cfg(test)]
 mod git_tests;

@@ -101,6 +101,15 @@ impl ActivityRegistry {
         })
     }
 
+    pub(crate) fn has_active_turn(&self, task_id: &str, turn_id: &str) -> bool {
+        self.active.lock().is_ok_and(|active| {
+            active.values().any(|activity| {
+                activity.context.task_id.as_deref() == Some(task_id)
+                    && activity.context.turn_id.as_deref() == Some(turn_id)
+            })
+        })
+    }
+
     fn remove(&self, activity_id: &str) {
         if let Ok(mut active) = self.active.lock() {
             active.remove(activity_id);
