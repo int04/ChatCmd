@@ -1,12 +1,15 @@
 use std::{
     collections::HashSet,
+    path::Path,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
 };
 
-use chatcmd_runtime::{OperationContext, RuntimeResult, SearchProgress, WorkspaceService};
+use chatcmd_runtime::{
+    OperationContext, RuntimeError, RuntimeResult, SearchProgress, WorkspaceService,
+};
 use serde_json::{Value, json};
 
 use super::{
@@ -14,6 +17,35 @@ use super::{
     inputs::{DeleteInput, ReplaceTextInput, SearchInput, WriteTextInput},
     value,
 };
+
+pub(super) fn resolve_relative_paths(
+    mut arguments: Value,
+    base: Option<&Path>,
+) -> RuntimeResult<Value> {
+    let Some(object) = arguments.as_object_mut() else {
+        return Ok(arguments);
+    };
+    for key in ["path", "source", "destination"] {
+        let Some(raw) = object.get(key).and_then(Value::as_str) else {
+            continue;
+        };
+        let path = Path::new(raw);
+        if path.is_absolute() {
+            continue;
+        }
+        let base = base.ok_or_else(|| {
+            RuntimeError::new(
+                "workspace_not_configured",
+                "relative filesystem path requires an agent project folder or workspace root",
+            )
+        })?;
+        object.insert(
+            key.to_owned(),
+            Value::String(base.join(path).to_string_lossy().into_owned()),
+        );
+    }
+    Ok(arguments)
+}
 
 pub(super) async fn search(
     host: &RuntimeHost,
@@ -130,6 +162,54 @@ async fn snapshot(workspace: &WorkspaceService, path: &std::path::Path) -> Optio
         .await
         .ok()
         .map(|value| value.content)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_relative_paths;
+    use serde_json::json;
+    use std::path::Path;
+
+    #[test]
+    fn relative_filesystem_paths_are_anchored_to_project_folder() {
+        let base = Path::new("D:/DEV/CmdGPT/ChatCmdClient");
+        let resolved = resolve_relative_paths(
+            json!({"path":"src/websocket.rs","source":"web/a.ts","destination":"web/b.ts"}),
+            Some(base),
+        )
+        .expect("resolve relative paths");
+        assert_eq!(
+            Path::new(resolved["path"].as_str().expect("path")),
+            base.join("src/websocket.rs")
+        );
+        assert_eq!(
+            Path::new(resolved["source"].as_str().expect("source")),
+            base.join("web/a.ts")
+        );
+        assert_eq!(
+            Path::new(resolved["destination"].as_str().expect("destination")),
+            base.join("web/b.ts")
+        );
+    }
+
+    #[test]
+    fn absolute_filesystem_paths_are_preserved() {
+        let absolute = if cfg!(windows) {
+            "D:/DEV/CmdGPT/ChatCmdClient/src/main.rs"
+        } else {
+            "/tmp/project/src/main.rs"
+        };
+        let resolved = resolve_relative_paths(json!({"path": absolute}), Some(Path::new(".")))
+            .expect("preserve absolute path");
+        assert_eq!(resolved["path"], absolute);
+    }
+
+    #[test]
+    fn relative_path_requires_a_project_or_workspace_base() {
+        let error = resolve_relative_paths(json!({"path":"src/main.rs"}), None)
+            .expect_err("relative path without base must fail explicitly");
+        assert_eq!(error.code, "workspace_not_configured");
+    }
 }
 
 fn with_text_diff(

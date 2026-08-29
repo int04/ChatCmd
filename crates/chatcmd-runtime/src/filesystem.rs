@@ -234,7 +234,24 @@ impl WorkspaceService {
         let content = tokio::fs::read_to_string(&resolved)
             .await
             .map_err(io_error)?;
-        let occurrences = content.matches(old_text).count();
+        let exact_occurrences = content.matches(old_text).count();
+        let (matched_old_text, replacement_text, occurrences) =
+            if exact_occurrences == expected_occurrences {
+                (old_text.to_owned(), new_text.to_owned(), exact_occurrences)
+            } else {
+                let line_ending = if content.contains("\r\n") {
+                    "\r\n"
+                } else {
+                    "\n"
+                };
+                let adapted_old = adapt_line_endings(old_text, line_ending);
+                let adapted_occurrences = content.matches(&adapted_old).count();
+                (
+                    adapted_old,
+                    adapt_line_endings(new_text, line_ending),
+                    adapted_occurrences,
+                )
+            };
         if occurrences != expected_occurrences {
             return Err(RuntimeError::new(
                 "text_match_count_mismatch",
@@ -243,7 +260,7 @@ impl WorkspaceService {
                 ),
             ));
         }
-        let updated = content.replace(old_text, new_text);
+        let updated = content.replace(&matched_old_text, &replacement_text);
         self.write_text(context, &resolved, &updated, true).await
     }
 
@@ -322,6 +339,13 @@ impl WorkspaceService {
             .max_by_key(|scope| scope.components().count())
             .cloned()
     }
+}
+
+fn adapt_line_endings(value: &str, line_ending: &str) -> String {
+    value
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .replace('\n', line_ending)
 }
 
 fn visit(

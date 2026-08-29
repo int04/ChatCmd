@@ -33,6 +33,67 @@ fn catalog_names_are_stable_and_unique() {
 }
 
 #[test]
+fn tool_specific_schemas_expose_required_canonical_fields() {
+    let shell_read = serde_json::to_value(schemars::schema_for!(ShellReadArgs))
+        .expect("serialize shell_read schema");
+    assert!(shell_read["properties"].get("sessionId").is_some());
+    assert!(shell_read["properties"].get("afterSequence").is_some());
+    assert!(shell_read["properties"].get("maxEvents").is_some());
+    assert!(
+        shell_read["required"]
+            .as_array()
+            .is_some_and(|values| values.iter().any(|value| value == "sessionId"))
+    );
+
+    let shell_create = serde_json::to_value(schemars::schema_for!(ShellCreateArgs))
+        .expect("serialize shell_create schema");
+    assert!(shell_create["properties"].get("workingDirectory").is_some());
+    assert!(
+        shell_create["properties"]
+            .get("initialWorkingDirectory")
+            .is_none()
+    );
+
+    let git_status =
+        serde_json::to_value(schemars::schema_for!(CwdArgs)).expect("serialize git status schema");
+    assert!(git_status["properties"].get("cwd").is_some());
+
+    let git_commit = serde_json::to_value(schemars::schema_for!(GitCommitArgs))
+        .expect("serialize git_commit schema");
+    assert!(git_commit["properties"].get("message").is_some());
+    assert!(
+        git_commit["required"]
+            .as_array()
+            .is_some_and(|values| values.iter().any(|value| value == "message"))
+    );
+}
+
+#[test]
+fn compatibility_aliases_deserialize_into_canonical_tool_fields() {
+    let read: ShellReadArgs = serde_json::from_value(serde_json::json!({
+        "sessionId": "shell-1",
+        "fromSequence": 9
+    }))
+    .expect("fromSequence compatibility alias");
+    assert_eq!(read.after_sequence, Some(9));
+
+    let create: ShellCreateArgs = serde_json::from_value(serde_json::json!({
+        "initialWorkingDirectory": "D:/DEV/CmdGPT/ChatCmdClient"
+    }))
+    .expect("initialWorkingDirectory compatibility alias");
+    assert_eq!(
+        create.working_directory.as_deref(),
+        Some("D:/DEV/CmdGPT/ChatCmdClient")
+    );
+
+    let status: CwdArgs = serde_json::from_value(serde_json::json!({
+        "path": "D:/DEV/CmdGPT/ChatCmdClient"
+    }))
+    .expect("git path compatibility alias");
+    assert_eq!(status.cwd.as_deref(), Some("D:/DEV/CmdGPT/ChatCmdClient"));
+}
+
+#[test]
 fn query_tokens_are_rejected() {
     assert!(has_query_token("access_token=secret"));
     assert!(!has_query_token("cursor=token-value"));

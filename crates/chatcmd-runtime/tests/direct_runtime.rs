@@ -355,6 +355,28 @@ async fn workspace_reads_line_ranges_and_replaces_text_exactly() {
         "one\nTWO\nthree\nfour\n"
     );
 
+    let windows_file = directory.path().join("windows.txt");
+    std::fs::write(&windows_file, "one\r\ntwo\r\nthree\r\n").expect("write CRLF sample");
+    let windows_range = workspace
+        .read_text_range(&windows_file, 1_000, 2, Some(2))
+        .await
+        .expect("read normalized CRLF range");
+    assert_eq!(windows_range.content, "two\nthree");
+    workspace
+        .replace_text(
+            &OperationContext::new("replace-crlf", "agent", "fs_replace_text"),
+            &windows_file,
+            &windows_range.content,
+            "TWO\nTHREE",
+            1,
+        )
+        .await
+        .expect("replace normalized text in CRLF file");
+    assert_eq!(
+        std::fs::read_to_string(&windows_file).expect("read CRLF replacement"),
+        "one\r\nTWO\r\nTHREE\r\n"
+    );
+
     let ambiguous = workspace
         .replace_text(
             &OperationContext::new("replace-ambiguous", "agent", "fs_replace_text"),

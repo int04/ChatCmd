@@ -14,7 +14,10 @@ macro_rules! input {
 input!(DeviceGet { device_id: String });
 input!(SessionInput { session_id: String });
 input!(PathInput { path: PathBuf });
-input!(CwdInput { cwd: Option<PathBuf> });
+input!(CwdInput {
+    #[serde(alias = "path")]
+    cwd: Option<PathBuf>
+});
 input!(SkillInput {
     #[serde(alias = "id")]
     skill_id: String
@@ -85,7 +88,7 @@ pub(super) struct CompleteInput {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct ShellCreate {
-    #[serde(alias = "cwd")]
+    #[serde(alias = "cwd", alias = "initialWorkingDirectory")]
     pub(super) working_directory: Option<PathBuf>,
     pub(super) executable: Option<PathBuf>,
     #[serde(default)]
@@ -126,7 +129,7 @@ const fn default_timeout() -> u64 {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct ShellRead {
     pub(super) session_id: String,
-    #[serde(default, alias = "startSequence")]
+    #[serde(default, alias = "startSequence", alias = "fromSequence")]
     pub(super) after_sequence: u64,
     #[serde(default = "default_limit")]
     pub(super) max_events: usize,
@@ -285,6 +288,18 @@ mod tests {
     }
 
     #[test]
+    fn git_cwd_accepts_legacy_path_alias() {
+        let status: CwdInput = serde_json::from_value(serde_json::json!({
+            "path": "D:/DEV/CmdGPT/ChatCmdClient"
+        }))
+        .expect("legacy git cwd path");
+        assert_eq!(
+            status.cwd.as_deref(),
+            Some(std::path::Path::new("D:/DEV/CmdGPT/ChatCmdClient"))
+        );
+    }
+
+    #[test]
     fn git_diff_accepts_stat_flag() {
         let input: GitDiff = serde_json::from_value(serde_json::json!({
             "cwd": ".",
@@ -309,6 +324,18 @@ mod tests {
     }
 
     #[test]
+    fn shell_create_accepts_initial_working_directory_alias() {
+        let input: ShellCreate = serde_json::from_value(serde_json::json!({
+            "initialWorkingDirectory": "D:/DEV/CmdGPT/ChatCmdClient/web"
+        }))
+        .expect("legacy shell create initial working directory");
+        assert_eq!(
+            input.working_directory.as_deref(),
+            Some(std::path::Path::new("D:/DEV/CmdGPT/ChatCmdClient/web"))
+        );
+    }
+
+    #[test]
     fn shell_write_accepts_legacy_input_alias() {
         let input: ShellWrite = serde_json::from_value(serde_json::json!({
             "sessionId": "session-1",
@@ -329,6 +356,16 @@ mod tests {
         .expect("legacy shell read start sequence");
         assert_eq!(input.after_sequence, 7);
         assert_eq!(input.max_events, 50);
+    }
+
+    #[test]
+    fn shell_read_accepts_from_sequence_alias() {
+        let input: ShellRead = serde_json::from_value(serde_json::json!({
+            "sessionId": "session-1",
+            "fromSequence": 11
+        }))
+        .expect("legacy shell read from sequence");
+        assert_eq!(input.after_sequence, 11);
     }
 
     #[test]

@@ -71,6 +71,16 @@ impl RuntimeHost {
             None
         };
         let workspace = scoped_workspace.as_ref().unwrap_or(&self.workspace);
+        let arguments = if tool.starts_with("fs_") {
+            let project_folder =
+                <Self as chatcmd_mcp::RuntimeApi>::project_folder(self, &context.agent_id)
+                    .await?
+                    .map(std::path::PathBuf::from)
+                    .or_else(|| self.workspace.roots().first().cloned());
+            filesystem_dispatch::resolve_relative_paths(arguments, project_folder.as_deref())?
+        } else {
+            arguments
+        };
         let scoped_git = scoped_workspace
             .clone()
             .map(|workspace| self.git.with_workspace(workspace));

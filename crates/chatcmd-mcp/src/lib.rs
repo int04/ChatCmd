@@ -101,6 +101,256 @@ pub struct ToolArguments {
     pub fields: BTreeMap<String, Value>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct CommonToolArgs {
+    /// Caller-generated idempotency key. Usually omit and let ChatCMD generate one.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    request_id: String,
+    /// Calling agent identifier. The authenticated server identity overrides this value.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    agent_id: String,
+    /// Task correlation identifier returned by agent_user_message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    task_id: Option<String>,
+    /// Turn correlation identifier reused for every call in the current user turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    turn_id: Option<String>,
+    #[serde(
+        default,
+        rename = "__chatcmdMcpSessionId",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(skip)]
+    authenticated_session_id: Option<String>,
+    #[serde(
+        default,
+        rename = "__chatcmdConversationScopeId",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schemars(skip)]
+    conversation_scope_id: Option<String>,
+}
+
+macro_rules! tool_args {
+    ($name:ident {}) => {
+        #[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
+        #[serde(rename_all = "camelCase")]
+        struct $name {
+            #[serde(flatten)]
+            common: CommonToolArgs,
+        }
+    };
+    ($name:ident { $($(#[$meta:meta])* $field:ident : $ty:ty),+ $(,)? }) => {
+        #[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
+        #[serde(rename_all = "camelCase")]
+        struct $name {
+            #[serde(flatten)]
+            common: CommonToolArgs,
+            $(
+                $(#[$meta])*
+                $field: $ty,
+            )+
+        }
+    };
+}
+
+tool_args!(NoArgs {});
+tool_args!(DeviceGetArgs { device_id: String });
+tool_args!(SessionArgs { session_id: String });
+tool_args!(PathArgs { path: String });
+tool_args!(CwdArgs {
+    #[serde(default, alias = "path", skip_serializing_if = "Option::is_none")]
+    cwd: Option<String>
+});
+tool_args!(SkillArgs {
+    #[serde(alias = "id")]
+    skill_id: String
+});
+tool_args!(ProcessArgs { process_id: u32 });
+tool_args!(ArtifactArgs {
+    artifact_id: String
+});
+tool_args!(ExecutionModeArgs { mode: String });
+tool_args!(ShellResizeArgs {
+    session_id: String,
+    columns: u16,
+    rows: u16
+});
+tool_args!(TransferArgs {
+    source: String,
+    destination: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    overwrite: Option<bool>
+});
+tool_args!(DeleteArgs {
+    path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    recursive: Option<bool>
+});
+tool_args!(GitShowArgs {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cwd: Option<String>,
+    revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    path: Option<String>
+});
+tool_args!(GitCommitArgs {
+    #[serde(default, alias = "path", skip_serializing_if = "Option::is_none")]
+    cwd: Option<String>,
+    message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    all: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    paths: Option<Vec<String>>
+});
+tool_args!(ProcessKillArgs {
+    process_id: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    entire_tree: Option<bool>
+});
+tool_args!(UserMessageArgs { content: String });
+tool_args!(ProgressArgs {
+    message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    suggested_title: Option<String>
+});
+tool_args!(CompleteArgs {
+    content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    suggested_title: Option<String>
+});
+tool_args!(ShellCreateArgs {
+    #[serde(default, alias = "cwd", alias = "initialWorkingDirectory", skip_serializing_if = "Option::is_none")]
+    working_directory: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    executable: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    arguments: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    environment: Option<BTreeMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    columns: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    rows: Option<u16>
+});
+tool_args!(ShellWriteArgs {
+    session_id: String,
+    #[serde(alias = "input")]
+    text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    append_new_line: Option<bool>
+});
+tool_args!(ShellWaitArgs {
+    session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timeout_ms: Option<u64>
+});
+tool_args!(ShellReadArgs {
+    session_id: String,
+    #[serde(default, alias = "startSequence", alias = "fromSequence", skip_serializing_if = "Option::is_none")]
+    after_sequence: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_events: Option<usize>
+});
+tool_args!(ShellSignalArgs {
+    session_id: String,
+    signal: String
+});
+tool_args!(ShellCloseArgs {
+    session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    force: Option<bool>
+});
+tool_args!(ListArgs {
+    path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    offset: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    limit: Option<usize>
+});
+tool_args!(SearchArgs {
+    path: String,
+    query: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    case_sensitive: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_results: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_file_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    include_ignored: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    exclude: Option<Vec<String>>
+});
+tool_args!(FindArgs {
+    path: String,
+    pattern: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_results: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_depth: Option<usize>
+});
+tool_args!(ReadArgs {
+    path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_characters: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    start_line: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    line_count: Option<usize>
+});
+tool_args!(WriteTextArgs {
+    path: String,
+    content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    overwrite: Option<bool>
+});
+tool_args!(ReplaceTextArgs {
+    path: String,
+    old_text: String,
+    new_text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    expected_occurrences: Option<usize>
+});
+tool_args!(WriteRawArgs {
+    path: String,
+    base64: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    overwrite: Option<bool>
+});
+tool_args!(GitDiffArgs {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    staged: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stat: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    path: Option<String>
+});
+tool_args!(GitLogArgs {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    path: Option<String>
+});
+tool_args!(SubagentStartArgs {
+    name: String,
+    request: String
+});
+tool_args!(SubagentWaitArgs {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timeout_ms: Option<u64>
+});
+
+fn into_tool_arguments<T: Serialize>(arguments: T) -> ToolArguments {
+    serde_json::from_value(serde_json::to_value(arguments).expect("typed MCP arguments serialize"))
+        .expect("typed MCP arguments convert to shared envelope")
+}
+
 /// Cloneable rmcp handler backed by injected services.
 #[derive(Clone)]
 pub struct McpServer {
@@ -206,120 +456,247 @@ impl McpServer {
 }
 
 macro_rules! tool_methods {
-    ($(($method:ident, $description:literal)),+ $(,)?) => {
+    ($(($method:ident, $args:ty, $description:literal)),+ $(,)?) => {
         #[tool_router]
         impl McpServer {
             $(
                 #[tool(description = $description)]
                 async fn $method(
                     &self,
-                    Parameters(arguments): Parameters<ToolArguments>,
+                    Parameters(arguments): Parameters<$args>,
                 ) -> CallToolResult {
-                    self.invoke(stringify!($method), arguments).await
+                    self.invoke(stringify!($method), into_tool_arguments(arguments)).await
                 }
             )+
 
-            #[tool(description = "Create and dispatch one child agent. Pass the AI-chosen name and delegated request. ChatCMD uses server-to-model sampling when available; otherwise it starts a local Codex CLI worker in a read-only sandbox inside the reserved child task.")]
+            #[tool(description = "Create and dispatch one child agent. Required fields: name, request. Pass the AI-chosen name and delegated request. ChatCMD uses server-to-model sampling when available; otherwise it starts a local Codex CLI worker in a read-only sandbox inside the reserved child task.")]
             async fn agent_subagent_start(
                 &self,
-                Parameters(arguments): Parameters<ToolArguments>,
+                Parameters(arguments): Parameters<SubagentStartArgs>,
                 peer: Peer<RoleServer>,
             ) -> CallToolResult {
-                self.invoke_subagent_start(arguments, peer).await
+                self.invoke_subagent_start(into_tool_arguments(arguments), peer).await
             }
         }
     };
 }
 
 tool_methods!(
-    (device_list, "List available execution devices"),
-    (device_get, "Inspect one execution device"),
+    (
+        device_list,
+        NoArgs,
+        "List available execution devices. No tool-specific fields."
+    ),
+    (
+        device_get,
+        DeviceGetArgs,
+        "Inspect one execution device. Required field: deviceId."
+    ),
     (
         shell_create,
-        "Create a persistent cross-platform PTY session"
+        ShellCreateArgs,
+        "Create a persistent cross-platform PTY session. Canonical working-directory field is workingDirectory; cwd and initialWorkingDirectory are accepted compatibility aliases."
     ),
-    (shell_write, "Write literal input to a PTY session"),
+    (
+        shell_write,
+        ShellWriteArgs,
+        "Write literal input to a PTY session. Required fields: sessionId, text. input is accepted as a compatibility alias for text."
+    ),
     (
         shell_wait,
-        "Wait without killing the PTY when timeout expires"
+        ShellWaitArgs,
+        "Wait without killing the PTY when timeout expires. Required field: sessionId; optional timeoutMs."
     ),
-    (shell_read, "Read bounded replayable PTY output"),
-    (shell_signal, "Send a portable terminal signal"),
-    (shell_resize, "Resize a PTY session"),
-    (shell_close, "Close or explicitly force-close a PTY session"),
-    (shell_list, "List PTY sessions"),
-    (shell_inspect, "Inspect a PTY session"),
-    (workspace_roots, "List canonical workspace roots"),
-    (fs_list, "List workspace directory entries"),
+    (
+        shell_read,
+        ShellReadArgs,
+        "Read bounded replayable PTY output. Required field: sessionId; canonical cursor field is afterSequence; startSequence and fromSequence are accepted compatibility aliases."
+    ),
+    (
+        shell_signal,
+        ShellSignalArgs,
+        "Send a portable terminal signal. Required fields: sessionId, signal."
+    ),
+    (
+        shell_resize,
+        ShellResizeArgs,
+        "Resize a PTY session. Required fields: sessionId, columns, rows."
+    ),
+    (
+        shell_close,
+        ShellCloseArgs,
+        "Close or explicitly force-close a PTY session. Required field: sessionId; optional force."
+    ),
+    (
+        shell_list,
+        NoArgs,
+        "List PTY sessions. No tool-specific fields."
+    ),
+    (
+        shell_inspect,
+        SessionArgs,
+        "Inspect a PTY session. Required field: sessionId."
+    ),
+    (
+        workspace_roots,
+        NoArgs,
+        "List canonical workspace roots. No tool-specific fields."
+    ),
+    (
+        fs_list,
+        ListArgs,
+        "List workspace directory entries. Required field: path; optional offset, limit."
+    ),
     (
         fs_search,
-        "Search text within the workspace. Fields: path, query; optional caseSensitive, maxResults, maxFileBytes, includeIgnored, exclude. By default respects safe generated/cache ignores and project .gitignore; explicit exclude patterns always apply."
+        SearchArgs,
+        "Search text within the workspace. Required fields: path, query; optional caseSensitive, maxResults, maxFileBytes, includeIgnored, exclude. Use '.' for the workspace root rather than an empty path."
     ),
-    (fs_find, "Find workspace paths"),
+    (
+        fs_find,
+        FindArgs,
+        "Find workspace paths. Required fields: path, pattern; optional maxResults, maxDepth. Use this when a relative file path is uncertain."
+    ),
     (
         fs_read_text,
-        "Read UTF-8 workspace text. Fields: path; optional maxCharacters, startLine (1-based), lineCount. Prefer line ranges for large files."
+        ReadArgs,
+        "Read UTF-8 workspace text. Required field: path; optional maxCharacters, startLine (1-based), lineCount. Prefer line ranges for large files. If a path is uncertain, use fs_find first instead of guessing."
     ),
-    (fs_write_text, "Atomically write UTF-8 workspace text"),
+    (
+        fs_write_text,
+        WriteTextArgs,
+        "Atomically write UTF-8 workspace text. Required fields: path, content; optional overwrite."
+    ),
     (
         fs_replace_text,
-        "Safely edit an existing UTF-8 file by exact text replacement. Fields: path, oldText, newText, optional expectedOccurrences (default 1). Prefer this over Python/PowerShell scripts for targeted text edits."
+        ReplaceTextArgs,
+        "Safely edit an existing UTF-8 file by exact text replacement. Required fields: path, oldText, newText; optional expectedOccurrences (default 1). oldText must exactly match current file contents; read the target range first when content may have changed."
     ),
     (
         fs_write_raw,
-        "Atomically write Base64-decoded workspace bytes"
+        WriteRawArgs,
+        "Atomically write Base64-decoded workspace bytes. Required fields: path, base64; optional overwrite."
     ),
-    (fs_stat, "Inspect workspace path metadata"),
-    (fs_create_directory, "Create a workspace directory"),
-    (fs_copy, "Copy within canonical workspace scope"),
-    (fs_move, "Move within canonical workspace scope"),
+    (
+        fs_stat,
+        PathArgs,
+        "Inspect workspace path metadata. Required field: path."
+    ),
+    (
+        fs_create_directory,
+        PathArgs,
+        "Create a workspace directory. Required field: path."
+    ),
+    (
+        fs_copy,
+        TransferArgs,
+        "Copy within canonical workspace scope. Required fields: source, destination; optional overwrite."
+    ),
+    (
+        fs_move,
+        TransferArgs,
+        "Move within canonical workspace scope. Required fields: source, destination; optional overwrite."
+    ),
     (
         fs_delete,
-        "Delete within canonical workspace scope under policy"
+        DeleteArgs,
+        "Delete within canonical workspace scope under policy. Required field: path; optional recursive."
     ),
-    (git_status, "Get Git working tree status"),
+    (
+        git_status,
+        CwdArgs,
+        "Get Git working tree status. Optional cwd; legacy path is accepted as a cwd alias."
+    ),
     (
         git_diff,
-        "Get argument-safe Git diff output with optional stat summary"
+        GitDiffArgs,
+        "Get argument-safe Git diff output. Optional cwd, staged, stat, path. cwd selects the repository; path filters a file within it."
     ),
-    (git_log, "Get bounded Git history"),
-    (git_branch, "List Git branches"),
-    (git_show, "Show a validated Git revision"),
+    (
+        git_log,
+        GitLogArgs,
+        "Get bounded Git history. Optional cwd, count, path."
+    ),
+    (
+        git_branch,
+        CwdArgs,
+        "List Git branches. Optional cwd; legacy path is accepted as a cwd alias."
+    ),
+    (
+        git_show,
+        GitShowArgs,
+        "Show a validated Git revision. Required revision; optional cwd and path."
+    ),
     (
         git_commit,
-        "Create a Git commit without shell interpolation"
+        GitCommitArgs,
+        "Create a Git commit without shell interpolation. Required field: message; optional cwd, all (default true), paths. Never call with an empty object."
     ),
-    (process_list, "List local processes"),
-    (process_inspect, "Inspect a local process"),
-    (process_kill, "Terminate a local process under policy"),
+    (
+        process_list,
+        NoArgs,
+        "List local processes. No tool-specific fields."
+    ),
+    (
+        process_inspect,
+        ProcessArgs,
+        "Inspect a local process. Required field: processId."
+    ),
+    (
+        process_kill,
+        ProcessKillArgs,
+        "Terminate a local process under policy. Required field: processId; optional entireTree."
+    ),
     (
         skills_list,
-        "After agent_user_message, discover available .agents and .codex skills before non-trivial project work; use skill_read for relevant matches before doing that work"
+        NoArgs,
+        "After agent_user_message, discover available .agents and .codex skills before non-trivial project work; no tool-specific fields."
     ),
     (
         skill_read,
-        "Read a relevant matching skill before performing the work it governs, then follow the returned bounded instructions"
+        SkillArgs,
+        "Read a relevant matching skill. Required field: skillId; id is accepted as a compatibility alias."
     ),
-    (task_get, "Read task state"),
-    (task_list, "List tasks"),
-    (task_set_execution_mode, "Set task execution mode"),
-    (task_artifact_list, "List task artifacts"),
-    (task_artifact_read, "Read a task artifact"),
+    (
+        task_get,
+        NoArgs,
+        "Read current task state. Uses taskId correlation from the common fields."
+    ),
+    (task_list, NoArgs, "List tasks. No tool-specific fields."),
+    (
+        task_set_execution_mode,
+        ExecutionModeArgs,
+        "Set task execution mode. Required field: mode."
+    ),
+    (
+        task_artifact_list,
+        NoArgs,
+        "List task artifacts. Uses taskId correlation from the common fields."
+    ),
+    (
+        task_artifact_read,
+        ArtifactArgs,
+        "Read a task artifact. Required field: artifactId."
+    ),
     (
         agent_user_message,
-        "MANDATORY FIRST TOOL: call this exactly once at the start of every user turn before any other ChatCMD tool. Pass the exact current user message text in content without summarizing or rewriting it. Reuse the same turnId for all later tools in this turn. On a brand-new chat, ChatCMD uses this exact first message together with the private conversation scope as the stable task identity seed and returns isFirstMessage=true. Retries are idempotent."
+        UserMessageArgs,
+        "MANDATORY FIRST TOOL: call exactly once at the start of every user turn. Required field: content containing the exact current user message. Reuse the same turnId for all calls in that turn."
     ),
     (
         agent_progress,
-        "Publish one concise progress milestone during non-trivial work. Do not call it after agent_turn_complete."
+        ProgressArgs,
+        "Publish one concise progress milestone. Required field: message; optional suggestedTitle. Do not call after agent_turn_complete."
     ),
     (
         agent_subagent_wait,
-        "Wait for child agents registered by the current parent turn. Repeat while allFinished=false before finalizing the parent response."
+        SubagentWaitArgs,
+        "Wait for child agents registered by the current parent turn. Optional timeoutMs. Repeat while allFinished=false before finalizing."
     ),
     (
         agent_turn_complete,
-        "MANDATORY FINALIZATION: if any ChatCMD tool was used in this user turn, call this exactly once immediately before replying to the user, after every other tool call has finished. Pass the exact final user-facing response text in content. If agent_user_message returned isFirstMessage=true, also pass one concise conversation title in suggestedTitle; do this only for that first turn. Do not call another tool afterward."
+        CompleteArgs,
+        "MANDATORY FINALIZATION: call exactly once immediately before replying after every other tool call has finished. Required field: content with the exact final user-facing response; optional suggestedTitle only on the first message of a chat."
     ),
 );
 
