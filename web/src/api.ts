@@ -17,8 +17,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   try { payload = await decodeEncryptedApiResponse<T | ProblemDetails>(path, method, response); }
   catch { /* malformed or non-JSON upstream error */ }
   if (!response.ok) {
-    if (response.status === 401 && typeof window !== 'undefined') window.dispatchEvent(new Event('chatcmd:auth-required'));
     const problem = payload as ProblemDetails | undefined;
+    if (response.status === 401 && problem?.code !== 'invalid_current_password' && typeof window !== 'undefined') window.dispatchEvent(new Event('chatcmd:auth-required'));
     const fieldErrors = problem?.errors ? Object.values(problem.errors).flat().join(' ') : '';
     throw new ApiError(fieldErrors || problem?.message || problem?.detail || problem?.title || tr('Request failed ({status})', { status: response.status }), response.status, problem);
   }
@@ -45,6 +45,7 @@ export const api = {
   login: (email: string, password: string) => request<AuthResult>('/api/local/auth/login', { method: 'POST', body: json({ email, password }) }),
   register: (email: string, password: string) => request<AuthResult>('/api/local/auth/register', { method: 'POST', body: json({ email, password }) }),
   authInfo: () => request<AuthInfo>('/api/local/auth/info'),
+  changePassword: (currentPassword: string, newPassword: string) => request<{ success: boolean; message: string }>('/api/local/auth/change-password', { method: 'POST', body: json({ currentPassword, newPassword }) }),
   logout: () => request<AuthResult>('/api/local/auth/logout', { method: 'POST', body: '{}' }),
   overview: () => request<Overview>('/api/local/overview'),
   mcpStatus: () => request<McpStatus>('/api/local/mcp/status'),

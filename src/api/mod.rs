@@ -94,6 +94,7 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/skills/{id}/icon", get(skill_icon))
         .route("/settings", get(settings).put(save_settings))
         .route("/auth/info", get(auth::info))
+        .route("/auth/change-password", post(auth::change_password))
         .route("/auth/logout", post(auth::logout))
         .route("/backend/{*path}", any(backend::proxy))
         .layer(middleware::from_fn_with_state(

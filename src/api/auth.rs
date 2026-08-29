@@ -26,6 +26,13 @@ pub(super) struct CredentialsInput {
     password: String,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ChangePasswordInput {
+    current_password: String,
+    new_password: String,
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct TokenResponse {
@@ -71,6 +78,32 @@ pub(super) async fn info(State(state): State<Arc<AppState>>) -> Result<Response,
     authorized_request(&state, Method::GET, "/api/auth/info", &[], None).await
 }
 
+pub(super) async fn change_password(
+    State(state): State<Arc<AppState>>,
+    body: Bytes,
+) -> Result<Response, Problem> {
+    let input: ChangePasswordInput = serde_json::from_slice(&body).map_err(|_| {
+        Problem::new(
+            StatusCode::BAD_REQUEST,
+            "Invalid request body",
+            "Password change request body must be valid JSON.",
+        )
+    })?;
+    let payload = serde_json::to_vec(&input).map_err(|_| internal_problem())?;
+    let response = authorized_request(
+        &state,
+        Method::POST,
+        "/api/auth/change-password",
+        &payload,
+        None,
+    )
+    .await?;
+    if response.status().is_success() {
+        clear_session(&state).await?;
+    }
+    Ok(response)
+}
+
 pub(super) async fn logout(State(state): State<Arc<AppState>>) -> Result<Json<Value>, Problem> {
     clear_session(&state).await?;
     Ok(Json(json!({ "authenticated": false })))
@@ -112,7 +145,7 @@ pub(super) async fn authorized_request(
         accept_language,
     )
     .await?;
-    if response.status != StatusCode::UNAUTHORIZED.as_u16() {
+    if response.status != StatusCode::UNAUTHORIZED.as_u16() || is_business_unauthorized(&response) {
         return Ok(to_response(response));
     }
 
@@ -134,7 +167,7 @@ pub(super) async fn authorized_request(
             accept_language,
         )
         .await?;
-        if retry.status != StatusCode::UNAUTHORIZED.as_u16() {
+        if retry.status != StatusCode::UNAUTHORIZED.as_u16() || is_business_unauthorized(&retry) {
             return Ok(to_response(retry));
         }
     }
@@ -312,6 +345,13 @@ fn backend_error_message(body: &[u8]) -> Option<String> {
         .get("message")
         .and_then(Value::as_str)
         .map(str::to_owned)
+}
+
+fn is_business_unauthorized(response: &BackendApiResponse) -> bool {
+    serde_json::from_slice::<Value>(&response.body)
+        .ok()
+        .and_then(|value| value.get("code").and_then(Value::as_str).map(str::to_owned))
+        .is_some_and(|code| code == "invalid_current_password")
 }
 
 fn unauthorized(title: impl Into<String>, detail: impl Into<String>) -> Problem {
