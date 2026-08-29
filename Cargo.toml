@@ -26,6 +26,7 @@ futures-util = "0.3"
 hkdf = "0.12"
 notify = "8"
 p256 = { version = "0.13", features = ["ecdh"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 serde_json = "1"

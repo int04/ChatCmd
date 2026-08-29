@@ -883,3 +883,114 @@ Then each /api/local request:
 ```
 
 Nếu gặp lỗi mà HTTP status vẫn `200` nhưng UI báo không tải được dữ liệu, kiểm tra **AAD/path/session/decrypt** trước tiên.
+
+---
+
+## 19. Backend server API: React -> local API -> ChatCMD.Api
+
+Backend server không được gọi trực tiếp từ React. Luồng bắt buộc:
+
+```text
+React
+  -> /api/local/backend/*
+  -> local API encryption (browser <-> ChatCmdClient)
+  -> Rust BackendApiClient
+  -> backend API encryption (ChatCmdClient <-> ChatCMD.Api)
+  -> /api/* trên ChatCMD.Api
+```
+
+Frontend helper nằm trong `web/src/api.ts` với `backendApi.get/post/put/patch/delete`. Helper chỉ tạo URL local `/api/local/backend/...`; domain/port backend không tồn tại trong React bundle.
+
+Local gateway nằm tại `src/api/backend.rs`. Ví dụ:
+
+```text
+React:       GET /api/local/backend/system/ping
+Rust proxy:  GET /api/system/ping
+Backend:     ChatCMD.Api
+```
+
+Rust chỉ forward các header đã allowlist, hiện gồm `Authorization` và `Accept-Language`. Không forward toàn bộ browser headers.
+
+### Backend crypto protocol
+
+Handshake:
+
+```text
+POST /api/crypto/handshake
+binary fixed AES-GCM obfuscation
+-> ephemeral ECDH P-256
+-> HKDF-SHA256
+-> AES-256-GCM session
+```
+
+Handshake AAD:
+
+```text
+chatcmd/backend-api/handshake-obfuscation/v1
+```
+
+HKDF info:
+
+```text
+chatcmd/backend-api/aes-256-gcm/v1
+```
+
+Request AAD:
+
+```text
+chatcmd/backend-api/v1|request|<METHOD>|<FULL_PATH_AND_QUERY>
+```
+
+Response AAD:
+
+```text
+chatcmd/backend-api/v1|response|<METHOD>|<FULL_PATH_AND_QUERY>|<STATUS>
+```
+
+Backend packet format vẫn là protocol byte `1` + nonce 12 byte + ciphertext/GCM tag.
+
+`ChatCMD.Api` lưu session key trong RAM theo `sessionId`. Nếu backend restart hoặc session hết hạn, server trả `X-ChatCmd-Crypto-Reset: 1`; Rust xóa session, handshake lại và retry request đúng một lần.
+
+### Backend URL theo môi trường
+
+Debug build mặc định gọi backend local:
+
+```text
+http://127.0.0.1:5121
+```
+
+Có thể override lúc chạy để test/staging:
+
+```powershell
+$env:CHATCMD_BACKEND_API_URL="http://127.0.0.1:5121"
+```
+
+Release build lấy URL production tại thời điểm build:
+
+```powershell
+$env:CHATCMD_BACKEND_API_RELEASE_URL="https://your-production-api-host"
+cargo build --release
+```
+
+Nếu release không có `CHATCMD_BACKEND_API_RELEASE_URL` và cũng không có runtime override `CHATCMD_BACKEND_API_URL`, app chủ động báo lỗi cấu hình thay vì âm thầm gọi localhost.
+
+### Debug backend interop
+
+Backend dev hiện dùng launch profile HTTP port `5121`.
+
+Chạy backend:
+
+```powershell
+cd D:\DEV\ChatCMD\ChatCMD
+dotnet run --project ChatCMD.Api\ChatCMD.Api.csproj --launch-profile http
+```
+
+Test trực tiếp Rust <-> .NET encrypted protocol:
+
+```cmd
+set CHATCMD_TEST_BACKEND_INTEROP=1
+set CHATCMD_BACKEND_API_URL=http://127.0.0.1:5121
+cargo test backend_api::tests::local_dotnet_backend_interop_when_enabled -- --nocapture
+```
+
+Nếu test này fail thì debug lớp app-to-backend trước, chưa cần kiểm tra React/local API. Các điểm cần so sánh hai phía: fixed handshake key fragments, P-256 raw public key format, HKDF salt/info, AAD path/query/method/status và packet offsets.

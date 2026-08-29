@@ -26,6 +26,19 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 const json = (value: unknown) => JSON.stringify(value);
 const item = (value: string) => encodeURIComponent(value);
+const backendPath = (path: string) => {
+  const normalized = path.trim().replace(/^\/+/, '');
+  if (!normalized || normalized.includes('://') || normalized.startsWith('crypto/')) throw new ApiError('Invalid backend API path.');
+  return `/api/local/backend/${normalized}`;
+};
+
+export const backendApi = {
+  get: <T>(path: string, init: RequestInit = {}) => request<T>(backendPath(path), { ...init, method: 'GET' }),
+  post: <T>(path: string, body?: unknown, init: RequestInit = {}) => request<T>(backendPath(path), { ...init, method: 'POST', body: body === undefined ? undefined : json(body) }),
+  put: <T>(path: string, body?: unknown, init: RequestInit = {}) => request<T>(backendPath(path), { ...init, method: 'PUT', body: body === undefined ? undefined : json(body) }),
+  patch: <T>(path: string, body?: unknown, init: RequestInit = {}) => request<T>(backendPath(path), { ...init, method: 'PATCH', body: body === undefined ? undefined : json(body) }),
+  delete: <T>(path: string, init: RequestInit = {}) => request<T>(backendPath(path), { ...init, method: 'DELETE' }),
+};
 
 export const api = {
   overview: () => request<Overview>('/api/local/overview'),

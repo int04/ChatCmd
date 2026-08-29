@@ -1,4 +1,5 @@
 mod agents;
+mod backend;
 mod chatgpt;
 mod chatgpt_support;
 mod crypto;
@@ -26,7 +27,7 @@ use axum::{
     http::{HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{get, patch, post},
+    routing::{any, get, patch, post},
 };
 use chatcmd_core::{
     AgentId, McpAgent, McpAgentStore, NewMcpAgent, Setting, SettingsStore, TaskId, TaskStatus,
@@ -87,6 +88,7 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/skills/{id}/options", patch(set_skill_options))
         .route("/skills/{id}/icon", get(skill_icon))
         .route("/settings", get(settings).put(save_settings))
+        .route("/backend/{*path}", any(backend::proxy))
         .route("/crypto/handshake", post(crypto::handshake))
         .layer(middleware::from_fn_with_state(
             state,

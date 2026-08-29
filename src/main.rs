@@ -1,4 +1,5 @@
 mod api;
+mod backend_api;
 mod runtime_host;
 mod websocket;
 
@@ -30,6 +31,7 @@ use tower_http::{
 };
 use tracing::info;
 
+use backend_api::BackendApiClient;
 use runtime_host::RuntimeHost;
 use websocket::{AppEvent, AppState, ws_handler};
 
@@ -113,6 +115,8 @@ async fn main() -> Result<()> {
         security,
         !ip.is_loopback(),
     );
+    let backend_api = BackendApiClient::from_environment().context("configure backend API")?;
+    info!(backend_api = %backend_api.base_url(), "Backend API configured");
     let state = Arc::new(AppState::new(
         repository,
         database_path.display().to_string(),
@@ -122,6 +126,7 @@ async fn main() -> Result<()> {
         shell,
         skills,
         activity_registry,
+        backend_api,
         event_tx,
     ));
     let frontend_dir = resolve_frontend_dir();
