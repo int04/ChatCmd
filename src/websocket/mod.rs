@@ -29,7 +29,7 @@ use p256::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::Sha256;
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::{Mutex, RwLock, broadcast};
 use uuid::Uuid;
 
 const WS_CRYPTO_PROTOCOL: u8 = 1;
@@ -92,6 +92,7 @@ pub(crate) struct AppState {
     pub skills: chatcmd_runtime::SkillService,
     pub activities: crate::runtime_host::ActivityRegistry,
     pub backend_api: crate::backend_api::BackendApiClient,
+    pub auth_refresh_lock: Mutex<()>,
     events: broadcast::Sender<AppEvent>,
     connected_clients: AtomicUsize,
     api_crypto_sessions: RwLock<HashMap<String, Arc<Aes256Gcm>>>,
@@ -122,6 +123,7 @@ impl AppState {
             skills,
             activities,
             backend_api,
+            auth_refresh_lock: Mutex::new(()),
             events,
             connected_clients: AtomicUsize::new(0),
             api_crypto_sessions: RwLock::new(HashMap::new()),

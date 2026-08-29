@@ -142,8 +142,10 @@ impl BackendApiClient {
             .http
             .request(method.clone(), url)
             .header("x-chatcmd-crypto", "1")
-            .header("x-chatcmd-crypto-session", &session.id)
-            .header(reqwest::header::CONTENT_TYPE, "application/octet-stream");
+            .header("x-chatcmd-crypto-session", &session.id);
+        if !body.is_empty() {
+            request = request.header(reqwest::header::CONTENT_TYPE, "application/json");
+        }
         if let Some(value) = authorization {
             request = request.header(reqwest::header::AUTHORIZATION, value);
         }
@@ -372,5 +374,18 @@ mod tests {
             payload.get("status").and_then(serde_json::Value::as_str),
             Some("ok")
         );
+
+        let invalid_register = br#"{"email":"invalid","password":"short","machineId":"interop-machine"}"#;
+        let response = client
+            .request(
+                Method::POST,
+                "/api/auth/register",
+                invalid_register,
+                None,
+                None,
+            )
+            .await
+            .expect("encrypted backend JSON request");
+        assert_ne!(response.status, 415, "decrypted JSON must reach ASP.NET model binding as application/json");
     }
 }

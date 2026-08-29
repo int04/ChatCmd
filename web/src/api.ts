@@ -1,6 +1,6 @@
 import { decodeEncryptedApiResponse, encryptedApiFetch } from './apiCrypto';
 import { tr } from './i18n';
-import type { Agent, AgentInput, ChatGptBridge, ChatGptRequest, CommandExecutionMode, LiveTerminalOutput, LocalSettings, McpStatus, Overview, ProblemDetails, SecretResult, Session, SessionDetail, Skill, SkillOptionValue, Task, TaskDetail, TaskPage, Tool, ToolPreset, UserSkill } from './types';
+import type { Agent, AgentInput, AuthInfo, AuthResult, ChatGptBridge, ChatGptRequest, CommandExecutionMode, LiveTerminalOutput, LocalSettings, McpStatus, Overview, ProblemDetails, SecretResult, Session, SessionDetail, Skill, SkillOptionValue, Task, TaskDetail, TaskPage, Tool, ToolPreset, UserSkill } from './types';
 
 export class ApiError extends Error {
   constructor(message: string, public status?: number, public problem?: ProblemDetails) { super(message); this.name = 'ApiError'; }
@@ -17,9 +17,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   try { payload = await decodeEncryptedApiResponse<T | ProblemDetails>(path, method, response); }
   catch { /* malformed or non-JSON upstream error */ }
   if (!response.ok) {
+    if (response.status === 401 && typeof window !== 'undefined') window.dispatchEvent(new Event('chatcmd:auth-required'));
     const problem = payload as ProblemDetails | undefined;
     const fieldErrors = problem?.errors ? Object.values(problem.errors).flat().join(' ') : '';
-    throw new ApiError(fieldErrors || problem?.detail || problem?.title || tr('Request failed ({status})', { status: response.status }), response.status, problem);
+    throw new ApiError(fieldErrors || problem?.message || problem?.detail || problem?.title || tr('Request failed ({status})', { status: response.status }), response.status, problem);
   }
   if (payload === undefined) throw new ApiError(tr('Request failed ({status})', { status: response.status }), response.status);
   return payload as T;
@@ -41,6 +42,10 @@ export const backendApi = {
 };
 
 export const api = {
+  login: (email: string, password: string) => request<AuthResult>('/api/local/auth/login', { method: 'POST', body: json({ email, password }) }),
+  register: (email: string, password: string) => request<AuthResult>('/api/local/auth/register', { method: 'POST', body: json({ email, password }) }),
+  authInfo: () => request<AuthInfo>('/api/local/auth/info'),
+  logout: () => request<AuthResult>('/api/local/auth/logout', { method: 'POST', body: '{}' }),
   overview: () => request<Overview>('/api/local/overview'),
   mcpStatus: () => request<McpStatus>('/api/local/mcp/status'),
   agents: () => request<Agent[]>('/api/local/mcp/agents'),

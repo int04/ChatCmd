@@ -1,4 +1,5 @@
 mod agents;
+mod auth;
 mod backend;
 mod chatgpt;
 mod chatgpt_support;
@@ -40,7 +41,7 @@ use sqlx::Row;
 use crate::websocket::{AppEvent, AppState};
 
 pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
-    let local = Router::new()
+    let protected = Router::new()
         .route("/overview", get(overview))
         .route("/mcp/status", get(mcp_status))
         .route("/mcp/agents", get(list_agents).post(create_agent))
@@ -92,8 +93,18 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/skills/{id}/options", patch(set_skill_options))
         .route("/skills/{id}/icon", get(skill_icon))
         .route("/settings", get(settings).put(save_settings))
+        .route("/auth/info", get(auth::info))
+        .route("/auth/logout", post(auth::logout))
         .route("/backend/{*path}", any(backend::proxy))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_auth,
+        ));
+    let local = Router::new()
+        .route("/auth/register", post(auth::register))
+        .route("/auth/login", post(auth::login))
         .route("/crypto/handshake", post(crypto::handshake))
+        .merge(protected)
         .layer(middleware::from_fn_with_state(
             state,
             crypto::encrypted_local_api,

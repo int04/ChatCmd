@@ -1,0 +1,342 @@
+use std::{
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+use axum::{
+    Json,
+    body::{Body, Bytes},
+    extract::{Request, State},
+    http::{HeaderValue, StatusCode, header},
+    middleware::Next,
+    response::{IntoResponse, Response},
+};
+use reqwest::Method;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use sqlx::Row;
+
+use super::Problem;
+use crate::{backend_api::BackendApiResponse, websocket::AppState};
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct CredentialsInput {
+    email: String,
+    password: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct TokenResponse {
+    access_token: String,
+    refresh_token: String,
+    access_token_expires_at: String,
+    refresh_token_expires_at: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeviceAuthRequest<'a> {
+    email: &'a str,
+    password: &'a str,
+    machine_id: &'a str,
+    name_device: Option<&'a str>,
+    platform: Option<&'a str>,
+    os_version: Option<&'a str>,
+    app_version: Option<&'a str>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct StoredAuthSession {
+    access_token: String,
+    refresh_token: String,
+}
+
+pub(super) async fn register(
+    State(state): State<Arc<AppState>>,
+    body: Bytes,
+) -> Result<Response, Problem> {
+    authenticate(&state, "/api/auth/register", parse_credentials(&body)?).await
+}
+
+pub(super) async fn login(
+    State(state): State<Arc<AppState>>,
+    body: Bytes,
+) -> Result<Response, Problem> {
+    authenticate(&state, "/api/auth/login", parse_credentials(&body)?).await
+}
+
+pub(super) async fn info(State(state): State<Arc<AppState>>) -> Result<Response, Problem> {
+    authorized_request(&state, Method::GET, "/api/auth/info", &[], None).await
+}
+
+pub(super) async fn logout(State(state): State<Arc<AppState>>) -> Result<Json<Value>, Problem> {
+    clear_session(&state).await?;
+    Ok(Json(json!({ "authenticated": false })))
+}
+
+pub(super) async fn require_auth(
+    State(state): State<Arc<AppState>>,
+    request: Request,
+    next: Next,
+) -> Result<Response, Problem> {
+    if load_session(&state).await?.is_none() {
+        return Err(unauthorized(
+            "Authentication required",
+            "Sign in before using the local API.",
+        ));
+    }
+    Ok(next.run(request).await)
+}
+
+pub(super) async fn authorized_request(
+    state: &Arc<AppState>,
+    method: Method,
+    backend_path: &str,
+    body: &[u8],
+    accept_language: Option<&str>,
+) -> Result<Response, Problem> {
+    let initial = load_session(state).await?.ok_or_else(|| {
+        unauthorized(
+            "Authentication required",
+            "Sign in before using the local API.",
+        )
+    })?;
+    let response = send_authorized(
+        state,
+        method.clone(),
+        backend_path,
+        body,
+        &initial.access_token,
+        accept_language,
+    )
+    .await?;
+    if response.status != StatusCode::UNAUTHORIZED.as_u16() {
+        return Ok(to_response(response));
+    }
+
+    let _refresh_guard = state.auth_refresh_lock.lock().await;
+    let current = load_session(state).await?.ok_or_else(|| {
+        unauthorized(
+            "Authentication required",
+            "Your local authentication session is unavailable.",
+        )
+    })?;
+
+    if current.access_token != initial.access_token {
+        let retry = send_authorized(
+            state,
+            method.clone(),
+            backend_path,
+            body,
+            &current.access_token,
+            accept_language,
+        )
+        .await?;
+        if retry.status != StatusCode::UNAUTHORIZED.as_u16() {
+            return Ok(to_response(retry));
+        }
+    }
+
+    let refreshed = match refresh(state, &current).await {
+        Ok(tokens) => tokens,
+        Err(problem) => {
+            clear_session(state).await?;
+            return Err(problem);
+        }
+    };
+    let retry = send_authorized(
+        state,
+        method,
+        backend_path,
+        body,
+        &refreshed.access_token,
+        accept_language,
+    )
+    .await?;
+    if retry.status == StatusCode::UNAUTHORIZED.as_u16() {
+        clear_session(state).await?;
+    }
+    Ok(to_response(retry))
+}
+
+fn parse_credentials(body: &[u8]) -> Result<CredentialsInput, Problem> {
+    serde_json::from_slice(body).map_err(|_| {
+        Problem::new(
+            StatusCode::BAD_REQUEST,
+            "Invalid request body",
+            "Authentication request body must be valid JSON.",
+        )
+    })
+}
+
+async fn authenticate(
+    state: &Arc<AppState>,
+    path: &str,
+    input: CredentialsInput,
+) -> Result<Response, Problem> {
+    let machine_id = state.device.machine_id.as_deref().ok_or_else(|| {
+        Problem::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Machine identity unavailable",
+            "ChatCMD could not resolve a stable machine identifier on this device.",
+        )
+    })?;
+    let payload = DeviceAuthRequest {
+        email: input.email.trim(),
+        password: &input.password,
+        machine_id,
+        name_device: Some(state.device.name.as_str()),
+        platform: Some(state.device.platform.as_str()),
+        os_version: state.device.os_version.as_deref(),
+        app_version: Some(state.device.app_version.as_str()),
+    };
+    let body = serde_json::to_vec(&payload).map_err(|_| internal_problem())?;
+    let backend = state
+        .backend_api
+        .request(Method::POST, path, &body, None, None)
+        .await
+        .map_err(|_| backend_unavailable())?;
+    if backend.status < 200 || backend.status >= 300 {
+        return Ok(to_response(backend));
+    }
+    let tokens: TokenResponse = serde_json::from_slice(&backend.body).map_err(|_| {
+        Problem::new(
+            StatusCode::BAD_GATEWAY,
+            "Invalid backend response",
+            "Authentication response could not be parsed.",
+        )
+    })?;
+    save_session(state, &tokens).await?;
+    Ok((StatusCode::OK, Json(json!({ "authenticated": true }))).into_response())
+}
+
+async fn refresh(
+    state: &Arc<AppState>,
+    session: &StoredAuthSession,
+) -> Result<TokenResponse, Problem> {
+    let body = serde_json::to_vec(&json!({ "refreshToken": session.refresh_token }))
+        .map_err(|_| internal_problem())?;
+    let backend = state
+        .backend_api
+        .request(Method::POST, "/api/auth/refresh", &body, None, None)
+        .await
+        .map_err(|_| backend_unavailable())?;
+    if backend.status < 200 || backend.status >= 300 {
+        let detail = backend_error_message(&backend.body)
+            .unwrap_or_else(|| "Refresh token is no longer valid.".to_owned());
+        return Err(unauthorized("Authentication expired", detail));
+    }
+    let tokens: TokenResponse = serde_json::from_slice(&backend.body).map_err(|_| {
+        Problem::new(
+            StatusCode::BAD_GATEWAY,
+            "Invalid backend response",
+            "Refresh response could not be parsed.",
+        )
+    })?;
+    save_session(state, &tokens).await?;
+    Ok(tokens)
+}
+
+async fn send_authorized(
+    state: &Arc<AppState>,
+    method: Method,
+    path: &str,
+    body: &[u8],
+    access_token: &str,
+    accept_language: Option<&str>,
+) -> Result<BackendApiResponse, Problem> {
+    let authorization = format!("Bearer {access_token}");
+    state
+        .backend_api
+        .request(method, path, body, Some(&authorization), accept_language)
+        .await
+        .map_err(|_| backend_unavailable())
+}
+
+pub(super) async fn load_session(
+    state: &Arc<AppState>,
+) -> Result<Option<StoredAuthSession>, Problem> {
+    let row = sqlx::query(
+        "SELECT access_token,refresh_token FROM local_auth_session WHERE singleton_id=1",
+    )
+    .fetch_optional(state.repository.pool())
+    .await
+    .map_err(super::db_problem)?;
+    row.map(|row| {
+        Ok(StoredAuthSession {
+            access_token: row.try_get("access_token").map_err(super::db_problem)?,
+            refresh_token: row.try_get("refresh_token").map_err(super::db_problem)?,
+        })
+    })
+    .transpose()
+}
+
+async fn save_session(state: &Arc<AppState>, tokens: &TokenResponse) -> Result<(), Problem> {
+    sqlx::query("INSERT INTO local_auth_session(singleton_id,access_token,refresh_token,access_token_expires_at,refresh_token_expires_at,updated_at_ms) VALUES(1,?,?,?,?,?) ON CONFLICT(singleton_id) DO UPDATE SET access_token=excluded.access_token,refresh_token=excluded.refresh_token,access_token_expires_at=excluded.access_token_expires_at,refresh_token_expires_at=excluded.refresh_token_expires_at,updated_at_ms=excluded.updated_at_ms")
+        .bind(&tokens.access_token)
+        .bind(&tokens.refresh_token)
+        .bind(&tokens.access_token_expires_at)
+        .bind(&tokens.refresh_token_expires_at)
+        .bind(now_ms())
+        .execute(state.repository.pool())
+        .await
+        .map_err(super::db_problem)?;
+    Ok(())
+}
+
+async fn clear_session(state: &Arc<AppState>) -> Result<(), Problem> {
+    sqlx::query("DELETE FROM local_auth_session WHERE singleton_id=1")
+        .execute(state.repository.pool())
+        .await
+        .map_err(super::db_problem)?;
+    Ok(())
+}
+
+fn to_response(backend: BackendApiResponse) -> Response {
+    let status = StatusCode::from_u16(backend.status).unwrap_or(StatusCode::BAD_GATEWAY);
+    let mut response = Response::new(Body::from(backend.body));
+    *response.status_mut() = status;
+    if let Some(content_type) = backend.content_type
+        && let Ok(value) = HeaderValue::from_str(&content_type)
+    {
+        response.headers_mut().insert(header::CONTENT_TYPE, value);
+    }
+    response
+}
+
+fn backend_error_message(body: &[u8]) -> Option<String> {
+    let value = serde_json::from_slice::<Value>(body).ok()?;
+    value
+        .get("message")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
+fn unauthorized(title: impl Into<String>, detail: impl Into<String>) -> Problem {
+    Problem::new(StatusCode::UNAUTHORIZED, title, detail)
+}
+
+fn backend_unavailable() -> Problem {
+    Problem::new(
+        StatusCode::BAD_GATEWAY,
+        "Backend unavailable",
+        "Encrypted backend API request failed.",
+    )
+}
+
+fn internal_problem() -> Problem {
+    Problem::new(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Internal error",
+        "Local authentication state could not be prepared.",
+    )
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or_default()
+}

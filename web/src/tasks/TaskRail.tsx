@@ -1,8 +1,9 @@
-import { AlertTriangle, Bot, Braces, ChevronUp, LayoutDashboard, LoaderCircle, Plus, Search, Settings, Sparkles, TerminalSquare, Trash2, UserRound, Wrench, X } from 'lucide-react';
+import { AlertTriangle, Bot, Braces, ChevronUp, LayoutDashboard, LoaderCircle, LogOut, Plus, Search, Settings, Sparkles, TerminalSquare, Trash2, UserRound, Wrench, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEventHandler } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 
 import { api } from '../api';
+import { useAuth } from '../auth';
 import { Empty, ErrorState, Loading, Modal } from '../components';
 import { formatAppNumber, tr } from '../i18n';
 import { useRealtime } from '../realtime';
@@ -22,6 +23,7 @@ const menuItems = [
 ];
 
 export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { user, logout } = useAuth();
   const location = useLocation(); const navigate = useNavigate(); const taskId = activeTaskId(location.pathname);
   const [loadedTasks, setLoadedTasks] = useState<Task[]>([]); const [nextCursor, setNextCursor] = useState<string>(); const [loading, setLoading] = useState(true); const [loadingMore, setLoadingMore] = useState(false); const [error, setError] = useState(''); const [query, setQuery] = useState(''); const [menuOpen, setMenuOpen] = useState(false); const [contextMenu, setContextMenu] = useState<{ task: Task; x: number; y: number }>(); const [deleteTarget, setDeleteTarget] = useState<Task>(); const [deleting, setDeleting] = useState(false); const [deleteError, setDeleteError] = useState('');
   const [readFinalCounts, setReadFinalCounts] = useState<Record<string, number>>(readStoredFinalCounts);
@@ -77,7 +79,7 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
     </div></div>
     {contextMenu && <div className="task-context-menu" role="menu" style={{ left: contextMenu.x, top: contextMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button type="button" role="menuitem" className="danger" disabled={!canDeleteTask(contextMenu.task)} onClick={() => { setDeleteError(''); setDeleteTarget(contextMenu.task); setContextMenu(undefined); }}><Trash2 /><span>{tr('Delete conversation')}</span></button>{!canDeleteTask(contextMenu.task) && <small>{tr('You can only delete a task after it has finished.')}</small>}</div>}
     {deleteTarget && <Modal title={tr('Delete conversation?')} description={conversationName(deleteTarget)} close={() => !deleting && setDeleteTarget(undefined)} dangerous><div className="task-delete-warning"><AlertTriangle /><div><strong>{tr('Warning')}</strong><p>{tr('Deleting removes this conversation and its linked data from the list. This conversation may not work again in the future.')}</p></div></div>{deleteError && <p className="task-delete-error" role="alert">{deleteError}</p>}<div className="modal-actions"><button className="button secondary" type="button" disabled={deleting} onClick={() => setDeleteTarget(undefined)}>{tr('Cancel')}</button><button className="button danger" type="button" disabled={deleting} onClick={() => void deleteConversation()}>{deleting ? tr('Deleting…') : tr('Delete conversation')}</button></div></Modal>}
-    <footer className="task-rail-footer">{menuOpen && <nav className="task-rail-account-menu" aria-label={tr('Application navigation')}>{menuItems.map(({ to, end, label, icon: Icon }) => <NavLink to={to} end={end} key={to}><Icon /><span>{tr(label)}</span></NavLink>)}</nav>}<button className="task-rail-account" type="button" aria-expanded={menuOpen} onClick={() => setMenuOpen((value) => !value)}><span className="task-rail-avatar"><UserRound /></span><span className="task-rail-account-copy"><strong>Tùng</strong><small>{tr('Pro plan')}</small></span><ChevronUp className={menuOpen ? 'open' : ''} /></button></footer>
+    <footer className="task-rail-footer">{menuOpen && <nav className="task-rail-account-menu" aria-label={tr('Application navigation')}>{menuItems.map(({ to, end, label, icon: Icon }) => <NavLink to={to} end={end} key={to}><Icon /><span>{tr(label)}</span></NavLink>)}<button type="button" className="task-rail-logout" onClick={() => { setMenuOpen(false); void logout().finally(() => navigate('/login', { replace: true })); }}><LogOut /><span>Đăng xuất</span></button></nav>}<button className="task-rail-account" type="button" aria-expanded={menuOpen} onClick={() => setMenuOpen((value) => !value)}><span className="task-rail-avatar"><UserRound /></span><span className="task-rail-account-copy"><strong title={user?.email}>{user?.email ?? 'ChatCMD'}</strong><small title={user?.plan.expriAt ?? undefined}>{user?.plan.name ?? 'FREE'}</small></span><ChevronUp className={menuOpen ? 'open' : ''} /></button></footer>
   </aside>;
 }
 

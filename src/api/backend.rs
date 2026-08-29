@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use axum::{
-    body::{Body, to_bytes},
+    body::to_bytes,
     extract::{OriginalUri, Path, Request, State},
-    http::{HeaderValue, StatusCode, header},
-    response::{IntoResponse, Response},
+    http::{StatusCode, header},
+    response::Response,
 };
 use reqwest::Method;
 
@@ -40,11 +40,6 @@ pub(super) async fn proxy(
         .map(|value| format!("?{value}"))
         .unwrap_or_default();
     let backend_path = format!("/api/{relative}{query}");
-    let authorization = request
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_owned);
     let accept_language = request
         .headers()
         .get(header::ACCEPT_LANGUAGE)
@@ -59,31 +54,12 @@ pub(super) async fn proxy(
         )
     })?;
 
-    let backend = state
-        .backend_api
-        .request(
-            method,
-            &backend_path,
-            body.as_ref(),
-            authorization.as_deref(),
-            accept_language.as_deref(),
-        )
-        .await
-        .map_err(|_| {
-            Problem::new(
-                StatusCode::BAD_GATEWAY,
-                "Backend unavailable",
-                "encrypted backend API request failed",
-            )
-        })?;
-
-    let status = StatusCode::from_u16(backend.status).unwrap_or(StatusCode::BAD_GATEWAY);
-    let mut response = Response::new(Body::from(backend.body));
-    *response.status_mut() = status;
-    if let Some(content_type) = backend.content_type
-        && let Ok(value) = HeaderValue::from_str(&content_type)
-    {
-        response.headers_mut().insert(header::CONTENT_TYPE, value);
-    }
-    Ok(response.into_response())
+    super::auth::authorized_request(
+        &state,
+        method,
+        &backend_path,
+        body.as_ref(),
+        accept_language.as_deref(),
+    )
+    .await
 }
