@@ -18,12 +18,12 @@
 - The browser must not receive or manage the app-to-backend crypto session or backend crypto keys.
 - Forward only explicitly allowed headers through the local gateway. Never blindly forward all browser headers.
 
-## Environment routing
+## Build routing
 
-- Debug builds default to the local ChatCMD.Api endpoint (`http://127.0.0.1:5121`).
-- `CHATCMD_BACKEND_API_URL` may override the backend URL at runtime for local/staging tests.
-- Release builds must be built with `CHATCMD_BACKEND_API_RELEASE_URL` set to the production backend URL unless a runtime override is intentionally supplied.
-- Do not hardcode production backend domains in React code.
+- Backend URLs belong only in Rust source, never in React code.
+- Debug builds use `DEBUG_BACKEND_API_URL` in `src/backend_api.rs`.
+- Release builds use `RELEASE_BACKEND_API_URL` in `src/backend_api.rs`; set this constant to the production ChatCMD.Api URL before publishing.
+- Runtime/build environment variables must not override the backend URL in packaged builds.
 
 ## Adding new backend features
 

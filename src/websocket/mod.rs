@@ -7,9 +7,8 @@ use std::{
 };
 
 use aes_gcm::{
-    Aes256Gcm, Nonce,
+    Aes256Gcm, KeyInit, Nonce,
     aead::{Aead, Payload},
-    KeyInit,
 };
 use axum::{
     extract::{
@@ -192,7 +191,10 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
         "system.connected",
         json!({ "connectedClients": state.connected_clients() }),
     );
-    if send_encrypted_json(&mut sender, &cipher, &connected).await.is_err() {
+    if send_encrypted_json(&mut sender, &cipher, &connected)
+        .await
+        .is_err()
+    {
         state.connected_clients.fetch_sub(1, Ordering::Relaxed);
         return;
     }
@@ -268,7 +270,10 @@ async fn establish_encrypted_session(socket: &mut WebSocket) -> Option<Aes256Gcm
     };
     let response_plaintext = serde_json::to_vec(&response).ok()?;
     let response_packet = encrypt_handshake_payload(&handshake_cipher, &response_plaintext)?;
-    socket.send(Message::Binary(response_packet.into())).await.ok()?;
+    socket
+        .send(Message::Binary(response_packet.into()))
+        .await
+        .ok()?;
     Some(cipher)
 }
 
@@ -290,18 +295,17 @@ fn decrypt_handshake_payload(cipher: &Aes256Gcm, packet: &[u8]) -> Option<Vec<u8
     decrypt_payload_with_aad(cipher, packet, WS_HANDSHAKE_AAD)
 }
 
-async fn send_encrypted_json<S, T>(
-    sender: &mut S,
-    cipher: &Aes256Gcm,
-    value: &T,
-) -> Result<(), ()>
+async fn send_encrypted_json<S, T>(sender: &mut S, cipher: &Aes256Gcm, value: &T) -> Result<(), ()>
 where
     S: futures_util::Sink<Message> + Unpin,
     T: Serialize,
 {
     let plaintext = serde_json::to_vec(value).map_err(|_| ())?;
     let packet = encrypt_payload(cipher, &plaintext).ok_or(())?;
-    sender.send(Message::Binary(packet.into())).await.map_err(|_| ())
+    sender
+        .send(Message::Binary(packet.into()))
+        .await
+        .map_err(|_| ())
 }
 
 fn encrypt_payload(cipher: &Aes256Gcm, plaintext: &[u8]) -> Option<Vec<u8>> {
@@ -314,7 +318,10 @@ fn encrypt_payload_with_aad(cipher: &Aes256Gcm, plaintext: &[u8], aad: &[u8]) ->
     let ciphertext = cipher
         .encrypt(
             Nonce::from_slice(&nonce_bytes),
-            Payload { msg: plaintext, aad },
+            Payload {
+                msg: plaintext,
+                aad,
+            },
         )
         .ok()?;
 
@@ -394,12 +401,19 @@ mod tests {
 
         let packet = encrypt_payload(&cipher, plaintext).expect("encrypt");
         assert_eq!(packet[0], WS_CRYPTO_PROTOCOL);
-        assert!(!packet.windows(b"secret-data".len()).any(|part| part == b"secret-data"));
+        assert!(
+            !packet
+                .windows(b"secret-data".len())
+                .any(|part| part == b"secret-data")
+        );
 
         let decrypted = cipher
             .decrypt(
                 Nonce::from_slice(&packet[1..13]),
-                Payload { msg: &packet[13..], aad: WS_AAD },
+                Payload {
+                    msg: &packet[13..],
+                    aad: WS_AAD,
+                },
             )
             .expect("decrypt");
         assert_eq!(decrypted, plaintext);
@@ -412,16 +426,28 @@ mod tests {
         let packet = encrypt_handshake_payload(&cipher, plaintext).expect("encrypt handshake");
 
         assert_eq!(packet[0], WS_CRYPTO_PROTOCOL);
-        assert!(!packet.windows(b"crypto.clientHello".len()).any(|part| part == b"crypto.clientHello"));
-        assert!(!packet.windows(b"visible-public-key".len()).any(|part| part == b"visible-public-key"));
-        assert_eq!(decrypt_handshake_payload(&cipher, &packet).expect("decrypt handshake"), plaintext);
+        assert!(
+            !packet
+                .windows(b"crypto.clientHello".len())
+                .any(|part| part == b"crypto.clientHello")
+        );
+        assert!(
+            !packet
+                .windows(b"visible-public-key".len())
+                .any(|part| part == b"visible-public-key")
+        );
+        assert_eq!(
+            decrypt_handshake_payload(&cipher, &packet).expect("decrypt handshake"),
+            plaintext
+        );
     }
 
     #[test]
     fn client_payload_rejects_tampering() {
         let key = [9_u8; 32];
         let cipher = Aes256Gcm::new_from_slice(&key).expect("valid AES key");
-        let mut packet = encrypt_payload(&cipher, br#"{\"type\":\"client.ready\"}"#).expect("encrypt");
+        let mut packet =
+            encrypt_payload(&cipher, br#"{\"type\":\"client.ready\"}"#).expect("encrypt");
         let last = packet.last_mut().expect("packet byte");
         *last ^= 0x01;
 

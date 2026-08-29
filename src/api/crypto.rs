@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
 use aes_gcm::{
-    Aes256Gcm, Nonce,
+    Aes256Gcm, KeyInit, Nonce,
     aead::{Aead, Payload},
-    KeyInit,
 };
 use axum::{
     body::{Body, Bytes, to_bytes},
@@ -75,7 +74,8 @@ pub(super) async fn handshake(
     let client_public_bytes = URL_SAFE_NO_PAD
         .decode(hello.public_key)
         .map_err(|_| crypto_problem())?;
-    let client_public = PublicKey::from_sec1_bytes(&client_public_bytes).map_err(|_| crypto_problem())?;
+    let client_public =
+        PublicKey::from_sec1_bytes(&client_public_bytes).map_err(|_| crypto_problem())?;
     let server_secret = EphemeralSecret::random(&mut OsRng);
     let server_public = PublicKey::from(&server_secret);
     let shared_secret = server_secret.diffie_hellman(&client_public);
@@ -105,7 +105,10 @@ pub(super) async fn handshake(
     let packet = encrypt_packet(&handshake_cipher, &response_plaintext, API_HANDSHAKE_AAD)
         .ok_or_else(crypto_problem)?;
     Ok((
-        [(header::CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"))],
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/octet-stream"),
+        )],
         Bytes::from(packet),
     )
         .into_response())
@@ -120,16 +123,15 @@ pub(super) async fn encrypted_local_api(
         return next.run(request).await;
     }
 
-    if request.headers().get("x-chatcmdclient")
-        != Some(&HeaderValue::from_static("local-ui"))
-    {
+    if request.headers().get("x-chatcmdclient") != Some(&HeaderValue::from_static("local-ui")) {
         return next.run(request).await;
     }
 
-    if request.headers().get("x-chatcmd-crypto")
-        != Some(&HeaderValue::from_static("1"))
-    {
-        return reset_response(StatusCode::UPGRADE_REQUIRED, "encrypted local API is required");
+    if request.headers().get("x-chatcmd-crypto") != Some(&HeaderValue::from_static("1")) {
+        return reset_response(
+            StatusCode::UPGRADE_REQUIRED,
+            "encrypted local API is required",
+        );
     }
 
     let Some(session_id) = request
@@ -148,7 +150,12 @@ pub(super) async fn encrypted_local_api(
     let path = request
         .extensions()
         .get::<OriginalUri>()
-        .and_then(|original| original.0.path_and_query().map(|value| value.as_str().to_owned()))
+        .and_then(|original| {
+            original
+                .0
+                .path_and_query()
+                .map(|value| value.as_str().to_owned())
+        })
         .or_else(|| {
             request
                 .uri()
@@ -160,14 +167,29 @@ pub(super) async fn encrypted_local_api(
     let (mut parts, body) = request.into_parts();
     let request_bytes = match to_bytes(body, MAX_API_BODY_BYTES).await {
         Ok(bytes) => bytes,
-        Err(_) => return encrypted_problem(&cipher, &method, &path, StatusCode::PAYLOAD_TOO_LARGE, "Request body is too large"),
+        Err(_) => {
+            return encrypted_problem(
+                &cipher,
+                &method,
+                &path,
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "Request body is too large",
+            );
+        }
     };
     let plaintext_body = if request_bytes.is_empty() {
         Bytes::new()
     } else {
         let aad = api_aad("request", &method, &path, None);
-        let Some(plaintext) = decrypt_packet(&cipher, request_bytes.as_ref(), aad.as_bytes()) else {
-            return encrypted_problem(&cipher, &method, &path, StatusCode::BAD_REQUEST, "Request encryption is invalid");
+        let Some(plaintext) = decrypt_packet(&cipher, request_bytes.as_ref(), aad.as_bytes())
+        else {
+            return encrypted_problem(
+                &cipher,
+                &method,
+                &path,
+                StatusCode::BAD_REQUEST,
+                "Request encryption is invalid",
+            );
         };
         Bytes::from(plaintext)
     };
@@ -188,7 +210,15 @@ pub(super) async fn encrypted_local_api(
     let (mut parts, body) = response.into_parts();
     let response_bytes = match to_bytes(body, MAX_API_BODY_BYTES).await {
         Ok(bytes) => bytes,
-        Err(_) => return encrypted_problem(&cipher, &method, &path, StatusCode::INTERNAL_SERVER_ERROR, "Response body is too large"),
+        Err(_) => {
+            return encrypted_problem(
+                &cipher,
+                &method,
+                &path,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Response body is too large",
+            );
+        }
     };
     if response_bytes.is_empty() {
         return Response::from_parts(parts, Body::empty());
@@ -196,7 +226,10 @@ pub(super) async fn encrypted_local_api(
 
     let aad = api_aad("response", &method, &path, Some(status.as_u16()));
     let Some(packet) = encrypt_packet(&cipher, response_bytes.as_ref(), aad.as_bytes()) else {
-        return reset_response(StatusCode::INTERNAL_SERVER_ERROR, "response encryption failed");
+        return reset_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "response encryption failed",
+        );
     };
     parts.headers.remove(header::CONTENT_LENGTH);
     parts.headers.insert(
@@ -232,7 +265,10 @@ fn encrypt_packet(cipher: &Aes256Gcm, plaintext: &[u8], aad: &[u8]) -> Option<Ve
     let ciphertext = cipher
         .encrypt(
             Nonce::from_slice(&nonce_bytes),
-            Payload { msg: plaintext, aad },
+            Payload {
+                msg: plaintext,
+                aad,
+            },
         )
         .ok()?;
     let mut packet = Vec::with_capacity(13 + ciphertext.len());
@@ -285,7 +321,10 @@ fn encrypted_problem(
     };
     let mut response = (
         status,
-        [(header::CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"))],
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/octet-stream"),
+        )],
         Bytes::from(packet),
     )
         .into_response();
@@ -312,8 +351,15 @@ mod tests {
         let cipher = handshake_cipher().expect("handshake cipher");
         let plaintext = br#"{\"type\":\"crypto.clientHello\",\"publicKey\":\"public-value\"}"#;
         let packet = encrypt_packet(&cipher, plaintext, API_HANDSHAKE_AAD).expect("encrypt");
-        assert!(!packet.windows(b"public-value".len()).any(|part| part == b"public-value"));
-        assert_eq!(decrypt_packet(&cipher, &packet, API_HANDSHAKE_AAD).expect("decrypt"), plaintext);
+        assert!(
+            !packet
+                .windows(b"public-value".len())
+                .any(|part| part == b"public-value")
+        );
+        assert_eq!(
+            decrypt_packet(&cipher, &packet, API_HANDSHAKE_AAD).expect("decrypt"),
+            plaintext
+        );
     }
 
     #[test]

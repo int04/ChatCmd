@@ -13,6 +13,10 @@ members = [
 ]
 resolver = "3"
 
+[features]
+default = []
+embedded-web = ["dep:rust-embed"]
+
 [dependencies]
 aes-gcm = "0.10"
 anyhow = "1"
@@ -27,6 +31,7 @@ hkdf = "0.12"
 notify = "8"
 p256 = { version = "0.13", features = ["ecdh"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+rust-embed = { version = "8", optional = true, features = ["compression"] }
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 serde_json = "1"
@@ -38,7 +43,16 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"
+
 [dev-dependencies]
 http-body-util = "0.1"
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true

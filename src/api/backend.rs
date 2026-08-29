@@ -29,9 +29,16 @@ pub(super) async fn proxy(
     }
 
     let method = Method::from_bytes(request.method().as_str().as_bytes()).map_err(|_| {
-        Problem::new(StatusCode::BAD_REQUEST, "Invalid method", "unsupported HTTP method")
+        Problem::new(
+            StatusCode::BAD_REQUEST,
+            "Invalid method",
+            "unsupported HTTP method",
+        )
     })?;
-    let query = original_uri.query().map(|value| format!("?{value}")).unwrap_or_default();
+    let query = original_uri
+        .query()
+        .map(|value| format!("?{value}"))
+        .unwrap_or_default();
     let backend_path = format!("/api/{relative}{query}");
     let authorization = request
         .headers()
@@ -45,7 +52,11 @@ pub(super) async fn proxy(
         .map(str::to_owned);
     let (_, body) = request.into_parts();
     let body = to_bytes(body, MAX_GATEWAY_BODY_BYTES).await.map_err(|_| {
-        Problem::new(StatusCode::PAYLOAD_TOO_LARGE, "Request too large", "backend request body is too large")
+        Problem::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "Request too large",
+            "backend request body is too large",
+        )
     })?;
 
     let backend = state

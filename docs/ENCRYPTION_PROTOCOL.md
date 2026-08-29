@@ -951,28 +951,16 @@ Backend packet format vẫn là protocol byte `1` + nonce 12 byte + ciphertext/G
 
 `ChatCMD.Api` lưu session key trong RAM theo `sessionId`. Nếu backend restart hoặc session hết hạn, server trả `X-ChatCmd-Crypto-Reset: 1`; Rust xóa session, handshake lại và retry request đúng một lần.
 
-### Backend URL theo môi trường
+### Backend URL đóng cứng trong source
 
-Debug build mặc định gọi backend local:
+Backend URL được quyết định trực tiếp trong `src/backend_api.rs`:
 
-```text
-http://127.0.0.1:5121
+```rust
+const DEBUG_BACKEND_API_URL: &str = "http://127.0.0.1:5121";
+const RELEASE_BACKEND_API_URL: &str = "https://your-production-api-host";
 ```
 
-Có thể override lúc chạy để test/staging:
-
-```powershell
-$env:CHATCMD_BACKEND_API_URL="http://127.0.0.1:5121"
-```
-
-Release build lấy URL production tại thời điểm build:
-
-```powershell
-$env:CHATCMD_BACKEND_API_RELEASE_URL="https://your-production-api-host"
-cargo build --release
-```
-
-Nếu release không có `CHATCMD_BACKEND_API_RELEASE_URL` và cũng không có runtime override `CHATCMD_BACKEND_API_URL`, app chủ động báo lỗi cấu hình thay vì âm thầm gọi localhost.
+Debug build dùng `DEBUG_BACKEND_API_URL`; release build dùng `RELEASE_BACKEND_API_URL`. Bản đóng gói không đọc biến môi trường để override backend URL, nên endpoint production được cố định ngay trong binary. Trước khi public chỉ cần sửa `RELEASE_BACKEND_API_URL` rồi chạy script build.
 
 ### Debug backend interop
 
@@ -989,7 +977,6 @@ Test trực tiếp Rust <-> .NET encrypted protocol:
 
 ```cmd
 set CHATCMD_TEST_BACKEND_INTEROP=1
-set CHATCMD_BACKEND_API_URL=http://127.0.0.1:5121
 cargo test backend_api::tests::local_dotnet_backend_interop_when_enabled -- --nocapture
 ```
 

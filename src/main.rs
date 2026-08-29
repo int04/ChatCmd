@@ -1,5 +1,7 @@
 mod api;
 mod backend_api;
+#[cfg(feature = "embedded-web")]
+mod embedded_web;
 mod runtime_host;
 mod websocket;
 
@@ -25,10 +27,9 @@ use chatcmd_runtime::{
 use chatcmd_storage::{SqliteRepository, resolve_database_path};
 use serde_json::json;
 use tokio::sync::broadcast;
-use tower_http::{
-    services::{ServeDir, ServeFile},
-    trace::TraceLayer,
-};
+#[cfg(not(feature = "embedded-web"))]
+use tower_http::services::{ServeDir, ServeFile};
+use tower_http::trace::TraceLayer;
 use tracing::info;
 
 use backend_api::BackendApiClient;
@@ -115,7 +116,7 @@ async fn main() -> Result<()> {
         security,
         !ip.is_loopback(),
     );
-    let backend_api = BackendApiClient::from_environment().context("configure backend API")?;
+    let backend_api = BackendApiClient::new().context("configure backend API")?;
     info!(backend_api = %backend_api.base_url(), "Backend API configured");
     let state = Arc::new(AppState::new(
         repository,
@@ -129,14 +130,19 @@ async fn main() -> Result<()> {
         backend_api,
         event_tx,
     ));
-    let frontend_dir = resolve_frontend_dir();
-    let frontend_index = frontend_dir.join("index.html");
-    let frontend = ServeDir::new(&frontend_dir).not_found_service(ServeFile::new(frontend_index));
     let management = Router::new()
         .nest("/api", api::router(state.clone()))
-        .route("/ws", get(ws_handler))
-        .fallback_service(frontend)
-        .with_state(state);
+        .route("/ws", get(ws_handler));
+    #[cfg(feature = "embedded-web")]
+    let management = management.fallback(embedded_web::serve).with_state(state);
+    #[cfg(not(feature = "embedded-web"))]
+    let management = {
+        let frontend_dir = resolve_frontend_dir();
+        let frontend_index = frontend_dir.join("index.html");
+        let frontend =
+            ServeDir::new(&frontend_dir).not_found_service(ServeFile::new(frontend_index));
+        management.fallback_service(frontend).with_state(state)
+    };
     let app = mcp
         .merge(management)
         .layer(TraceLayer::new_for_http().make_span_with(
@@ -158,6 +164,7 @@ async fn main() -> Result<()> {
         .context("serve local application")
 }
 
+#[cfg(not(feature = "embedded-web"))]
 fn resolve_frontend_dir() -> PathBuf {
     if let Some(configured) = std::env::var_os("CHATCMD_WEB_DIST") {
         return PathBuf::from(configured);
