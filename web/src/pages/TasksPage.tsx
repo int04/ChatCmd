@@ -28,6 +28,7 @@ function TasksWorkspace() {
   const hideSubagentTask = useCallback((childTaskId: string) => { hiddenSubagentTaskIds.current.add(childTaskId); }, []);
   const handleRealtime = useCallback((event: TimelineEvent) => {
     if (event.type === 'system.connected') { if (connectedOnce.current) setDetailVersion((value) => value + 1); connectedOnce.current = true; return; }
+    if (event.type === 'system.resync_required') { setDetailVersion((value) => value + 1); return; }
     if (event.type === 'subagent.status' || event.type === 'subagent.approval_pending' || event.type === 'subagent.approval_resolved') {
       const childTaskId = subagentChildTaskId(event); if (childTaskId) hideSubagentTask(childTaskId); if (event.taskId === taskId) setDetailVersion((value) => value + 1); return;
     }

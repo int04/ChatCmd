@@ -205,7 +205,13 @@ async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {
                 Ok(event) => {
                     if send_encrypted_json(&mut sender, &cipher, &event).await.is_err() { break; }
                 }
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                    let resync = AppEvent::new(
+                        "system.resync_required",
+                        json!({ "reason": "broadcast_lag", "skippedEvents": skipped }),
+                    );
+                    if send_encrypted_json(&mut sender, &cipher, &resync).await.is_err() { break; }
+                },
                 Err(broadcast::error::RecvError::Closed) => break,
             },
             message = incoming.next() => match message {
