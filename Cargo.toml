@@ -46,6 +46,12 @@ uuid = { version = "1", features = ["v4", "serde"] }
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"
 
+[target.'cfg(any(target_os = "windows", target_os = "macos"))'.dependencies]
+png = "0.17"
+tray-icon = "0.24"
+webbrowser = "1"
+winit = "0.30"
+
 [dev-dependencies]
 http-body-util = "0.1"
 tempfile = "3"

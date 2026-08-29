@@ -13,6 +13,10 @@ Write-Host "Building ChatCMD $version for Windows $arch"
 Push-Location (Join-Path $root 'web')
 npm ci
 npm run build
+$sourceMaps = Get-ChildItem -Path (Join-Path $root 'web/dist') -Recurse -File -Filter '*.map'
+if ($sourceMaps) {
+    throw "Source map files were generated in web/dist: $($sourceMaps.FullName -join ', ')"
+}
 Pop-Location
 
 cargo build --release --features embedded-web

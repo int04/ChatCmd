@@ -1,5 +1,12 @@
+#![cfg_attr(
+    all(not(debug_assertions), target_os = "windows"),
+    windows_subsystem = "windows"
+)]
+
 mod api;
 mod backend_api;
+#[cfg(all(not(debug_assertions), any(target_os = "windows", target_os = "macos")))]
+mod desktop_tray;
 #[cfg(feature = "embedded-web")]
 mod embedded_web;
 mod runtime_host;
@@ -36,8 +43,42 @@ use backend_api::BackendApiClient;
 use runtime_host::RuntimeHost;
 use websocket::{AppEvent, AppState, ws_handler};
 
+#[cfg(debug_assertions)]
 #[tokio::main]
 async fn main() -> Result<()> {
+    run_server(None).await
+}
+
+#[cfg(all(not(debug_assertions), any(target_os = "windows", target_os = "macos")))]
+fn main() -> Result<()> {
+    let port = configured_port()?;
+    let management_url = format!("http://127.0.0.1:{port}");
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("chatcmd-server".to_owned())
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("create ChatCMD Tokio runtime");
+            if runtime.block_on(run_server(Some(ready_tx))).is_err() {
+                std::process::exit(1);
+            }
+        })
+        .context("start ChatCMD server thread")?;
+    desktop_tray::run(management_url, ready_rx)
+}
+
+#[cfg(all(
+    not(debug_assertions),
+    not(any(target_os = "windows", target_os = "macos"))
+))]
+#[tokio::main]
+async fn main() -> Result<()> {
+    run_server(None).await
+}
+
+async fn run_server(ready: Option<std::sync::mpsc::Sender<()>>) -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -49,12 +90,7 @@ async fn main() -> Result<()> {
     let ip: IpAddr = bind_address
         .parse()
         .context("CHATCMD_BIND must be an IP address")?;
-    let port = std::env::var("CHATCMD_PORT").map_or(Ok(8080_u16), |value| {
-        value.parse().context("CHATCMD_PORT must be 1..65535")
-    })?;
-    if port == 0 {
-        bail!("CHATCMD_PORT must be 1..65535");
-    }
+    let port = configured_port()?;
     let database_override = std::env::var_os("CHATCMD_DB_PATH").map(PathBuf::from);
     let database_path =
         resolve_database_path(database_override.as_deref()).context("resolve SQLite path")?;
@@ -158,10 +194,23 @@ async fn main() -> Result<()> {
     let listener = tokio::net::TcpListener::bind(address)
         .await
         .with_context(|| format!("bind {address}"))?;
+    if let Some(sender) = ready {
+        let _ = sender.send(());
+    }
     info!(%address, database=%database_path.display(), "ChatCmdClient started");
     axum::serve(listener, app)
         .await
         .context("serve local application")
+}
+
+fn configured_port() -> Result<u16> {
+    let port = std::env::var("CHATCMD_PORT").map_or(Ok(8080_u16), |value| {
+        value.parse().context("CHATCMD_PORT must be 1..65535")
+    })?;
+    if port == 0 {
+        bail!("CHATCMD_PORT must be 1..65535");
+    }
+    Ok(port)
 }
 
 #[cfg(not(feature = "embedded-web"))]

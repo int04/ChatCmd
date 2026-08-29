@@ -957,7 +957,7 @@ Backend URL được quyết định trực tiếp trong `src/backend_api.rs`:
 
 ```rust
 const DEBUG_BACKEND_API_URL: &str = "http://127.0.0.1:5121";
-const RELEASE_BACKEND_API_URL: &str = "https://your-production-api-host";
+const RELEASE_BACKEND_API_URL: &str = "https://api.chatcmd.net";
 ```
 
 Debug build dùng `DEBUG_BACKEND_API_URL`; release build dùng `RELEASE_BACKEND_API_URL`. Bản đóng gói không đọc biến môi trường để override backend URL, nên endpoint production được cố định ngay trong binary. Trước khi public chỉ cần sửa `RELEASE_BACKEND_API_URL` rồi chạy script build.

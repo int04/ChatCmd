@@ -20,6 +20,10 @@ printf 'Building ChatCMD %s for macOS %s\n' "$VERSION" "$ARCH"
 cd "$ROOT/web"
 npm ci
 npm run build
+if find "$ROOT/web/dist" -type f -name '*.map' -print -quit | grep -q .; then
+  echo "Source map files were generated in web/dist" >&2
+  exit 1
+fi
 cd "$ROOT"
 
 cargo build --release --features embedded-web
@@ -53,6 +57,7 @@ cat > "$CONTENTS/Info.plist" <<EOF
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundleVersion</key><string>$VERSION</string>
   <key>CFBundlePackageType</key><string>APPL</string>
+  <key>LSUIElement</key><true/>
   <key>CFBundleIconFile</key><string>ChatCMD</string>
 </dict>
 </plist>
