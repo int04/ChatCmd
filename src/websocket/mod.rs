@@ -1,6 +1,9 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicUsize, Ordering},
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use aes_gcm::{
@@ -27,7 +30,7 @@ use p256::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::Sha256;
-use tokio::sync::broadcast;
+use tokio::sync::{RwLock, broadcast};
 use uuid::Uuid;
 
 const WS_CRYPTO_PROTOCOL: u8 = 1;
@@ -91,6 +94,7 @@ pub(crate) struct AppState {
     pub activities: crate::runtime_host::ActivityRegistry,
     events: broadcast::Sender<AppEvent>,
     connected_clients: AtomicUsize,
+    api_crypto_sessions: RwLock<HashMap<String, Arc<Aes256Gcm>>>,
 }
 
 impl AppState {
@@ -118,6 +122,7 @@ impl AppState {
             activities,
             events,
             connected_clients: AtomicUsize::new(0),
+            api_crypto_sessions: RwLock::new(HashMap::new()),
         }
     }
 
@@ -127,6 +132,20 @@ impl AppState {
 
     pub(crate) fn publish(&self, event: AppEvent) {
         let _ = self.events.send(event);
+    }
+
+    pub(crate) async fn put_api_crypto_session(&self, id: String, cipher: Aes256Gcm) {
+        let mut sessions = self.api_crypto_sessions.write().await;
+        if sessions.len() >= 512 {
+            if let Some(oldest) = sessions.keys().next().cloned() {
+                sessions.remove(&oldest);
+            }
+        }
+        sessions.insert(id, Arc::new(cipher));
+    }
+
+    pub(crate) async fn api_crypto_session(&self, id: &str) -> Option<Arc<Aes256Gcm>> {
+        self.api_crypto_sessions.read().await.get(id).cloned()
     }
 }
 

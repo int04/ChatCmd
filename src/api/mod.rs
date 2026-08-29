@@ -1,6 +1,7 @@
 mod agents;
 mod chatgpt;
 mod chatgpt_support;
+mod crypto;
 mod sessions;
 mod settings;
 mod skills;
@@ -37,7 +38,7 @@ use sqlx::Row;
 
 use crate::websocket::{AppEvent, AppState};
 
-pub(crate) fn router() -> Router<Arc<AppState>> {
+pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
     let local = Router::new()
         .route("/overview", get(overview))
         .route("/mcp/status", get(mcp_status))
@@ -86,6 +87,11 @@ pub(crate) fn router() -> Router<Arc<AppState>> {
         .route("/skills/{id}/options", patch(set_skill_options))
         .route("/skills/{id}/icon", get(skill_icon))
         .route("/settings", get(settings).put(save_settings))
+        .route("/crypto/handshake", post(crypto::handshake))
+        .layer(middleware::from_fn_with_state(
+            state,
+            crypto::encrypted_local_api,
+        ))
         .layer(middleware::from_fn(management_header));
     Router::new()
         .route("/health", get(health))

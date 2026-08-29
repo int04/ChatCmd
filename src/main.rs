@@ -128,7 +128,7 @@ async fn main() -> Result<()> {
     let frontend_index = frontend_dir.join("index.html");
     let frontend = ServeDir::new(&frontend_dir).not_found_service(ServeFile::new(frontend_index));
     let management = Router::new()
-        .nest("/api", api::router())
+        .nest("/api", api::router(state.clone()))
         .route("/ws", get(ws_handler))
         .fallback_service(frontend)
         .with_state(state);

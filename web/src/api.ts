@@ -1,3 +1,4 @@
+import { decodeEncryptedApiResponse, encryptedApiFetch } from './apiCrypto';
 import { tr } from './i18n';
 import type { Agent, AgentInput, ChatGptBridge, ChatGptRequest, CommandExecutionMode, LocalSettings, McpStatus, Overview, ProblemDetails, SecretResult, Session, SessionDetail, Skill, SkillOptionValue, Task, TaskDetail, TaskPage, Tool, ToolPreset, UserSkill } from './types';
 
@@ -6,20 +7,22 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const headers = new Headers(init.headers);
-  headers.set('X-ChatCmdClient', 'local-ui');
-  if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+  const method = (init.method ?? 'GET').toUpperCase();
   let response: Response;
-  try { response = await fetch(path, { ...init, headers }); }
+  try { response = await encryptedApiFetch(path, init); }
   catch { throw new ApiError(tr('Local API is unavailable. Check that ChatCMD is running.')); }
+  if (response.status === 204) return undefined as T;
+
+  let payload: T | ProblemDetails | undefined;
+  try { payload = await decodeEncryptedApiResponse<T | ProblemDetails>(path, method, response); }
+  catch { /* malformed or non-JSON upstream error */ }
   if (!response.ok) {
-    let problem: ProblemDetails | undefined;
-    try { problem = await response.json() as ProblemDetails; } catch { /* non-JSON upstream error */ }
+    const problem = payload as ProblemDetails | undefined;
     const fieldErrors = problem?.errors ? Object.values(problem.errors).flat().join(' ') : '';
     throw new ApiError(fieldErrors || problem?.detail || problem?.title || tr('Request failed ({status})', { status: response.status }), response.status, problem);
   }
-  if (response.status === 204) return undefined as T;
-  return response.json() as Promise<T>;
+  if (payload === undefined) throw new ApiError(tr('Request failed ({status})', { status: response.status }), response.status);
+  return payload as T;
 }
 const json = (value: unknown) => JSON.stringify(value);
 const item = (value: string) => encodeURIComponent(value);
