@@ -25,6 +25,7 @@ pub struct ShellRuntime {
 struct ShellRuntimeInner {
     config: RuntimeConfig,
     sessions: Mutex<HashMap<String, Arc<Session>>>,
+    retired_sessions: Mutex<VecDeque<Arc<Session>>>,
     completed_requests: Mutex<HashMap<String, serde_json::Value>>,
     in_flight_requests: Mutex<HashSet<String>>,
     operations: Arc<Semaphore>,
@@ -110,6 +111,57 @@ fn session_info(session: &Arc<Session>) -> RuntimeResult<ShellSessionInfo> {
         }),
         last_sequence: last_sequence(session)?,
     })
+}
+
+fn find_session(inner: &ShellRuntimeInner, id: &str) -> RuntimeResult<Arc<Session>> {
+    if let Some(session) = inner.sessions.lock().map_err(lock_error)?.get(id).cloned() {
+        return Ok(session);
+    }
+    inner
+        .retired_sessions
+        .lock()
+        .map_err(lock_error)?
+        .iter()
+        .find(|session| session.id == id)
+        .cloned()
+        .ok_or_else(|| RuntimeError::new("session_not_found", "terminal session was not found"))
+}
+
+fn retire_session(inner: &ShellRuntimeInner, session_id: &str) -> RuntimeResult<()> {
+    let retired = inner
+        .sessions
+        .lock()
+        .map_err(lock_error)?
+        .remove(session_id);
+    let Some(session) = retired else {
+        return Ok(());
+    };
+    if let Ok(mut writer) = session.writer.lock() {
+        *writer = None;
+    }
+    let mut retired_sessions = inner.retired_sessions.lock().map_err(lock_error)?;
+    retired_sessions.push_back(session);
+    while retired_sessions.len() > 64 {
+        retired_sessions.pop_front();
+    }
+    Ok(())
+}
+
+fn spawn_session_reaper(inner: Arc<ShellRuntimeInner>, session: Arc<Session>) -> RuntimeResult<()> {
+    std::thread::Builder::new()
+        .name(format!("chatcmd-reaper-{}", session.id))
+        .spawn(move || {
+            loop {
+                if try_wait(&session).ok().flatten().is_some() {
+                    let _ = retire_session(&inner, &session.id);
+                    session.notify.notify_waiters();
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+        })
+        .map(|_| ())
+        .map_err(|error| RuntimeError::new("shell_reaper_failed", error.to_string()))
 }
 
 fn kill_tree(session: &Session) -> RuntimeResult<()> {

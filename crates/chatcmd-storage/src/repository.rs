@@ -6,7 +6,7 @@ mod settings;
 
 use mapping::*;
 
-use std::{path::Path, str::FromStr, time::Duration};
+use std::{path::Path, process::Command, str::FromStr, time::Duration};
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chatcmd_core::{
@@ -287,6 +287,16 @@ impl Bootstrap for SqliteRepository {
             });
         }
 
+        let orphan_processes = sqlx::query_as::<_, (i64, String)>(
+            "SELECT process_id,executable FROM terminal_sessions WHERE status IN ('starting','running') AND process_id IS NOT NULL",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|error| backend("read orphan terminal processes", error))?;
+        for (pid, executable) in orphan_processes {
+            best_effort_kill_process_tree(pid, &executable);
+        }
+
         let mut transaction = self
             .pool
             .begin()
@@ -330,6 +340,52 @@ impl LocalDeviceStore for SqliteRepository {
             .ok_or_else(|| StorageError::NotFound("local device".to_owned()))?;
         map_device(&row)
     }
+}
+
+fn best_effort_kill_process_tree(pid: i64, expected_executable: &str) {
+    if pid <= 0 || !process_matches_expected(pid, expected_executable) {
+        return;
+    }
+    if cfg!(windows) {
+        let _ = Command::new("taskkill.exe")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .output();
+    } else {
+        let pid_text = pid.to_string();
+        let _ = Command::new("pkill")
+            .args(["-KILL", "-P", &pid_text])
+            .output();
+        let _ = Command::new("kill").args(["-KILL", &pid_text]).output();
+    }
+}
+
+fn process_matches_expected(pid: i64, expected_executable: &str) -> bool {
+    let expected = Path::new(expected_executable)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or(expected_executable)
+        .trim()
+        .to_ascii_lowercase();
+    if expected.is_empty() {
+        return false;
+    }
+    let output = if cfg!(windows) {
+        Command::new("tasklist.exe")
+            .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+            .output()
+    } else {
+        Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "comm="])
+            .output()
+    };
+    let Ok(output) = output else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).to_ascii_lowercase();
+    stdout.contains(&expected)
 }
 
 fn generate_secret() -> String {

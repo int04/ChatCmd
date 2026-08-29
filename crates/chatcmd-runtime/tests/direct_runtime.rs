@@ -141,6 +141,99 @@ async fn shell_lifecycle_timeout_duplicate_and_force_close() {
         )
         .await
         .expect("force close");
+    assert!(
+        runtime
+            .list()
+            .await
+            .expect("list after close")
+            .iter()
+            .all(|session| session.session_id != created.session_id)
+    );
+    runtime
+        .read(&created.session_id, 0, 100)
+        .await
+        .expect("retired shell output remains readable");
+}
+
+#[tokio::test]
+async fn shell_wait_retires_exited_session_and_keeps_replay() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let runtime = runtime(directory.path().to_path_buf(), 2);
+    let created = runtime
+        .create(
+            &OperationContext::new("wait-retire-create", "agent", "shell_create"),
+            create_request(directory.path().to_path_buf(), "wait-retire-create"),
+        )
+        .await
+        .expect("create shell");
+    runtime
+        .write(
+            &OperationContext::new("wait-retire-exit", "agent", "shell_write"),
+            ShellWriteRequest {
+                request_id: "wait-retire-exit".to_owned(),
+                session_id: created.session_id.clone(),
+                text: "exit".to_owned(),
+                append_new_line: true,
+            },
+        )
+        .await
+        .expect("exit shell");
+    let exited = runtime
+        .wait(&created.session_id, Duration::from_secs(5))
+        .await
+        .expect("wait for exit");
+    assert!(exited.completed);
+    assert!(runtime.list().await.expect("list").is_empty());
+    runtime
+        .read(&created.session_id, 0, 100)
+        .await
+        .expect("retired replay remains readable");
+}
+
+#[tokio::test]
+async fn shell_reader_retires_exited_session_without_wait() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let runtime = runtime(directory.path().to_path_buf(), 2);
+    let created = runtime
+        .create(
+            &OperationContext::new("reader-retire-create", "agent", "shell_create"),
+            create_request(directory.path().to_path_buf(), "reader-retire-create"),
+        )
+        .await
+        .expect("create shell");
+    runtime
+        .write(
+            &OperationContext::new("reader-retire-exit", "agent", "shell_write"),
+            ShellWriteRequest {
+                request_id: "reader-retire-exit".to_owned(),
+                session_id: created.session_id.clone(),
+                text: "exit".to_owned(),
+                append_new_line: true,
+            },
+        )
+        .await
+        .expect("exit shell");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let active = runtime
+            .list()
+            .await
+            .expect("list")
+            .iter()
+            .any(|session| session.session_id == created.session_id);
+        if !active {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "reader did not retire exited shell"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    runtime
+        .read(&created.session_id, 0, 100)
+        .await
+        .expect("reader-retired replay remains readable");
 }
 
 #[tokio::test]

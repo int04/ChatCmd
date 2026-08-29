@@ -19,6 +19,7 @@ impl ShellRuntime {
             inner: Arc::new(ShellRuntimeInner {
                 config,
                 sessions: Mutex::new(HashMap::new()),
+                retired_sessions: Mutex::new(VecDeque::new()),
                 completed_requests: Mutex::new(HashMap::new()),
                 in_flight_requests: Mutex::new(HashSet::new()),
                 operations: Arc::new(Semaphore::new(concurrency)),
@@ -133,6 +134,7 @@ impl ShellRuntime {
             .map_err(lock_error)?
             .insert(id, session.clone());
         let session_for_reader = session.clone();
+        let inner_for_reader = self.inner.clone();
         let max_bytes = self.inner.config.max_replay_bytes.max(4096);
         std::thread::Builder::new()
             .name(format!("chatcmd-pty-{}", session.id))
@@ -175,8 +177,12 @@ impl ShellRuntime {
                     }
                 }
                 session_for_reader.notify.notify_waiters();
+                if try_wait(&session_for_reader).ok().flatten().is_some() {
+                    let _ = retire_session(&inner_for_reader, &session_for_reader.id);
+                }
             })
             .map_err(|error| RuntimeError::new("pty_reader_failed", error.to_string()))?;
+        spawn_session_reaper(self.inner.clone(), session.clone())?;
         if cfg!(windows) {
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
@@ -259,13 +265,15 @@ impl ShellRuntime {
         let deadline = tokio::time::Instant::now() + timeout;
         loop {
             if let Some(code) = try_wait(&session)? {
-                return Ok(ShellWaitResult {
+                let result = ShellWaitResult {
                     session_id: session_id.into(),
                     completed: true,
                     wait_timed_out: false,
                     exit_code: Some(code),
                     last_sequence: last_sequence(&session)?,
-                });
+                };
+                retire_session(&self.inner, session_id)?;
+                return Ok(result);
             }
             if tokio::time::Instant::now() >= deadline {
                 return Ok(ShellWaitResult {
@@ -362,9 +370,7 @@ impl ShellRuntime {
             let _ = writer.write_all(if cfg!(windows) { b"exit\r" } else { b"exit\n" });
             let _ = writer.flush();
         }
-        if let Ok(mut writer) = session.writer.lock() {
-            *writer = None;
-        }
+        retire_session(&self.inner, session_id)?;
         self.emit(context, "completed", None);
         Ok(())
     }
@@ -421,13 +427,7 @@ impl ShellRuntime {
     }
 
     fn session(&self, id: &str) -> RuntimeResult<Arc<Session>> {
-        self.inner
-            .sessions
-            .lock()
-            .map_err(lock_error)?
-            .get(id)
-            .cloned()
-            .ok_or_else(|| RuntimeError::new("session_not_found", "terminal session was not found"))
+        find_session(&self.inner, id)
     }
     fn cached(&self, request_id: &str) -> RuntimeResult<Option<serde_json::Value>> {
         Ok(self
