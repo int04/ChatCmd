@@ -74,12 +74,11 @@ pub(super) fn mcp_endpoint(state: &AppState, token: &str) -> String {
 }
 
 pub(super) async fn settings_value(state: &Arc<AppState>) -> Result<Value, Problem> {
-    let defaults = json!({ "bindAddress": state.bind_address, "port": state.port, "mcpEndpoint": mcp_endpoint_template(state), "databasePath": state.database_path, "databaseState": "ready", "executionMode": "allowAll", "approveNewConversations": true, "workspaceRoots": [std::env::current_dir().unwrap_or_default()], "terminalExecutable": default_shell(), "taskConcurrency": 4, "sessionConcurrency": 8, "theme": "dark", "language": "en", "sound": true, "newAgentSound": true, "finishedTaskSound": true });
+    let defaults = json!({ "bindAddress": state.bind_address, "port": state.port, "mcpEndpoint": mcp_endpoint_template(state), "databasePath": state.database_path, "databaseState": "ready", "executionMode": "allowAll", "approveNewConversations": true, "terminalExecutable": default_shell(), "taskConcurrency": 4, "sessionConcurrency": 8, "theme": "dark", "language": "en", "sound": true, "newAgentSound": true, "finishedTaskSound": true });
     let mut object = defaults.as_object().cloned().unwrap_or_default();
     for key in [
         "executionMode",
         "approveNewConversations",
-        "workspaceRoots",
         "terminalExecutable",
         "taskConcurrency",
         "sessionConcurrency",

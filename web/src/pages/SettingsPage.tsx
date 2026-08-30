@@ -1,4 +1,4 @@
-import { AlertTriangle, FolderOpen, Info, MonitorCog, Save, ShieldCheck, SlidersHorizontal, TerminalSquare, UserRound, Volume2 } from 'lucide-react';
+import { AlertTriangle, Info, MonitorCog, Save, ShieldCheck, SlidersHorizontal, TerminalSquare, UserRound, Volume2 } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
 import { api } from '../api';
 import { ErrorState, Loading, Modal, PageHeading, ProblemBanner, StatusBadge } from '../components';
@@ -32,10 +32,7 @@ export function SettingsPage() {
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (!value) return;
-    const dangerous = result.data && (
-      value.workspaceRoots.join('\n') !== result.data.workspaceRoots.join('\n') ||
-      value.executionMode === 'allowAll' && result.data.executionMode !== 'allowAll'
-    );
+    const dangerous = result.data && value.executionMode === 'allowAll' && result.data.executionMode !== 'allowAll';
     if (dangerous) setConfirming(true);
     else void save();
   };
@@ -65,7 +62,7 @@ export function SettingsPage() {
   const ActiveIcon = activeMeta.icon;
 
   return <div className="settings-page">
-    <PageHeading eyebrow={tr('LOCAL CONFIGURATION')} title={tr('Settings')} body={tr('Runtime, execution, workspace, and display preferences.')} actions={<StatusBadge state={value.databaseState ?? 'unknown'} label={tr('Database {state}', { state: translatedStatus(value.databaseState ?? 'unknown') })} />} />
+    <PageHeading eyebrow={tr('LOCAL CONFIGURATION')} title={tr('Settings')} body={tr('Runtime, execution, and display preferences.')} actions={<StatusBadge state={value.databaseState ?? 'unknown'} label={tr('Database {state}', { state: translatedStatus(value.databaseState ?? 'unknown') })} />} />
     <ProblemBanner message={problem} clear={() => setProblem('')} />
 
     <form className="settings-workspace-form" onSubmit={submit}>
@@ -104,12 +101,6 @@ export function SettingsPage() {
                 <SettingField label={tr('Session concurrency')} hint={tr('Maximum terminal sessions allowed at once.')} detail={tr('Limits how many terminal processes can remain active simultaneously. Too many sessions may consume memory even when they are idle.')}><input type="number" min="1" max="64" value={value.sessionConcurrency} onChange={(event) => update('sessionConcurrency', Number(event.target.value))} /></SettingField>
               </div>
             </div>
-            <div className="settings-section-block">
-              <SectionHeading icon={<FolderOpen />} title={tr('Workspace access')} description={tr('Restrict the folders that Agents are allowed to use as project workspaces.')} />
-              <div className="settings-control-grid">
-                <SettingField wide label={tr('Workspace roots')} hint={tr('One allowed project root per line.')} detail={tr('Only add folders you trust. Expanding this list can give Agents access to more local source code and files. Changes to workspace roots require confirmation before saving.')}><textarea rows={6} value={value.workspaceRoots.join('\n')} onChange={(event) => update('workspaceRoots', event.target.value.split('\n').map((line) => line.trim()).filter(Boolean))} /></SettingField>
-              </div>
-            </div>
           </>}
           {activeTab === 'display' && <>
             <SettingsIntro icon={<MonitorCog />} title={tr('Appearance and language')} description={tr('Personalize how ChatCMD looks and which language is used in the management interface. These choices do not change Agent permissions.')} />
@@ -131,7 +122,7 @@ export function SettingsPage() {
       </section>
     </form>
 
-    {confirming && <Modal title={tr('Confirm sensitive setting changes')} description={tr('Workspace or unrestricted execution changes can expand local access. Verify every value before saving.')} close={() => setConfirming(false)} dangerous><div className="warning-block"><AlertTriangle /><p>{tr('New tasks may inherit these settings immediately.')}</p></div><div className="modal-actions"><button className="button secondary" onClick={() => setConfirming(false)}>{tr('Cancel')}</button><button className="button danger" onClick={() => void save()}>{tr('Apply changes')}</button></div></Modal>}
+    {confirming && <Modal title={tr('Confirm sensitive setting changes')} description={tr('Unrestricted execution can expand local access. Verify this setting before saving.')} close={() => setConfirming(false)} dangerous><div className="warning-block"><AlertTriangle /><p>{tr('New tasks may inherit these settings immediately.')}</p></div><div className="modal-actions"><button className="button secondary" onClick={() => setConfirming(false)}>{tr('Cancel')}</button><button className="button danger" onClick={() => void save()}>{tr('Apply changes')}</button></div></Modal>}
   </div>;
 }
 
