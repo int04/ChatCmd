@@ -89,6 +89,10 @@ impl BackendApiClient {
         &self.base_url
     }
 
+    pub(crate) async fn reset_session(&self) {
+        *self.session.write().await = None;
+    }
+
     pub(crate) async fn request(
         &self,
         method: Method,

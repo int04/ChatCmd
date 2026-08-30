@@ -226,11 +226,15 @@ async fn authenticate(
         app_version: Some(state.device.app_version.as_str()),
     };
     let body = serde_json::to_vec(&payload).map_err(|_| internal_problem())?;
+    state.backend_api.reset_session().await;
     let backend = state
         .backend_api
         .request(Method::POST, path, &body, None, None)
         .await
-        .map_err(|_| backend_unavailable())?;
+        .map_err(|error| {
+            tracing::warn!(error = %error, path, "encrypted backend authentication request failed");
+            backend_unavailable()
+        })?;
     if backend.status < 200 || backend.status >= 300 {
         return Ok(to_response(backend));
     }
@@ -324,6 +328,7 @@ async fn clear_session(state: &Arc<AppState>) -> Result<(), Problem> {
         .execute(state.repository.pool())
         .await
         .map_err(super::db_problem)?;
+    state.backend_api.reset_session().await;
     Ok(())
 }
 
