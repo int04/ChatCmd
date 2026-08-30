@@ -21,6 +21,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       } catch (error) { sendResponse({ ok: false, error: errorMessage(error) }); }
       return false;
     }
+    if (message.action === 'focus-tab') {
+      void focusConversationTab(message.conversationUrl).then(() => sendResponse({ ok: true })).catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
+      return true;
+    }
+    if (message.action === 'close-tab') {
+      void closeConversationTab(message.conversationUrl).then(() => sendResponse({ ok: true })).catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
+      return true;
+    }
     if (message.action === 'logs') {
       void extensionLogs().then((logs) => sendResponse({ ok: true, logs })).catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
       return true;
@@ -162,6 +170,20 @@ async function acquireNewConversationTab() {
   return tab;
 }
 
+async function focusConversationTab(conversationUrl) {
+  const target = conversationTarget(conversationUrl);
+  const tab = await findConversationTab(target);
+  if (!tab?.id) throw new Error('Tab ChatGPT của cuộc trò chuyện này không còn mở.');
+  await chrome.tabs.update(tab.id, { active: true });
+  if (tab.windowId) await chrome.windows.update(tab.windowId, { focused: true });
+}
+
+async function closeConversationTab(conversationUrl) {
+  const target = conversationTarget(conversationUrl);
+  const tab = await findConversationTab(target);
+  if (!tab?.id) throw new Error('Tab ChatGPT của cuộc trò chuyện này không còn mở.');
+  await chrome.tabs.remove(tab.id);
+}
 
 async function acquireConversationTab(target) {
   const tab = await findConversationTab(target);

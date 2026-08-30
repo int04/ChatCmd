@@ -5,6 +5,8 @@ const RESPONSE_TYPE = 'chatcmd-chatgpt-extension-response';
 
 type BridgeCommand =
   | { action: 'ping'; nonce: string; conversationUrl?: string }
+  | { action: 'focus-tab'; nonce: string; conversationUrl: string }
+  | { action: 'close-tab'; nonce: string; conversationUrl: string }
   | { action: 'logs'; nonce: string }
   | { action: 'clear-logs'; nonce: string }
   | { action: 'send'; nonce: string; requestId: string; submittedContent: string; model: string; conversationUrl?: string; localBaseUrl: string }
@@ -34,6 +36,13 @@ export async function chatGptExtensionAvailable() {
   return (await chatGptExtensionStatus()).ready;
 }
 
+export async function focusChatGptConversationTab(conversationUrl: string) {
+  await bridge({ action: 'focus-tab', nonce: nonce(), conversationUrl }, 3_000);
+}
+
+export async function closeChatGptConversationTab(conversationUrl: string) {
+  await bridge({ action: 'close-tab', nonce: nonce(), conversationUrl }, 3_000);
+}
 
 export async function getChatGptExtensionLogs() {
   const response = await bridge({ action: 'logs', nonce: nonce() }, 2_000);

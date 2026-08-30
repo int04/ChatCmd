@@ -535,6 +535,8 @@ const vi: Record<string, string> = {
   'ChatGPT tab is still loading the previous response.': 'Tab ChatGPT đang tải phản hồi trước chưa xong.',
   'Please wait until ChatGPT is fully ready before sending another message.': 'Hãy chờ ChatGPT tải xong và sẵn sàng trước khi gửi tin nhắn tiếp theo.',
   'Waiting for ChatGPT…': 'Đang chờ ChatGPT…',
+  'Close this tab': 'Đóng tab này',
+  'Change model': 'Đổi mô hình',
   'Will retry in {seconds} seconds.': 'Sẽ tự thử lại sau {seconds} giây.',
   'Automatic retry cancelled.': 'Đã hủy tự động gửi lại.',
   'ChatCMD ChatGPT Bridge extension is not ready, so the stop command was not sent.': 'ChatCMD ChatGPT Bridge extension chưa sẵn sàng nên lệnh dừng chưa được gửi.',
