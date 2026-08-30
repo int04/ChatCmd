@@ -1,5 +1,5 @@
-import { Gift, KeyRound, Orbit, PackageCheck, ShieldCheck, UserRound, WalletCards } from 'lucide-react';
-import { useCallback, useMemo, useState } from 'react';
+import { CheckCircle2, Gift, KeyRound, Orbit, PackageCheck, ShieldCheck, UserRound, WalletCards, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, ApiError, type GiftCodeRedeemResult, type PlanPurchaseResult } from '../api';
 import { useAuth } from '../auth';
 import { tr } from '../i18n';
@@ -29,12 +29,19 @@ export function AccountSettings() {
   const [giftResult, setGiftResult] = useState<GiftCodeRedeemResult | null>(null);
   const [topUpOpen, setTopUpOpen] = useState(false);
   const [purchaseOpen, setPurchaseOpen] = useState(false);
+  const [topUpSuccessBalance, setTopUpSuccessBalance] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (topUpSuccessBalance === null) return;
+    const timeout = window.setTimeout(() => setTopUpSuccessBalance(null), 5200);
+    return () => window.clearTimeout(timeout);
+  }, [topUpSuccessBalance]);
 
   const planRemaining = useMemo(() => formatRemaining(user?.plan.expriAt), [user?.plan.expriAt]);
   const handleBalanceChanged = useCallback(async (balance: number) => {
     setTopUpOpen(false);
     await refresh();
-    window.alert(billingTr('Top up successful, balance {balance}', { balance: `${new Intl.NumberFormat('vi-VN').format(balance)}đ` }));
+    setTopUpSuccessBalance(balance);
   }, [refresh]);
   const handlePurchased = useCallback(async (result: PlanPurchaseResult) => {
     setPurchaseOpen(false);
@@ -180,6 +187,13 @@ export function AccountSettings() {
 
     {topUpOpen && <TopUpModal userId={user.id} currentBalance={user.vnd} onClose={() => setTopUpOpen(false)} onBalanceChanged={handleBalanceChanged} />}
     {purchaseOpen && <PlanPurchaseModal currentPlanType={user.plan.type} onClose={() => setPurchaseOpen(false)} onTopUp={() => setTopUpOpen(true)} onPurchased={handlePurchased} />}
+
+    {topUpSuccessBalance !== null && <div className="account-success-toast" role="status" aria-live="polite">
+      <span className="account-success-toast-icon"><CheckCircle2 /></span>
+      <div><strong>{billingTr('Top up successful')}</strong><p>{billingTr('Your balance is now {balance}.', { balance: formatVnd(topUpSuccessBalance) })}</p></div>
+      <button type="button" aria-label={tr('Close')} onClick={() => setTopUpSuccessBalance(null)}><X /></button>
+      <i aria-hidden="true" />
+    </div>}
 
     {challengeOpen && <div className="modal-backdrop account-constellation-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !submitting && !giftRedeeming) { setChallengeOpen(false); setChallengePurpose(null); } }}>
       <div className={`modal account-constellation-modal ${challengeVerified ? 'verified' : ''}`} role="dialog" aria-modal="true" aria-labelledby="security-constellation-title">

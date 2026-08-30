@@ -21,6 +21,8 @@ const vi: Record<string, string> = {
   'Balance is checked automatically every few seconds.': 'Số dư được kiểm tra tự động sau mỗi vài giây.',
   'Could not check current balance.': 'Không thể kiểm tra số dư hiện tại.',
   'Top up successful, balance {balance}': 'Nạp tiền thành công, số dư {balance}',
+  'Top up successful': 'Nạp tiền thành công',
+  'Your balance is now {balance}.': 'Số dư hiện tại của bạn là {balance}.',
   'Buy service plan': 'Mua gói dịch vụ',
   'Service plans': 'Gói dịch vụ',
   'Choose the plan you want to buy or renew.': 'Chọn gói bạn muốn mua hoặc gia hạn.',
