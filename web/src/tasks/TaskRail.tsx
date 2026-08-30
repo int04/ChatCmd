@@ -1,4 +1,4 @@
-import { AlertTriangle, Bot, Braces, ChevronUp, LayoutDashboard, LoaderCircle, LogOut, Plus, Search, Settings, Sparkles, TerminalSquare, Trash2, UserRound, Wrench, X } from 'lucide-react';
+import { AlertTriangle, Bot, ChevronUp, LayoutDashboard, LoaderCircle, LogOut, Plus, Search, Settings, TerminalSquare, Trash2, UserRound, Wrench } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEventHandler } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 
@@ -15,12 +15,20 @@ const READ_FINAL_COUNTS_KEY = 'chatcmd.tasks.readFinalCounts.v1';
 const PAGE_SIZE = 10;
 const menuItems = [
   { to: '/', end: true, label: 'Overview', icon: LayoutDashboard },
-  { to: '/tasks', label: 'Task', icon: Sparkles },
   { to: '/sessions', label: 'Session', icon: TerminalSquare },
   { to: '/agents', label: 'Agents', icon: Bot },
   { to: '/skills', label: 'Skills', icon: Wrench },
   { to: '/settings', label: 'Setting', icon: Settings },
 ];
+
+export function FunctionRail() {
+  return <nav className="function-rail" aria-label={tr('Application navigation')}>
+    <Link className="function-rail-brand" to="/" aria-label="ChatCMD"><img src="/icons/logo-icon-master-1024.png" alt="" /></Link>
+    <div className="function-rail-items">
+      {menuItems.map(({ to, end, label, icon: Icon }) => <NavLink to={to} end={end} key={to} aria-label={tr(label)} title={tr(label)}><Icon /><span className="sr-only">{tr(label)}</span></NavLink>)}
+    </div>
+  </nav>;
+}
 
 export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { user, logout } = useAuth();
@@ -66,11 +74,12 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
   return <aside className={`task-rail ${open ? 'open' : ''}`} aria-label={tr('Conversations')}>
     <div className="panel-resize-handle task-rail-resize-handle" role="separator" aria-label={tr('Resize conversations')} aria-orientation="vertical" aria-valuemin={240} aria-valuemax={480} aria-valuenow={railResize.width} tabIndex={0} onPointerDown={railResize.onPointerDown} onKeyDown={railResize.onKeyDown} />
     <header className="task-rail-header">
-      <div className="task-rail-brand"><span className="brand-mark"><Braces /></span><strong>ChatCMD</strong><button className="icon-button mobile-only" aria-label={tr('Close navigation')} onClick={onClose}><X /></button></div>
-      <Link className="task-rail-new-message" to="/tasks/new"><span className="task-rail-new-icon"><Plus /></span><span>{tr('New message')}</span></Link>
-      <label className="tasks-conversation-search"><Search /><span className="sr-only">{tr('Search conversations')}</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={tr('Search')} /></label>
+      <div className="task-rail-toolbar">
+        <label className="tasks-conversation-search"><Search /><span className="sr-only">{tr('Search conversations')}</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={tr('Search')} /></label>
+        <Link className="task-rail-new-message" to="/tasks/new" aria-label={tr('New message')} title={tr('New message')}><Plus /></Link>
+      </div>
     </header>
-    <div className="task-rail-body"><div className="task-rail-section-label"><span>{tr('Conversations')}</span></div><div className="task-rail-list" onScroll={(event) => { const target = event.currentTarget; if (target.scrollHeight - target.scrollTop - target.clientHeight < 180) void loadMore(); }}>
+    <div className="task-rail-body"><div className="task-rail-list" onScroll={(event) => { const target = event.currentTarget; if (target.scrollHeight - target.scrollTop - target.clientHeight < 180) void loadMore(); }}>
       {loading ? <Loading label={tr('Loading tasks')} /> : error && !tasks.length ? <ErrorState message={error} retry={() => void applyFirstPage()} /> : !tasks.length ? <Empty title={tr('No conversations yet')} body={tr('Agent conversations will appear here.')} /> : <>
         {tasks.map((task) => <TaskRailRow task={task} selected={task.id === taskId} unread={Math.max(0, (task.finalResponseCount ?? 0) - (readFinalCounts[task.id] ?? 0))} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ task, x: Math.min(event.clientX, window.innerWidth - 236), y: Math.min(event.clientY, window.innerHeight - 108) }); }} key={task.id} />)}
         {loadingMore && <div className="task-rail-load-more" role="status"><LoaderCircle className="spin" /><span>{tr('Loading more…')}</span></div>}
@@ -79,7 +88,7 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
     </div></div>
     {contextMenu && <div className="task-context-menu" role="menu" style={{ left: contextMenu.x, top: contextMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button type="button" role="menuitem" className="danger" disabled={!canDeleteTask(contextMenu.task)} onClick={() => { setDeleteError(''); setDeleteTarget(contextMenu.task); setContextMenu(undefined); }}><Trash2 /><span>{tr('Delete conversation')}</span></button>{!canDeleteTask(contextMenu.task) && <small>{tr('You can only delete a task after it has finished.')}</small>}</div>}
     {deleteTarget && <Modal title={tr('Delete conversation?')} description={conversationName(deleteTarget)} close={() => !deleting && setDeleteTarget(undefined)} dangerous><div className="task-delete-warning"><AlertTriangle /><div><strong>{tr('Warning')}</strong><p>{tr('Deleting removes this conversation and its linked data from the list. This conversation may not work again in the future.')}</p></div></div>{deleteError && <p className="task-delete-error" role="alert">{deleteError}</p>}<div className="modal-actions"><button className="button secondary" type="button" disabled={deleting} onClick={() => setDeleteTarget(undefined)}>{tr('Cancel')}</button><button className="button danger" type="button" disabled={deleting} onClick={() => void deleteConversation()}>{deleting ? tr('Deleting…') : tr('Delete conversation')}</button></div></Modal>}
-    <footer className="task-rail-footer">{menuOpen && <nav className="task-rail-account-menu" aria-label={tr('Application navigation')}>{menuItems.map(({ to, end, label, icon: Icon }) => <NavLink to={to} end={end} key={to}><Icon /><span>{tr(label)}</span></NavLink>)}<button type="button" className="task-rail-logout" onClick={() => { setMenuOpen(false); void logout().finally(() => navigate('/login', { replace: true })); }}><LogOut /><span>Đăng xuất</span></button></nav>}<button className="task-rail-account" type="button" aria-expanded={menuOpen} onClick={() => setMenuOpen((value) => !value)}><span className="task-rail-avatar"><UserRound /></span><span className="task-rail-account-copy"><strong title={user?.email}>{user?.email ?? 'ChatCMD'}</strong><small title={user?.plan.expriAt ?? undefined}>{user?.plan.name ?? 'FREE'}</small></span><ChevronUp className={menuOpen ? 'open' : ''} /></button></footer>
+    <footer className="task-rail-footer">{menuOpen && <div className="task-rail-account-menu" role="menu"><button type="button" role="menuitem" className="task-rail-logout" onClick={() => { setMenuOpen(false); void logout().finally(() => navigate('/login', { replace: true })); }}><LogOut /><span>{tr('Log out')}</span></button></div>}<button className="task-rail-account" type="button" aria-expanded={menuOpen} onClick={() => setMenuOpen((value) => !value)}><span className="task-rail-avatar"><UserRound /></span><span className="task-rail-account-copy"><strong title={user?.email}>{user?.email ?? 'ChatCMD'}</strong><small title={user?.plan.expriAt ?? undefined}>{user?.plan.name ?? 'FREE'}</small></span><ChevronUp className={menuOpen ? 'open' : ''} /></button></footer>
   </aside>;
 }
 

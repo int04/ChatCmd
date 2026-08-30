@@ -14,7 +14,7 @@ import { TasksPage } from './pages/TasksPage';
 import { RealtimeProvider, useRealtime } from './realtime';
 import { soundNotifications } from './soundNotifications';
 import { GlobalConversationApprovalQueue } from './tasks/GlobalConversationApprovalQueue';
-import { TaskRail } from './tasks/TaskRail';
+import { FunctionRail, TaskRail } from './tasks/TaskRail';
 import { useTaskDocumentTitle } from './tasks/taskDocumentTitle';
 import type { TimelineEvent } from './types';
 
@@ -73,7 +73,7 @@ function Shell() {
     requestAnimationFrame(() => document.getElementById('main-content')?.focus({ preventScroll: true }));
   }, [location.pathname]);
   useEffect(() => { try { const saved = JSON.parse(localStorage.getItem('chatcmd.preferences') ?? '{}') as { theme?: string }; document.documentElement.dataset.theme = saved.theme ?? 'dark'; } catch { document.documentElement.dataset.theme = 'dark'; } }, []);
-  return <div className="shell"><a className="skip-link" href="#main-content">{tr('Skip to content')}</a><TaskRail open={open} onClose={closeRail} />{open && <button className="scrim" aria-label={tr('Close navigation')} onClick={closeRail} />}<div className="content-shell"><header className="mobile-topbar"><button className="icon-button" aria-label={tr('Open navigation')} onClick={() => setOpen(true)}><Menu /></button><strong>ChatCMD</strong><span>{tr('Local')}</span></header><main id="main-content" className={location.pathname.startsWith('/tasks') ? 'tasks-main' : undefined} tabIndex={-1}><Outlet /></main></div></div>;
+  return <div className="shell"><a className="skip-link" href="#main-content">{tr('Skip to content')}</a><FunctionRail /><TaskRail open={open} onClose={closeRail} />{open && <button className="scrim" aria-label={tr('Close navigation')} onClick={closeRail} />}<div className="content-shell"><header className="mobile-topbar"><button className="icon-button" aria-label={tr('Open navigation')} onClick={() => setOpen(true)}><Menu /></button><strong>ChatCMD</strong><span>{tr('Local')}</span></header><main id="main-content" className={location.pathname.startsWith('/tasks') ? 'tasks-main' : undefined} tabIndex={-1}><Outlet /></main></div></div>;
 }
 
 function NotFound() { return <div className="state-panel"><Sparkles /><strong>{tr('Page not found')}</strong><span>{tr('This local route does not exist.')}</span><NavLink className="button primary" to="/">{tr('Open overview')}</NavLink></div>; }
