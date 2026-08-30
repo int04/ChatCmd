@@ -1,26 +1,7 @@
-use super::{resolve_workspace_root, sanitize_arguments};
+use super::sanitize_arguments;
 use chatcmd_runtime::{OperationContext, RuntimeError, RuntimeResult};
 use rmcp::model::SamplingMessage;
 use serde_json::{Map, Value, json};
-
-#[test]
-fn workspace_root_parser_accepts_current_object_shape() {
-    let value = json!({
-        "roots": [
-            { "path": "C:/", "name": "C:/" },
-            { "path": "D:/", "name": "D:/" }
-        ]
-    });
-    assert_eq!(resolve_workspace_root(&value).as_deref(), Some("C:/"));
-}
-
-#[test]
-fn workspace_root_parser_keeps_legacy_array_shape() {
-    assert_eq!(
-        resolve_workspace_root(&json!(["D:/workspace"])).as_deref(),
-        Some("D:/workspace")
-    );
-}
 
 #[test]
 fn strips_parent_correlation_from_child_tool_arguments() {
@@ -366,6 +347,7 @@ async fn text_sampling_worker_runs_tool_without_sampling_tools_capability() {
 }
 
 #[tokio::test]
+#[ignore = "local Codex fallback removed; covered by no_sampling_client_never_starts_local_executor"]
 async fn startup_failure_after_registration_is_reported_asynchronously() {
     use rmcp::{ServiceExt as _, model::CallToolRequestParams};
 
@@ -448,6 +430,7 @@ async fn startup_failure_after_registration_is_reported_asynchronously() {
 }
 
 #[tokio::test]
+#[ignore = "local Codex fallback removed; covered by no_sampling_client_never_starts_local_executor"]
 async fn no_sampling_prefers_agent_project_folder_for_shell_workdir() {
     use rmcp::{ServiceExt as _, model::CallToolRequestParams};
 
@@ -510,7 +493,7 @@ async fn no_sampling_prefers_agent_project_folder_for_shell_workdir() {
 }
 
 #[tokio::test]
-async fn no_sampling_client_starts_local_codex_fallback() {
+async fn no_sampling_client_never_starts_local_executor() {
     use rmcp::{ServiceExt as _, model::CallToolRequestParams};
 
     let runtime = FakeRuntime::default();
@@ -552,44 +535,39 @@ async fn no_sampling_client_starts_local_codex_fallback() {
         .expect("subagent tool call");
     assert!(!result.is_error.unwrap_or(false));
     let structured = result.structured_content.expect("structured result");
-    assert_eq!(structured.get("dispatchMode"), Some(&json!("localCodex")));
+    assert_eq!(
+        structured.get("dispatchMode"),
+        Some(&json!("samplingUnavailable"))
+    );
     assert_eq!(
         structured.get("nativeDelegationRequired"),
-        Some(&json!(false))
+        Some(&json!(true))
     );
-    assert_eq!(structured.get("status"), Some(&json!("running")));
-    assert_eq!(structured.get("executor"), Some(&json!("codex")));
+    assert_eq!(structured.get("status"), Some(&json!("failed")));
+    assert_eq!(structured.get("workerStarted"), Some(&json!(false)));
+    assert!(structured.get("executor").is_none());
 
-    tokio::time::timeout(std::time::Duration::from_secs(1), async {
-        loop {
-            let completed = recorded
-                .lock()
-                .expect("recorded")
-                .iter()
-                .any(|(name, _, _)| name == "agent_turn_complete");
-            if completed {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("local fallback completes");
     let calls = recorded.lock().expect("recorded");
     let names = calls
         .iter()
         .map(|(name, _, _)| name.as_str())
         .collect::<Vec<_>>();
-    assert!(names.starts_with(&[
-        "agent_subagent_start",
+    assert!(names.contains(&"agent_subagent_start"));
+    assert!(names.contains(&"fail_subagent"));
+    for forbidden in [
         "agent_user_message",
         "workspace_roots",
         "shell_create",
-        "shell_write"
-    ]));
-    assert!(names.contains(&"shell_wait"));
-    assert!(names.contains(&"shell_read"));
-    assert_eq!(names.last(), Some(&"agent_turn_complete"));
+        "shell_write",
+        "shell_wait",
+        "shell_read",
+        "agent_turn_complete",
+    ] {
+        assert!(
+            !names.contains(&forbidden),
+            "unexpected local executor call: {forbidden}"
+        );
+    }
     drop(calls);
 
     client.cancel().await.expect("cancel client");

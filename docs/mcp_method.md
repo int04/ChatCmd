@@ -136,7 +136,7 @@ Các Git method được thiết kế để tránh shell interpolation và truy�
 |---|---|---|
 | `agent_user_message` | `content` | **Bắt buộc là MCP call đầu tiên của mỗi user turn.** Đồng bộ nguyên văn user message lên ChatCMD và thiết lập/correlate `taskId` + `turnId`. `content` phải đúng nguyên văn message hiện tại. |
 | `agent_progress` | `message`, `suggestedTitle?` | Gửi một progress milestone ngắn để UI/server biết agent đang làm tới đâu. Không gọi sau `agent_turn_complete`. |
-| `agent_subagent_start` | `name`, `request` | Tạo và dispatch một child agent. Server ưu tiên model sampling nếu có; fallback có thể chạy local Codex worker read-only trong child task. |
+| `agent_subagent_start` | `name`, `request` | Tạo và dispatch một child agent khi ChatGPT chủ động chia việc hoặc người dùng yêu cầu chia agent. Chỉ sử dụng model sampling do ChatGPT/MCP host cung cấp; nếu host không hỗ trợ sampling thì trả `samplingUnavailable`/`failed` và tuyệt đối không khởi chạy Codex hay executor local. |
 | `agent_subagent_wait` | `timeoutMs?` | Chờ các child agent của parent turn. Nếu `allFinished=false` thì tiếp tục gọi lại trước khi finalize. |
 | `agent_turn_complete` | `content`, `suggestedTitle?` | **Bắt buộc là MCP call cuối cùng.** Xác nhận turn đã hoàn tất và gửi đúng nội dung cuối cùng agent sẽ trả cho user. Chỉ được gọi đúng một lần sau khi mọi tool/sub-agent đã xong. |
 

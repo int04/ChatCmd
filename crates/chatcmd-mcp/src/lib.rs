@@ -469,7 +469,7 @@ macro_rules! tool_methods {
                 }
             )+
 
-            #[tool(description = "Create and dispatch one child agent. Required fields: name, request. Pass the AI-chosen name and delegated request. ChatCMD uses server-to-model sampling when available; otherwise it starts a local Codex CLI worker in a read-only sandbox inside the reserved child task.")]
+            #[tool(description = "Create and dispatch one child agent. Required fields: name, request. Pass the AI-chosen name and delegated request. ChatCMD delegates only through model sampling advertised by the connected ChatGPT/MCP host. If sampling is unavailable, no local executor is started and the child is returned as failed so the parent can continue or use host-native delegation when available.")]
             async fn agent_subagent_start(
                 &self,
                 Parameters(arguments): Parameters<SubagentStartArgs>,

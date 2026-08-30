@@ -1,6 +1,6 @@
 #![allow(deprecated)]
 
-use std::{collections::HashSet, path::PathBuf, sync::Arc};
+use std::{collections::HashSet, sync::Arc};
 
 use chatcmd_runtime::{OperationContext, RuntimeError, RuntimeResult};
 use rmcp::{
@@ -21,8 +21,6 @@ use crate::{
 const MAX_ROUNDS: usize = 24;
 const MAX_TOOL_RESULT_CHARS: usize = 60_000;
 const MAX_FINAL_CHARS: usize = 100_000;
-const LOCAL_EXECUTOR_WAIT_MS: u64 = 30_000;
-const LOCAL_EXECUTOR_MAX_READ_EVENTS: usize = 2_000;
 
 pub(super) async fn dispatch_registered_subagent(
     runtime: Arc<dyn RuntimeApi>,
@@ -68,17 +66,19 @@ pub(super) async fn dispatch_registered_subagent(
         .is_some_and(|info| info.capabilities.sampling.is_some());
 
     if !sampling {
-        return start_local_codex_subagent(
-            runtime,
-            parent_context,
+        let message = "ChatGPT/MCP host does not advertise model sampling; ChatCMD will not start any local Codex fallback. Sub-agent delegation is available only when the connected ChatGPT host supports sampling or provides its own native delegation.";
+        let _ = runtime.fail_subagent(&child_task_id, message).await;
+        return Ok(enrich_registration(
             registration,
-            subagent_id,
-            child_task_id,
-            name,
-            delegated_prompt,
-            request,
-        )
-        .await;
+            json!({
+                "dispatchMode": "samplingUnavailable",
+                "nativeDelegationRequired": true,
+                "status": "failed",
+                "workerStarted": false,
+                "startupError": message,
+                "instruction": "Do not start a local executor. Continue in the parent agent unless the ChatGPT host can delegate natively."
+            }),
+        ));
     }
 
     let turn_id = format!("turn-{subagent_id}");
@@ -166,360 +166,6 @@ pub(super) async fn dispatch_registered_subagent(
     });
 
     Ok(response)
-}
-
-async fn start_local_codex_subagent(
-    runtime: Arc<dyn RuntimeApi>,
-    parent_context: OperationContext,
-    registration: Value,
-    subagent_id: String,
-    child_task_id: String,
-    name: String,
-    delegated_prompt: String,
-    request: &str,
-) -> RuntimeResult<Value> {
-    let turn_id = format!("turn-{subagent_id}");
-    let child_user_context = child_context(
-        &parent_context,
-        &child_task_id,
-        &turn_id,
-        "agent_user_message",
-        format!("subagent-user-{subagent_id}"),
-    );
-    let child_sync = match runtime
-        .call(
-            "agent_user_message",
-            child_user_context,
-            json!({ "content": delegated_prompt }),
-        )
-        .await
-    {
-        Ok(value) => value,
-        Err(error) => {
-            let _ = runtime
-                .fail_subagent(
-                    &child_task_id,
-                    &format!("local child startup failed: {}", error.message),
-                )
-                .await;
-            return Err(error);
-        }
-    };
-    if registration.get("duplicate").and_then(Value::as_bool) == Some(true)
-        && child_sync.get("duplicate").and_then(Value::as_bool) == Some(true)
-    {
-        return Ok(enrich_registration(
-            registration,
-            json!({
-                "dispatchMode": "existing",
-                "workerStarted": false,
-                "status": "running",
-                "instruction": "An existing worker already claimed this child. Do not start a duplicate worker."
-            }),
-        ));
-    }
-
-    let response = enrich_registration(
-        registration,
-        json!({
-            "dispatchMode": "localCodex",
-            "nativeDelegationRequired": false,
-            "status": "running",
-            "workerStarted": true,
-            "executor": "codex",
-            "sandbox": "read-only",
-            "instruction": "The MCP client does not advertise sampling, so ChatCMD started a local Codex CLI worker in the reserved child task. Child approvals are queued independently; wait for completion with agent_subagent_wait."
-        }),
-    );
-    let request = request.trim().to_owned();
-    tokio::spawn(async move {
-        if let Err(error) = bootstrap_local_codex_subagent(
-            runtime.clone(),
-            parent_context,
-            subagent_id,
-            child_task_id.clone(),
-            turn_id,
-            name,
-            request,
-        )
-        .await
-        {
-            let _ = runtime.fail_subagent(&child_task_id, &error.message).await;
-        }
-    });
-    Ok(response)
-}
-
-async fn bootstrap_local_codex_subagent(
-    runtime: Arc<dyn RuntimeApi>,
-    parent_context: OperationContext,
-    subagent_id: String,
-    child_task_id: String,
-    turn_id: String,
-    name: String,
-    request: String,
-) -> RuntimeResult<()> {
-    let workspace = match runtime.project_folder(&parent_context.agent_id).await {
-        Ok(Some(value)) if !value.trim().is_empty() => value,
-        Ok(_) => {
-            let roots_context = child_context(
-                &parent_context,
-                &child_task_id,
-                &turn_id,
-                "workspace_roots",
-                format!("subagent-roots-{subagent_id}"),
-            );
-            let roots = runtime
-                .call("workspace_roots", roots_context, json!({}))
-                .await?;
-            resolve_workspace_root(&roots).ok_or_else(|| {
-                RuntimeError::new(
-                    "subagent_workspace_missing",
-                    "local sub-agent executor could not resolve the agent project folder or a workspace root",
-                )
-            })?
-        }
-        Err(error) => return Err(error),
-    };
-
-    let output_path = local_executor_output_path(&subagent_id);
-    let executor_prompt = local_codex_prompt(&name, &request);
-    let shell_create_context = child_context(
-        &parent_context,
-        &child_task_id,
-        &turn_id,
-        "shell_create",
-        format!("subagent-shell-create-{subagent_id}"),
-    );
-    let shell = runtime
-        .call(
-            "shell_create",
-            shell_create_context,
-            json!({
-                "workingDirectory": workspace,
-                "environment": {
-                    "CHATCMD_SUBAGENT_PROMPT": executor_prompt,
-                    "CHATCMD_SUBAGENT_OUTPUT": output_path.to_string_lossy()
-                }
-            }),
-        )
-        .await?;
-    let session_id = required_string(&shell, "sessionId")?.to_owned();
-    let platform = runtime.local_device().platform;
-    let command = local_codex_command(&platform);
-    let shell_write_context = child_context(
-        &parent_context,
-        &child_task_id,
-        &turn_id,
-        "shell_write",
-        format!("subagent-shell-write-{subagent_id}"),
-    );
-    runtime
-        .call(
-            "shell_write",
-            shell_write_context,
-            json!({
-                "sessionId": session_id,
-                "text": command,
-                "appendNewLine": true
-            }),
-        )
-        .await?;
-
-    tokio::spawn(async move {
-        run_local_codex_worker(
-            runtime,
-            parent_context,
-            subagent_id,
-            child_task_id,
-            turn_id,
-            session_id,
-            output_path,
-        )
-        .await;
-    });
-    Ok(())
-}
-
-async fn run_local_codex_worker(
-    runtime: Arc<dyn RuntimeApi>,
-    parent_context: OperationContext,
-    subagent_id: String,
-    child_task_id: String,
-    turn_id: String,
-    session_id: String,
-    output_path: PathBuf,
-) {
-    let mut wait_round = 0usize;
-    let exit_code = loop {
-        let context = child_context(
-            &parent_context,
-            &child_task_id,
-            &turn_id,
-            "shell_wait",
-            format!("subagent-shell-wait-{subagent_id}-{wait_round}"),
-        );
-        let wait = match runtime
-            .call(
-                "shell_wait",
-                context,
-                json!({ "sessionId": session_id, "timeoutMs": LOCAL_EXECUTOR_WAIT_MS }),
-            )
-            .await
-        {
-            Ok(value) => value,
-            Err(error) => {
-                let _ = runtime.fail_subagent(&child_task_id, &error.message).await;
-                cleanup_local_output(&output_path);
-                return;
-            }
-        };
-        if wait.get("completed").and_then(Value::as_bool) == Some(true) {
-            break wait.get("exitCode").and_then(Value::as_i64).unwrap_or(-1);
-        }
-        wait_round = wait_round.saturating_add(1);
-    };
-
-    let read_context = child_context(
-        &parent_context,
-        &child_task_id,
-        &turn_id,
-        "shell_read",
-        format!("subagent-shell-read-{subagent_id}"),
-    );
-    let shell_output = runtime
-        .call(
-            "shell_read",
-            read_context,
-            json!({
-                "sessionId": session_id,
-                "afterSequence": 0,
-                "maxEvents": LOCAL_EXECUTOR_MAX_READ_EVENTS
-            }),
-        )
-        .await
-        .map(|value| shell_output_text(&value))
-        .unwrap_or_default();
-
-    if exit_code != 0 {
-        let message = local_executor_failure(exit_code, &shell_output);
-        let _ = runtime.fail_subagent(&child_task_id, &message).await;
-        cleanup_local_output(&output_path);
-        return;
-    }
-
-    let final_text = std::fs::read_to_string(&output_path)
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-        .or_else(|| fallback_codex_final(&shell_output));
-    cleanup_local_output(&output_path);
-    let Some(final_text) = final_text else {
-        let _ = runtime
-            .fail_subagent(
-                &child_task_id,
-                "local Codex worker exited successfully but produced no final response",
-            )
-            .await;
-        return;
-    };
-
-    let completion_context = child_context(
-        &parent_context,
-        &child_task_id,
-        &turn_id,
-        "agent_turn_complete",
-        format!("subagent-complete-{subagent_id}"),
-    );
-    if let Err(error) = runtime
-        .call(
-            "agent_turn_complete",
-            completion_context,
-            json!({ "content": limit_text(&final_text, MAX_FINAL_CHARS) }),
-        )
-        .await
-    {
-        let _ = runtime.fail_subagent(&child_task_id, &error.message).await;
-    }
-}
-
-fn local_codex_prompt(name: &str, request: &str) -> String {
-    format!(
-        "You are ChatCMD child agent {name}. Complete only the delegated request below. This fallback worker is intentionally read-only: inspect files, git state/diffs, logs, and other existing data as needed, but do not modify files, commit, install packages, or change system state. Return a concise final result for the parent agent.\n\nDELEGATED REQUEST:\n{}",
-        request.trim()
-    )
-}
-
-fn local_codex_command(platform: &str) -> &'static str {
-    if platform.eq_ignore_ascii_case("windows") {
-        "codex exec --ephemeral --sandbox read-only --color never -o \"$env:CHATCMD_SUBAGENT_OUTPUT\" \"$env:CHATCMD_SUBAGENT_PROMPT\"; exit $LASTEXITCODE"
-    } else {
-        "codex exec --ephemeral --sandbox read-only --color never -o \"$CHATCMD_SUBAGENT_OUTPUT\" \"$CHATCMD_SUBAGENT_PROMPT\"; exit $?"
-    }
-}
-
-fn resolve_workspace_root(value: &Value) -> Option<String> {
-    fn root_path(value: &Value) -> Option<String> {
-        match value {
-            Value::String(path) => (!path.trim().is_empty()).then(|| path.to_owned()),
-            Value::Object(object) => object
-                .get("path")
-                .and_then(Value::as_str)
-                .filter(|path| !path.trim().is_empty())
-                .map(str::to_owned),
-            _ => None,
-        }
-    }
-
-    match value {
-        Value::Array(items) => items.iter().find_map(root_path),
-        Value::Object(object) => object
-            .get("roots")
-            .and_then(Value::as_array)
-            .and_then(|items| items.iter().find_map(root_path)),
-        _ => None,
-    }
-}
-
-fn local_executor_output_path(subagent_id: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("chatcmd-{subagent_id}-final.txt"))
-}
-
-fn cleanup_local_output(path: &PathBuf) {
-    let _ = std::fs::remove_file(path);
-}
-
-fn shell_output_text(value: &Value) -> String {
-    value
-        .get("events")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|event| event.get("data").and_then(Value::as_str))
-        .collect::<Vec<_>>()
-        .join("")
-}
-
-fn local_executor_failure(exit_code: i64, output: &str) -> String {
-    let tail = output.chars().rev().take(4_000).collect::<String>();
-    let tail = tail.chars().rev().collect::<String>();
-    if tail.trim().is_empty() {
-        format!("local Codex sub-agent executor failed with exit code {exit_code}")
-    } else {
-        format!(
-            "local Codex sub-agent executor failed with exit code {exit_code}: {}",
-            tail.trim()
-        )
-    }
-}
-
-fn fallback_codex_final(output: &str) -> Option<String> {
-    let marker = "\ncodex\n";
-    let start = output.rfind(marker)? + marker.len();
-    let tail = &output[start..];
-    let end = tail.find("\ntokens used\n").unwrap_or(tail.len());
-    let final_text = tail[..end].trim();
-    (!final_text.is_empty()).then(|| final_text.to_owned())
 }
 
 async fn run_claimed_sampling_subagent(
