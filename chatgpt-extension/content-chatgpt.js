@@ -1,5 +1,9 @@
 let activeRequest = null;
 
+void chrome.runtime.sendMessage({ type: 'chatcmd-return-binding-status' }, (response) => {
+  if (response?.ok && response.enabled) renderReturnToChatCmd(true);
+});
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === 'chatcmd-chatgpt-run') {
     if (activeRequest) {
@@ -30,6 +34,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       composerReady: Boolean(composer),
       generating,
     });
+    return false;
+  }
+  if (message?.type === 'chatcmd-return-binding') {
+    renderReturnToChatCmd(message.enabled !== false);
+    sendResponse({ ok: true });
     return false;
   }
   return false;
@@ -318,6 +327,32 @@ async function waitFor(factory, timeoutMs, message) {
 async function progress(payload) {
   try { await chrome.runtime.sendMessage({ type: 'chatcmd-chatgpt-progress', ...payload }); }
   catch (error) { console.warn('[ChatCMD bridge]', error); }
+}
+
+function renderReturnToChatCmd(enabled) {
+  const id = 'chatcmd-return-to-app';
+  document.getElementById(id)?.remove();
+  if (!enabled) return;
+  const button = document.createElement('button');
+  button.id = id;
+  button.type = 'button';
+  button.setAttribute('aria-label', 'Quay lại ChatCMD');
+  button.title = 'Quay lại ChatCMD';
+  button.innerHTML = '<span aria-hidden="true">↩</span><strong>ChatCMD</strong>';
+  Object.assign(button.style, {
+    position: 'fixed', right: '18px', bottom: '92px', zIndex: '2147483647',
+    display: 'inline-flex', alignItems: 'center', gap: '8px', minHeight: '42px',
+    padding: '0 14px', border: '1px solid rgba(255,255,255,.16)', borderRadius: '999px',
+    background: 'rgba(20,20,20,.92)', color: '#fff', boxShadow: '0 12px 36px rgba(0,0,0,.28)',
+    backdropFilter: 'blur(14px)', font: '600 13px/1 system-ui,-apple-system,Segoe UI,sans-serif', cursor: 'pointer'
+  });
+  button.addEventListener('mouseenter', () => { button.style.transform = 'translateY(-1px)'; button.style.background = 'rgba(34,34,34,.96)'; });
+  button.addEventListener('mouseleave', () => { button.style.transform = ''; button.style.background = 'rgba(20,20,20,.92)'; });
+  button.addEventListener('click', () => {
+    button.disabled = true;
+    chrome.runtime.sendMessage({ type: 'chatcmd-return-to-source' }, () => { button.disabled = false; });
+  });
+  document.documentElement.appendChild(button);
 }
 
 function normalize(value) { return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase(); }

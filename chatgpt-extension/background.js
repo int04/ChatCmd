@@ -1,5 +1,6 @@
 const REQUEST_PREFIX = 'chatcmd-request:';
 const CONVERSATION_PREFIX = 'chatcmd-conversation:';
+const RETURN_TAB_PREFIX = 'chatcmd-return-tab:';
 const LOG_KEY = 'chatcmd-extension-logs';
 const MAX_LOGS = 200;
 const CHATGPT_HOME = 'https://chatgpt.com/';
@@ -16,17 +17,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === 'send') {
       try {
         const localBaseUrl = localOrigin(message.localBaseUrl);
-        void startRequest({ ...message, localBaseUrl }).catch((error) => void reportFailure(message.requestId, localBaseUrl, error));
+        void startRequest({ ...message, localBaseUrl, sourceTabId: sender.tab?.id }).catch((error) => void reportFailure(message.requestId, localBaseUrl, error));
         sendResponse({ ok: true });
       } catch (error) { sendResponse({ ok: false, error: errorMessage(error) }); }
       return false;
     }
     if (message.action === 'open-tab') {
-      void openConversationTab(message.conversationUrl).then(() => sendResponse({ ok: true })).catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
+      void openConversationTab(message.conversationUrl, sender.tab?.id).then(() => sendResponse({ ok: true })).catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
       return true;
     }
     if (message.action === 'focus-tab') {
-      void focusConversationTab(message.conversationUrl).then(() => sendResponse({ ok: true })).catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
+      void focusConversationTab(message.conversationUrl, sender.tab?.id).then(() => sendResponse({ ok: true })).catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
       return true;
     }
     if (message.action === 'close-tab') {
@@ -50,6 +51,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     void handleProgress(message, sender.tab?.id).then(() => sendResponse({ ok: true })).catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
     return true;
   }
+  if (message.type === 'chatcmd-return-to-source') {
+    void focusReturnSource(sender.tab?.id).then(() => sendResponse({ ok: true })).catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
+    return true;
+  }
+  if (message.type === 'chatcmd-return-binding-status') {
+    void hasReturnSource(sender.tab?.id).then((enabled) => sendResponse({ ok: true, enabled })).catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
+    return true;
+  }
   return false;
 });
 
@@ -63,6 +72,7 @@ async function startRequest(message) {
   const tab = message.conversationUrl
     ? await acquireConversationTab(target)
     : await acquireNewConversationTab();
+  await bindReturnSource(tab.id, message.sourceTabId);
   await chrome.storage.session.set({
     [requestKey(message.requestId)]: {
       localBaseUrl: message.localBaseUrl,
@@ -129,6 +139,10 @@ async function handleClosedTab(tabId) {
   const removals = [];
   const failures = [];
   for (const [key, value] of Object.entries(stored)) {
+    if (key === `${RETURN_TAB_PREFIX}${tabId}` || (key.startsWith(RETURN_TAB_PREFIX) && value?.sourceTabId === tabId)) {
+      removals.push(key);
+      continue;
+    }
     if (!value || typeof value !== 'object' || value.tabId !== tabId) continue;
     if (key.startsWith(CONVERSATION_PREFIX)) removals.push(key);
     if (key.startsWith(REQUEST_PREFIX) && value.localBaseUrl) {
@@ -136,7 +150,7 @@ async function handleClosedTab(tabId) {
       failures.push(reportFailure(requestId, value.localBaseUrl, new Error('Tab ChatGPT liên kết với cuộc trò chuyện đã bị đóng. Mở lại cuộc trò chuyện ChatGPT để tiếp tục.')));
     }
   }
-  if (removals.length) await chrome.storage.session.remove(removals);
+  if (removals.length) await chrome.storage.session.remove([...new Set(removals)]);
   await Promise.allSettled(failures);
 }
 
@@ -174,21 +188,27 @@ async function acquireNewConversationTab() {
   return tab;
 }
 
-async function openConversationTab(conversationUrl) {
+async function openConversationTab(conversationUrl, sourceTabId) {
   const target = conversationTarget(conversationUrl);
   const existing = await findConversationTab(target);
-  if (existing?.id) return existing;
+  if (existing?.id) {
+    await bindReturnSource(existing.id, sourceTabId);
+    return existing;
+  }
   const tab = await chrome.tabs.create({ url: target, active: false });
   if (!tab?.id) throw new Error('Không thể mở tab ChatGPT của cuộc trò chuyện này.');
   const conversationId = conversationIdFromUrl(target);
   if (conversationId) await bindConversationTab(conversationId, tab.id);
+  await waitForTab(tab.id);
+  await bindReturnSource(tab.id, sourceTabId);
   return tab;
 }
 
-async function focusConversationTab(conversationUrl) {
+async function focusConversationTab(conversationUrl, sourceTabId) {
   const target = conversationTarget(conversationUrl);
   const tab = await findConversationTab(target);
   if (!tab?.id) throw new Error('Tab ChatGPT của cuộc trò chuyện này không còn mở.');
+  await bindReturnSource(tab.id, sourceTabId);
   await chrome.tabs.update(tab.id, { active: true });
   if (tab.windowId) await chrome.windows.update(tab.windowId, { focused: true });
 }
@@ -233,6 +253,33 @@ async function findConversationTab(target) {
 async function bindConversationTab(conversationId, tabId) {
   if (!conversationId || !tabId) return;
   await chrome.storage.session.set({ [conversationKey(conversationId)]: { tabId } });
+}
+
+async function bindReturnSource(chatGptTabId, sourceTabId) {
+  if (!chatGptTabId || !sourceTabId) return;
+  await chrome.storage.session.set({ [`${RETURN_TAB_PREFIX}${chatGptTabId}`]: { sourceTabId } });
+  await sendToChatGpt(chatGptTabId, { type: 'chatcmd-return-binding', enabled: true }, { quiet: true });
+}
+
+async function focusReturnSource(chatGptTabId) {
+  if (!chatGptTabId) throw new Error('Không xác định được tab ChatGPT hiện tại.');
+  const key = `${RETURN_TAB_PREFIX}${chatGptTabId}`;
+  const stored = await chrome.storage.session.get(key);
+  const sourceTabId = stored[key]?.sourceTabId;
+  if (!sourceTabId) throw new Error('Không tìm thấy tab ChatCMD đã mở tab ChatGPT này.');
+  const source = await safeTab(sourceTabId);
+  if (!source?.id) throw new Error('Tab ChatCMD nguồn đã bị đóng.');
+  await chrome.tabs.update(source.id, { active: true });
+  if (source.windowId) await chrome.windows.update(source.windowId, { focused: true });
+}
+
+async function hasReturnSource(chatGptTabId) {
+  if (!chatGptTabId) return false;
+  const key = `${RETURN_TAB_PREFIX}${chatGptTabId}`;
+  const stored = await chrome.storage.session.get(key);
+  const sourceTabId = stored[key]?.sourceTabId;
+  if (!sourceTabId) return false;
+  return Boolean(await safeTab(sourceTabId));
 }
 
 async function conversationBindings() {
