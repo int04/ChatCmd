@@ -17,6 +17,36 @@ export interface GiftCodeRedeemResult {
   expiresAt: string;
 }
 
+export interface BillingBalance { vnd: number }
+export interface ServicePlan { id: number; name: string; price: number; type: number; days: number }
+export interface DealCheckResult {
+  valid: boolean;
+  dealId: number;
+  code: string;
+  value: number;
+  remainingCount: number;
+  planId: number;
+  planName: string;
+  originalPrice: number;
+  discountAmount: number;
+  finalPrice: number;
+}
+export interface PlanPurchaseResult {
+  success: boolean;
+  planId: number;
+  planName: string;
+  planType: number;
+  days: number;
+  extended: boolean;
+  originalPrice: number;
+  discountAmount: number;
+  finalPrice: number;
+  remainingBalance: number;
+  dealCode?: string | null;
+  remainingDealCount?: number | null;
+  expiresAt: string;
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const method = (init.method ?? 'GET').toUpperCase();
   let response: Response;
@@ -56,6 +86,10 @@ export const api = {
   login: (email: string, password: string) => request<AuthResult>('/api/local/auth/login', { method: 'POST', body: json({ email, password }) }),
   register: (email: string, password: string) => request<AuthResult>('/api/local/auth/register', { method: 'POST', body: json({ email, password }) }),
   authInfo: () => request<AuthInfo>('/api/local/auth/info'),
+  billingBalance: () => request<BillingBalance>(backendPath('billing/balance')),
+  servicePlans: () => request<ServicePlan[]>(backendPath('plans')),
+  checkDeal: (code: string, planId: number) => request<DealCheckResult>(backendPath('deals/check'), { method: 'POST', body: json({ code, planId }) }),
+  purchasePlan: (planId: number, dealCode: string | null) => request<PlanPurchaseResult>(backendPath('plans/purchase'), { method: 'POST', body: json({ planId, dealCode }) }),
   redeemGiftCode: (code: string) => request<GiftCodeRedeemResult>(backendPath('giftcode/redeem'), { method: 'POST', body: json({ code }) }),
   changePassword: (currentPassword: string, newPassword: string) => request<{ success: boolean; message: string }>('/api/local/auth/change-password', { method: 'POST', body: json({ currentPassword, newPassword }) }),
   logout: () => request<AuthResult>('/api/local/auth/logout', { method: 'POST', body: '{}' }),

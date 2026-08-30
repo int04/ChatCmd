@@ -1,8 +1,11 @@
-import { Gift, KeyRound, Orbit, ShieldCheck, UserRound } from 'lucide-react';
-import { useMemo, useState } from 'react';
-import { api, ApiError, type GiftCodeRedeemResult } from '../api';
+import { Gift, KeyRound, Orbit, PackageCheck, ShieldCheck, UserRound, WalletCards } from 'lucide-react';
+import { useCallback, useMemo, useState } from 'react';
+import { api, ApiError, type GiftCodeRedeemResult, type PlanPurchaseResult } from '../api';
 import { useAuth } from '../auth';
 import { tr } from '../i18n';
+import { billingTr, formatVnd } from './billingI18n';
+import { PlanPurchaseModal } from './PlanPurchaseModal';
+import { TopUpModal } from './TopUpModal';
 
 type AccountTab = 'info' | 'giftcode' | 'password';
 
@@ -24,8 +27,21 @@ export function AccountSettings() {
   const [giftRedeeming, setGiftRedeeming] = useState(false);
   const [giftProblem, setGiftProblem] = useState('');
   const [giftResult, setGiftResult] = useState<GiftCodeRedeemResult | null>(null);
+  const [topUpOpen, setTopUpOpen] = useState(false);
+  const [purchaseOpen, setPurchaseOpen] = useState(false);
 
   const planRemaining = useMemo(() => formatRemaining(user?.plan.expriAt), [user?.plan.expriAt]);
+  const handleBalanceChanged = useCallback(async (balance: number) => {
+    setTopUpOpen(false);
+    await refresh();
+    window.alert(billingTr('Top up successful, balance {balance}', { balance: `${new Intl.NumberFormat('vi-VN').format(balance)}đ` }));
+  }, [refresh]);
+  const handlePurchased = useCallback(async (result: PlanPurchaseResult) => {
+    setPurchaseOpen(false);
+    try { await api.billingBalance(); } catch { /* auth info still refreshes the account snapshot */ }
+    await refresh();
+    window.alert(billingTr(result.extended ? 'Plan renewed successfully.' : 'Plan purchased successfully.'));
+  }, [refresh]);
   if (!user) return null;
   const isFree = user.plan.type === 0 || user.plan.name.toUpperCase() === 'FREE';
 
@@ -119,8 +135,8 @@ export function AccountSettings() {
     {activeTab === 'info' && <div className="account-info-grid" role="tabpanel">
       <AccountValue label="ID" value={String(user.id)} />
       <AccountValue label={tr('Email')} value={user.email} />
-      <AccountValue label={tr('Remaining balance')} value={formatVnd(user.vnd)} />
-      <AccountValue label={tr('Plan')} value={user.plan.name} />
+      <AccountValue label={tr('Remaining balance')} value={formatVnd(user.vnd)} action={<button type="button" className="account-value-action" onClick={() => setTopUpOpen(true)}><WalletCards />{billingTr('Top up')}</button>} />
+      <AccountValue label={tr('Plan')} value={user.plan.name} action={<button type="button" className="account-value-action" onClick={() => setPurchaseOpen(true)}><PackageCheck />{billingTr('Buy service plan')}</button>} />
       {!isFree && user.plan.expriAt && <AccountValue label={tr('Plan time remaining')} value={planRemaining ?? formatDate(user.plan.expriAt)} hint={formatDate(user.plan.expriAt)} />}
       {isFree && <AccountValue label={tr('Use until')} value={formatDate(user.useNextTime)} />}
       {isFree && <AccountValue label={tr('Next reset')} value={formatDate(user.useNextReset)} />}
@@ -161,6 +177,9 @@ export function AccountSettings() {
       {problem && <div className="account-password-error" role="alert">{problem}</div>}
       <div className="account-password-actions"><button type="button" className="button primary" disabled={submitting} onClick={requestPasswordChange}><KeyRound />{submitting ? tr('Changing password...') : tr('Change password')}</button></div>
     </div>}
+
+    {topUpOpen && <TopUpModal userId={user.id} currentBalance={user.vnd} onClose={() => setTopUpOpen(false)} onBalanceChanged={handleBalanceChanged} />}
+    {purchaseOpen && <PlanPurchaseModal currentPlanType={user.plan.type} onClose={() => setPurchaseOpen(false)} onTopUp={() => setTopUpOpen(true)} onPurchased={handlePurchased} />}
 
     {challengeOpen && <div className="modal-backdrop account-constellation-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !submitting && !giftRedeeming) { setChallengeOpen(false); setChallengePurpose(null); } }}>
       <div className={`modal account-constellation-modal ${challengeVerified ? 'verified' : ''}`} role="dialog" aria-modal="true" aria-labelledby="security-constellation-title">
@@ -226,12 +245,8 @@ function shuffle<T>(items: T[]) {
   return result;
 }
 
-function AccountValue({ label, value, hint }: { label: string; value: string; hint?: string }) {
-  return <div className="account-value"><span>{label}</span><strong>{value || '—'}</strong>{hint && <small>{hint}</small>}</div>;
-}
-
-function formatVnd(value: number) {
-  return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND', maximumFractionDigits: 0 }).format(value);
+function AccountValue({ label, value, hint, action }: { label: string; value: string; hint?: string; action?: React.ReactNode }) {
+  return <div className="account-value"><span>{label}</span><div className="account-value-main"><strong>{value || '—'}</strong>{action}</div>{hint && <small>{hint}</small>}</div>;
 }
 
 function formatDate(value?: string | null) {

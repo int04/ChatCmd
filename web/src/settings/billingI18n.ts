@@ -1,0 +1,70 @@
+import { getAppLanguage } from '../i18n';
+
+const vi: Record<string, string> = {
+  'Top up': 'Nạp tiền',
+  'Top up balance': 'Nạp tiền vào tài khoản',
+  'Choose a payment method and follow the instructions below.': 'Chọn phương thức thanh toán và làm theo hướng dẫn bên dưới.',
+  'Bank transfer': 'Chuyển khoản ngân hàng',
+  'Choose amount': 'Chọn số tiền',
+  'Select a quick amount or enter another amount.': 'Chọn nhanh số tiền hoặc tự nhập số tiền khác.',
+  'Custom amount': 'Số tiền khác',
+  'Enter amount': 'Nhập số tiền',
+  'Continue': 'Tiếp tục',
+  'Amount must be greater than 0.': 'Số tiền phải lớn hơn 0.',
+  'Preparing payment information...': 'Đang chuẩn bị thông tin thanh toán...',
+  'Scan QR to transfer': 'Quét QR để chuyển khoản',
+  'Account': 'Tên tài khoản',
+  'Amount': 'Số tiền',
+  'Transfer content': 'Nội dung',
+  'Cancel transaction': 'Hủy giao dịch',
+  'Waiting for bank transfer...': 'Đang chờ giao dịch chuyển khoản...',
+  'Balance is checked automatically every few seconds.': 'Số dư được kiểm tra tự động sau mỗi vài giây.',
+  'Could not check current balance.': 'Không thể kiểm tra số dư hiện tại.',
+  'Top up successful, balance {balance}': 'Nạp tiền thành công, số dư {balance}',
+  'Buy service plan': 'Mua gói dịch vụ',
+  'Service plans': 'Gói dịch vụ',
+  'Choose the plan you want to buy or renew.': 'Chọn gói bạn muốn mua hoặc gia hạn.',
+  'Loading service plans...': 'Đang tải danh sách gói dịch vụ...',
+  'Could not load service plans.': 'Không thể tải danh sách gói dịch vụ.',
+  'Current plan': 'Gói hiện tại',
+  'Unavailable': 'Không thể mua',
+  '{days} days': '{days} ngày',
+  'Select plan': 'Chọn gói',
+  'Plan payment': 'Thanh toán gói dịch vụ',
+  'Back to plans': 'Quay lại danh sách gói',
+  'Current balance': 'Số dư hiện tại',
+  'Original price': 'Giá gốc',
+  'Discount': 'Giảm giá',
+  'Final price': 'Thành tiền',
+  'Discount code': 'Mã giảm giá',
+  'Enter discount code': 'Nhập mã giảm giá',
+  'Check code': 'Kiểm tra mã',
+  'Checking...': 'Đang kiểm tra...',
+  'Discount code applied: {value}% off.': 'Đã áp dụng mã giảm {value}%.',
+  'Enter and check the discount code before purchasing.': 'Hãy nhập và kiểm tra mã giảm giá trước khi mua.',
+  'Purchase plan': 'Xác nhận mua gói',
+  'Purchasing...': 'Đang mua gói...',
+  'Not enough balance for this plan.': 'Số dư không đủ để mua gói này.',
+  'Plan purchased successfully.': 'Mua gói dịch vụ thành công.',
+  'Plan renewed successfully.': 'Gia hạn gói dịch vụ thành công.',
+  'Deal code is required.': 'Vui lòng nhập mã giảm giá.',
+  'Deal code does not exist.': 'Mã giảm giá không tồn tại.',
+  'Deal code has no remaining uses.': 'Mã giảm giá đã hết lượt sử dụng.',
+  'Deal configuration is invalid.': 'Cấu hình mã giảm giá không hợp lệ.',
+  'Deal code does not apply to this plan.': 'Mã giảm giá không áp dụng cho gói này.',
+  'Plan does not exist.': 'Gói dịch vụ không tồn tại.',
+  'This plan cannot be purchased.': 'Gói dịch vụ này không thể mua.',
+  'You cannot buy a lower plan than your current plan.': 'Bạn không thể mua gói thấp hơn gói hiện tại.',
+  'Your account could not be found. Please sign in again.': 'Không tìm thấy tài khoản của bạn. Vui lòng đăng nhập lại.',
+  'Purchase failed.': 'Mua gói thất bại.',
+};
+
+export function billingTr(source: string, params?: Record<string, string | number>) {
+  let value = getAppLanguage() === 'vi' ? vi[source] ?? source : source;
+  if (params) value = value.replace(/\{([A-Za-z0-9_]+)\}/g, (match, key: string) => params[key] === undefined ? match : String(params[key]));
+  return value;
+}
+
+export function formatVnd(value: number) {
+  return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND', maximumFractionDigits: 0 }).format(value);
+}
