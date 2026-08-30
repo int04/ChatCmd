@@ -1,13 +1,13 @@
-import { KeyRound, Orbit, ShieldCheck, UserRound } from 'lucide-react';
+import { Gift, KeyRound, Orbit, ShieldCheck, UserRound } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { api } from '../api';
+import { api, ApiError, type GiftCodeRedeemResult } from '../api';
 import { useAuth } from '../auth';
 import { tr } from '../i18n';
 
-type AccountTab = 'info' | 'password';
+type AccountTab = 'info' | 'giftcode' | 'password';
 
 export function AccountSettings() {
-  const { user } = useAuth();
+  const { user, refresh } = useAuth();
   const [activeTab, setActiveTab] = useState<AccountTab>('info');
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -19,10 +19,30 @@ export function AccountSettings() {
   const [challengeVerified, setChallengeVerified] = useState(false);
   const [challengeHint, setChallengeHint] = useState('');
   const [challengeOpen, setChallengeOpen] = useState(false);
+  const [giftCode, setGiftCode] = useState('');
+  const [giftRedeeming, setGiftRedeeming] = useState(false);
+  const [giftProblem, setGiftProblem] = useState('');
+  const [giftResult, setGiftResult] = useState<GiftCodeRedeemResult | null>(null);
 
   const planRemaining = useMemo(() => formatRemaining(user?.plan.expriAt), [user?.plan.expriAt]);
   if (!user) return null;
   const isFree = user.plan.type === 0 || user.plan.name.toUpperCase() === 'FREE';
+
+  const redeemGiftCode = async () => {
+    setGiftProblem('');
+    setGiftResult(null);
+    setGiftRedeeming(true);
+    try {
+      const result = await api.redeemGiftCode(giftCode);
+      setGiftResult(result);
+      setGiftCode('');
+      await refresh();
+    } catch (error) {
+      setGiftProblem(giftCodeErrorMessage(error));
+    } finally {
+      setGiftRedeeming(false);
+    }
+  };
 
   const resetChallenge = () => {
     setChallenge(createHumanChallenge());
@@ -74,6 +94,7 @@ export function AccountSettings() {
   return <div className="account-settings">
     <div className="account-subtabs" role="tablist" aria-label={tr('Account sections')}>
       <button type="button" role="tab" aria-selected={activeTab === 'info'} className={activeTab === 'info' ? 'active' : ''} onClick={() => setActiveTab('info')}><UserRound />{tr('Information')}</button>
+      <button type="button" role="tab" aria-selected={activeTab === 'giftcode'} className={activeTab === 'giftcode' ? 'active' : ''} onClick={() => setActiveTab('giftcode')}><Gift />{tr('Gift code')}</button>
       <button type="button" role="tab" aria-selected={activeTab === 'password'} className={activeTab === 'password' ? 'active' : ''} onClick={() => setActiveTab('password')}><KeyRound />{tr('Change password')}</button>
     </div>
 
@@ -84,6 +105,30 @@ export function AccountSettings() {
       {!isFree && user.plan.expriAt && <AccountValue label={tr('Plan time remaining')} value={planRemaining ?? formatDate(user.plan.expriAt)} hint={formatDate(user.plan.expriAt)} />}
       {isFree && <AccountValue label={tr('Use until')} value={formatDate(user.useNextTime)} />}
       {isFree && <AccountValue label={tr('Next reset')} value={formatDate(user.useNextReset)} />}
+    </div>}
+
+    {activeTab === 'giftcode' && <div className="account-giftcode-panel" role="tabpanel">
+      <div className="account-giftcode-intro">
+        <span><Gift /></span>
+        <div><strong>{tr('Redeem a gift code')}</strong><small>{tr('Enter the code you received. Your plan will update automatically after a successful redemption.')}</small></div>
+      </div>
+      <div className="account-giftcode-form">
+        <label htmlFor="account-giftcode-input">{tr('Gift code')}</label>
+        <div className="account-giftcode-input-row">
+          <input id="account-giftcode-input" value={giftCode} maxLength={200} autoComplete="off" spellCheck={false} placeholder={tr('Enter gift code')} onKeyDown={(event) => { if (event.key === 'Enter' && !giftRedeeming && giftCode.trim()) { event.preventDefault(); void redeemGiftCode(); } }} onChange={(event) => { setGiftCode(event.target.value); setGiftProblem(''); setGiftResult(null); }} />
+          <button type="button" className="button primary" disabled={giftRedeeming || !giftCode.trim()} onClick={() => void redeemGiftCode()}><Gift />{giftRedeeming ? tr('Redeeming...') : tr('Redeem')}</button>
+        </div>
+        <small>{tr('Gift codes are not case-sensitive. Spaces at the beginning or end are ignored.')}</small>
+      </div>
+      {giftProblem && <div className="account-giftcode-error" role="alert">{giftProblem}</div>}
+      {giftResult && <div className="account-giftcode-success" role="status">
+        <div className="account-giftcode-success-heading"><span><Gift /></span><div><strong>{tr('Gift code redeemed')}</strong><small>{tr('Your account plan has been refreshed.')}</small></div></div>
+        <div className="account-giftcode-result-grid">
+          <AccountValue label={tr('Plan received')} value={giftResult.planName} />
+          <AccountValue label={tr('Added time')} value={tr('{days} days', { days: giftResult.days })} />
+          <AccountValue label={tr('Expires at')} value={formatDate(giftResult.expiresAt)} />
+        </div>
+      </div>}
     </div>}
 
     {activeTab === 'password' && <div className="account-password-panel" role="tabpanel">
@@ -122,6 +167,22 @@ export function AccountSettings() {
       </div>
     </div>}
   </div>;
+}
+
+function giftCodeErrorMessage(error: unknown) {
+  if (!(error instanceof ApiError)) return error instanceof Error ? error.message : tr('Gift code redemption failed.');
+  switch (error.problem?.code) {
+    case 'giftcode_required': return tr('Enter a gift code first.');
+    case 'giftcode_too_long': return tr('Gift code is too long.');
+    case 'giftcode_not_found': return tr('Gift code does not exist.');
+    case 'giftcode_already_used': return tr('This gift code has already been used by your account.');
+    case 'giftcode_plan_lower_than_current': return tr('This gift code is for a lower plan than your current plan.');
+    case 'giftcode_invalid':
+    case 'giftcode_invalid_days':
+    case 'giftcode_plan_not_found': return tr('This gift code is temporarily unavailable. Please contact support.');
+    case 'user_not_found': return tr('Your account could not be found. Please sign in again.');
+    default: return error.message || tr('Gift code redemption failed.');
+  }
 }
 
 function createHumanChallenge() {

@@ -6,6 +6,16 @@ export class ApiError extends Error {
   constructor(message: string, public status?: number, public problem?: ProblemDetails) { super(message); this.name = 'ApiError'; }
 }
 
+export interface GiftCodeRedeemResult {
+  success: boolean;
+  giftCodeId: number;
+  planId: number;
+  planType: number;
+  planName: string;
+  days: number;
+  expiresAt: string;
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const method = (init.method ?? 'GET').toUpperCase();
   let response: Response;
@@ -45,6 +55,7 @@ export const api = {
   login: (email: string, password: string) => request<AuthResult>('/api/local/auth/login', { method: 'POST', body: json({ email, password }) }),
   register: (email: string, password: string) => request<AuthResult>('/api/local/auth/register', { method: 'POST', body: json({ email, password }) }),
   authInfo: () => request<AuthInfo>('/api/local/auth/info'),
+  redeemGiftCode: (code: string) => request<GiftCodeRedeemResult>(backendPath('giftcode/redeem'), { method: 'POST', body: json({ code }) }),
   changePassword: (currentPassword: string, newPassword: string) => request<{ success: boolean; message: string }>('/api/local/auth/change-password', { method: 'POST', body: json({ currentPassword, newPassword }) }),
   logout: () => request<AuthResult>('/api/local/auth/logout', { method: 'POST', body: '{}' }),
   overview: () => request<Overview>('/api/local/overview'),
