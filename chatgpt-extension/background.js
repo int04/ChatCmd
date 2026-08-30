@@ -129,8 +129,9 @@ async function chatGptTabStatus(conversationUrl) {
 }
 
 async function acquireNewConversationTab() {
-  const tab = await findAvailableNewConversationTab();
-  if (!tab?.id) throw new Error('Không có tab ChatGPT trống để tạo cuộc trò chuyện mới. Hãy mở một tab https://chatgpt.com/ mới rồi thử lại.');
+  let tab = await findAvailableNewConversationTab();
+  if (!tab?.id) tab = await chrome.tabs.create({ url: CHATGPT_HOME, active: true });
+  if (!tab?.id) throw new Error('Không thể tự mở tab ChatGPT mới. Hãy kiểm tra quyền của extension rồi thử lại.');
   await waitForTab(tab.id);
   return tab;
 }

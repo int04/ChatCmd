@@ -508,7 +508,7 @@ const vi: Record<string, string> = {
   'CHATGPT.COM': 'CHATGPT.COM',
   'Send using the signed-in ChatGPT session in Chrome / Edge.': 'Gửi bằng phiên ChatGPT đã đăng nhập trong Chrome / Edge.',
   'No blank ChatGPT tab is open for a new conversation.': 'Chưa có tab ChatGPT trống để tạo cuộc trò chuyện mới.',
-  'Open a new chatgpt.com tab and keep it open after sending.': 'Hãy mở một tab chatgpt.com mới và giữ tab đó mở sau khi gửi.',
+  'After you send the message, ChatCMD will automatically open a new ChatGPT tab and continue there.': 'Sau khi bạn gửi tin nhắn, ChatCMD sẽ tự động mở một tab ChatGPT mới và tiếp tục gửi tại đó.',
   'No enabled agent': 'Chưa có agent đang bật',
   'ChatGPT model': 'Model ChatGPT',
   'Content': 'Nội dung',

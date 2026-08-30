@@ -48,7 +48,6 @@ export function NewChatGptConversation() {
       const status = await chatGptExtensionStatus();
       setExtensionReady(status.ready); setChatGptTabOpen(status.chatGptTabOpen);
       if (!status.ready) throw new Error(tr('ChatCMD ChatGPT Bridge extension is not ready. Enable or reload it, then try again.'));
-      if (!status.chatGptTabOpen) throw new Error(tr('No ChatGPT tab is open. Open chatgpt.com and try again.'));
       const request = await api.createChatGptRequest({ agentId, model, content: content.trim() });
       await dispatchChatGptRequest({ requestId: request.id, submittedContent: request.submittedContent, model: request.model });
       const taskId = await waitForTaskBinding(request.id);
@@ -63,7 +62,7 @@ export function NewChatGptConversation() {
     <section className="chatgpt-new-card">
       <header><span className="chatgpt-logo"><Bot /></span><div><span className="eyebrow">{tr('CHATGPT.COM')}</span><h1>{tr('New message')}</h1><p>{tr('Send using the signed-in ChatGPT session in Chrome / Edge.')}</p></div></header>
       <ExtensionState ready={extensionReady} />
-      {extensionReady && chatGptTabOpen === false && <p className="chatgpt-input-warning" role="alert"><CircleAlert /><span><strong>{tr('No blank ChatGPT tab is open for a new conversation.')}</strong> {tr('Open a new chatgpt.com tab and keep it open after sending.')}</span></p>}
+      {extensionReady && chatGptTabOpen === false && <p className="chatgpt-input-warning" role="status"><CircleAlert /><span><strong>{tr('No blank ChatGPT tab is open for a new conversation.')}</strong> {tr('After you send the message, ChatCMD will automatically open a new ChatGPT tab and continue there.')}</span></p>}
       <form onSubmit={(event) => void submit(event)}>
         <div className="chatgpt-form-grid">
           <label><span>{tr('MCP agent')}</span><select value={agentId} onChange={(event) => setAgentId(event.target.value)} disabled={busy || agents.loading} required>
@@ -75,7 +74,7 @@ export function NewChatGptConversation() {
         <label className="chatgpt-message-field"><span>{tr('Content')}</span><textarea rows={8} value={content} onChange={(event) => setContent(event.target.value)} disabled={busy} placeholder={tr('Enter a request for ChatGPT…')} required /></label>
         <div className="chatgpt-prompt-preview"><strong>{tr('Actual message')}</strong><code>{selectedPrompt(enabledAgents, agentId, content)}</code></div>
         {error && <p className="chatgpt-form-error" role="alert"><CircleAlert />{error}</p>}
-        <footer><button className="button primary chatgpt-send-button" type="submit" disabled={busy || !agentId || !content.trim() || extensionReady === false || chatGptTabOpen === false}>{busy ? <LoaderCircle className="spin" /> : <Send />}<span>{busy ? tr('Sending to ChatGPT…') : tr('Send to ChatGPT')}</span></button></footer>
+        <footer><button className="button primary chatgpt-send-button" type="submit" disabled={busy || !agentId || !content.trim() || extensionReady === false}>{busy ? <LoaderCircle className="spin" /> : <Send />}<span>{busy ? tr('Sending to ChatGPT…') : tr('Send to ChatGPT')}</span></button></footer>
       </form>
     </section>
   </div>;
