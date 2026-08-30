@@ -81,13 +81,16 @@ function TaskDetailContent({ detail, realtime, onTaskChanged }: { detail: TaskDe
   return <div className="task-detail-shell">
     <header className="task-detail-topbar"><div><h1>{conversationName(task)}</h1><p>{tr('{count} agent turns · generation {generation} · {realtime} · updated {time}', { count: turns.length, generation: task.generation ?? 1, realtime: realtime === 'online' ? translatedStatus('online') : realtime, time: formatTime(task.updatedAtUtc) })}</p></div><StatusBadge state={task.status} /></header>
     <div className="task-detail-body">
-      <main ref={chatRef} className="task-chat-column" onScroll={updateChatScrollPosition}><h2 className="sr-only">{tr('Activity timeline')}</h2>
-        <SubagentApprovalQueue approvals={detail.subagentApprovals ?? []} onResolved={(activityId) => onTaskChanged({ ...detail, subagentApprovals: (detail.subagentApprovals ?? []).filter((item) => item.activityId !== activityId) })} />
-        {loadingOlderTurns && <div className="task-history-skeleton" role="status" aria-label={tr('Loading older conversation')}><span /><span /><span /></div>}
-        <section className="task-bubble-timeline turn-timeline" aria-label={tr('Conversation activity')}>
-          {turns.length ? visibleTurns.map((turn) => <TaskTurnBubble turn={turn} taskId={task.id} agentLabel={chatGpt ? 'ChatGPT' : tr('Codex Agent')} subagents={(detail.subagents ?? []).filter((agent) => agent.parentTurnId === turn.id)} key={turn.id} />) : <Empty title={tr('No activity yet')} body={tr('The Agent has not recorded any activity for this task yet.')} />}
-        </section>{chatGpt && <ChatGptTaskComposer taskId={task.id} />}
-      </main>
+      <div className={`task-chat-pane${chatGpt ? ' has-chatgpt-footer' : ''}`}>
+        <main ref={chatRef} className="task-chat-column" onScroll={updateChatScrollPosition}><h2 className="sr-only">{tr('Activity timeline')}</h2>
+          <SubagentApprovalQueue approvals={detail.subagentApprovals ?? []} onResolved={(activityId) => onTaskChanged({ ...detail, subagentApprovals: (detail.subagentApprovals ?? []).filter((item) => item.activityId !== activityId) })} />
+          {loadingOlderTurns && <div className="task-history-skeleton" role="status" aria-label={tr('Loading older conversation')}><span /><span /><span /></div>}
+          <section className="task-bubble-timeline turn-timeline" aria-label={tr('Conversation activity')}>
+            {turns.length ? visibleTurns.map((turn) => <TaskTurnBubble turn={turn} taskId={task.id} agentLabel={chatGpt ? 'ChatGPT' : tr('Codex Agent')} subagents={(detail.subagents ?? []).filter((agent) => agent.parentTurnId === turn.id)} key={turn.id} />) : <Empty title={tr('No activity yet')} body={tr('The Agent has not recorded any activity for this task yet.')} />}
+          </section>
+        </main>
+        {chatGpt && <footer className="task-chat-footer"><ChatGptTaskComposer taskId={task.id} /></footer>}
+      </div>
       <aside className="task-detail-sidebar" aria-label={tr('Task information')}>
         <div className="panel-resize-handle task-sidebar-resize-handle" role="separator" aria-label={tr('Resize task information')} aria-orientation="vertical" aria-valuemin={280} aria-valuemax={520} aria-valuenow={sidebarResize.width} tabIndex={0} onPointerDown={sidebarResize.onPointerDown} onKeyDown={sidebarResize.onKeyDown} />
         <header className="task-info-header"><span className={`task-info-state ${task.status}`}>{task.status === 'running' ? <LoaderCircle className="spin" /> : task.status === 'failed' ? <CircleAlert /> : <CheckCircle2 />}</span><div><h2>{conversationName(task)}</h2><p><code>#{task.id}</code> · {translatedStatus(task.status)} · {tr('{count} agent turns', { count: turns.length })}</p></div></header>
