@@ -9,6 +9,7 @@ mod backend_api;
 mod desktop_tray;
 #[cfg(feature = "embedded-web")]
 mod embedded_web;
+mod log_helper;
 mod runtime_host;
 mod websocket;
 

@@ -9,9 +9,10 @@ use chatcmd_runtime::{
 };
 use serde_json::{Value, json};
 
-use super::filesystem_dispatch;
-use super::inputs::*;
-use super::{RuntimeHost, invalid, now_ms, parse, storage_error, task_json, value};
+use super::{
+    RuntimeHost, filesystem_dispatch, inputs::*, invalid, now_ms, parse, storage_error, task_json,
+    value,
+};
 
 impl RuntimeHost {
     pub(super) async fn authorize_tool(&self, agent_id: &str, tool: &str) -> RuntimeResult<()> {
@@ -409,26 +410,7 @@ impl RuntimeHost {
                 let input: SubagentWaitInput = parse(arguments)?;
                 self.wait_for_subagents(&context, input.timeout_ms).await
             }
-            "agent_turn_complete" => {
-                let input: CompleteInput = parse(arguments)?;
-                if let (Some(task_id), Some(turn_id)) =
-                    (context.task_id.as_deref(), context.turn_id.as_deref())
-                    && self.activities.has_active_turn(task_id, turn_id)
-                {
-                    return Err(RuntimeError::new(
-                        "active_tools_running",
-                        "one or more tools are still running in this turn; wait for them to finish before completing the turn",
-                    ));
-                }
-                self.ensure_subagents_finished(&context).await?;
-                self.save_agent_event(
-                    &context,
-                    "completed",
-                    &input.content,
-                    input.suggested_title.as_deref(),
-                )
-                .await
-            }
+            "agent_turn_complete" => self.complete_agent_turn(&context, arguments).await,
             _ => Err(RuntimeError::new("tool_not_found", "unknown MCP tool")),
         }
     }

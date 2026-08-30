@@ -1,4 +1,5 @@
 mod activity_control;
+mod agent_lifecycle;
 mod approval;
 mod dispatch;
 mod filesystem_dispatch;
