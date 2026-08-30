@@ -1,4 +1,4 @@
-import { AlertTriangle, MonitorCog, Save, ServerCog, SlidersHorizontal, UserRound, Volume2 } from 'lucide-react';
+import { AlertTriangle, MonitorCog, Save, SlidersHorizontal, UserRound, Volume2 } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
 import { api } from '../api';
 import { ErrorState, Loading, Modal, PageHeading, ProblemBanner, StatusBadge } from '../components';
@@ -7,11 +7,10 @@ import { AccountSettings } from '../settings/AccountSettings';
 import type { LocalSettings } from '../types';
 import { useLoad } from '../useLoad';
 
-type SettingsTab = 'account' | 'network' | 'execution' | 'display' | 'sound';
+type SettingsTab = 'account' | 'execution' | 'display' | 'sound';
 
-const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; description: string; icon: typeof ServerCog }> = [
+const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; description: string; icon: typeof UserRound }> = [
   { id: 'account', label: 'Account', description: 'Profile and security', icon: UserRound },
-  { id: 'network', label: 'Network & storage', description: 'Local listener and data', icon: ServerCog },
   { id: 'execution', label: 'Execution', description: 'Agent and terminal rules', icon: SlidersHorizontal },
   { id: 'display', label: 'Display', description: 'Theme and language', icon: MonitorCog },
   { id: 'sound', label: 'Sound', description: 'Agent notifications', icon: Volume2 },
@@ -34,7 +33,6 @@ export function SettingsPage() {
     event.preventDefault();
     if (!value) return;
     const dangerous = result.data && (
-      value.bindAddress !== result.data.bindAddress ||
       value.workspaceRoots.join('\n') !== result.data.workspaceRoots.join('\n') ||
       value.executionMode === 'allowAll' && result.data.executionMode !== 'allowAll'
     );
@@ -88,12 +86,6 @@ export function SettingsPage() {
 
         <div className="settings-workspace-body">
           {activeTab === 'account' && <AccountSettings />}
-          {activeTab === 'network' && <div className="settings-control-grid">
-            <SettingField label={tr('Bind address')} hint={tr('Address used by the local listener.')}><input value={value.bindAddress} onChange={(event) => update('bindAddress', event.target.value)} /></SettingField>
-            <SettingField label={tr('UI port')} hint={tr('Port used by the local management UI.')}><input type="number" min="1" max="65535" value={value.port} onChange={(event) => update('port', Number(event.target.value))} /></SettingField>
-            <SettingField wide label={tr('MCP endpoint')} hint={tr('Local endpoint exposed to connected AI clients.')}><input value={value.mcpEndpoint} onChange={(event) => update('mcpEndpoint', event.target.value)} /></SettingField>
-            <SettingField wide label={tr('Database path')} hint={tr('SQLite database location on this machine.')}><input value={value.databasePath} onChange={(event) => update('databasePath', event.target.value)} /></SettingField>
-          </div>}
           {activeTab === 'execution' && <div className="settings-control-grid">
             <SettingField label={tr('Default execution mode')} hint={tr('Applied to newly created conversations.')}><select value={value.executionMode} onChange={(event) => update('executionMode', event.target.value as LocalSettings['executionMode'])}><option value="approval">{tr('Ask for approval')}</option><option value="allowAll">{tr('Allow all')}</option></select></SettingField>
             <label className="settings-toggle-card"><input type="checkbox" checked={value.approveNewConversations} onChange={(event) => update('approveNewConversations', event.target.checked)} /><span><strong>{tr('Approve new conversations')}</strong><small>{tr('Every new conversation from the ChatGPT website must be approved before the Agent can execute anything.')}</small></span></label>
@@ -116,7 +108,7 @@ export function SettingsPage() {
       </section>
     </form>
 
-    {confirming && <Modal title={tr('Confirm sensitive setting changes')} description={tr('Listener, workspace, or unrestricted execution changes can expand local access. Verify every value before saving.')} close={() => setConfirming(false)} dangerous><div className="warning-block"><AlertTriangle /><p>{tr('New tasks may inherit these settings immediately. Existing connections may need restart.')}</p></div><div className="modal-actions"><button className="button secondary" onClick={() => setConfirming(false)}>{tr('Cancel')}</button><button className="button danger" onClick={() => void save()}>{tr('Apply changes')}</button></div></Modal>}
+    {confirming && <Modal title={tr('Confirm sensitive setting changes')} description={tr('Workspace or unrestricted execution changes can expand local access. Verify every value before saving.')} close={() => setConfirming(false)} dangerous><div className="warning-block"><AlertTriangle /><p>{tr('New tasks may inherit these settings immediately.')}</p></div><div className="modal-actions"><button className="button secondary" onClick={() => setConfirming(false)}>{tr('Cancel')}</button><button className="button danger" onClick={() => void save()}>{tr('Apply changes')}</button></div></Modal>}
   </div>;
 }
 
@@ -126,7 +118,6 @@ function SettingField({ label, hint, wide, children }: { label: string; hint: st
 
 function sectionDescription(tab: SettingsTab) {
   if (tab === 'account') return tr('Manage your account information and password.');
-  if (tab === 'network') return tr('Listener and SQLite paths reported by local host.');
   if (tab === 'execution') return tr('Defaults for new tasks and terminal processes.');
   if (tab === 'display') return tr('Stored locally for this browser.');
   return tr('Choose a separate notification sound for each Agent event type.');
