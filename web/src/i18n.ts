@@ -227,6 +227,7 @@ const vi: Record<string, string> = {
   'Your account could not be found. Please sign in again.': 'Không tìm thấy tài khoản của bạn. Vui lòng đăng nhập lại.',
   'Change password': 'Đổi mật khẩu',
   'Email': 'Email',
+  'Remaining balance': 'Số tiền còn lại',
   'Plan': 'Gói',
   'Plan time remaining': 'Thời gian gói còn',
   'Use until': 'Sử dụng đến',

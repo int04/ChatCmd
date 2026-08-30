@@ -40,5 +40,5 @@ export interface Skill { id: Id; name: string; source?: string; enabled: boolean
 export interface LocalSettings { bindAddress: string; port: number; mcpEndpoint: string; databasePath: string; databaseState?: HealthState; executionMode: CommandExecutionMode; approveNewConversations: boolean; workspaceRoots: string[]; terminalExecutable: string; taskConcurrency: number; sessionConcurrency: number; theme: 'system' | 'light' | 'dark'; language: 'en' | 'vi'; sound?: boolean; newAgentSound: boolean; finishedTaskSound: boolean }
 export interface ProblemDetails { type?: string; title?: string; status?: number; detail?: string; message?: string; code?: string; instance?: string; errors?: Record<string, string[]> }
 export interface AuthPlan { type: number; expriAt?: string | null; name: string }
-export interface AuthInfo { id: number; email: string; plan: AuthPlan; useNextTime?: string | null; useNextReset?: string | null }
+export interface AuthInfo { id: number; email: string; vnd: number; plan: AuthPlan; useNextTime?: string | null; useNextReset?: string | null }
 export interface AuthResult { authenticated: boolean }

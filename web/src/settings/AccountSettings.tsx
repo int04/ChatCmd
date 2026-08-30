@@ -119,6 +119,7 @@ export function AccountSettings() {
     {activeTab === 'info' && <div className="account-info-grid" role="tabpanel">
       <AccountValue label="ID" value={String(user.id)} />
       <AccountValue label={tr('Email')} value={user.email} />
+      <AccountValue label={tr('Remaining balance')} value={formatVnd(user.vnd)} />
       <AccountValue label={tr('Plan')} value={user.plan.name} />
       {!isFree && user.plan.expriAt && <AccountValue label={tr('Plan time remaining')} value={planRemaining ?? formatDate(user.plan.expriAt)} hint={formatDate(user.plan.expriAt)} />}
       {isFree && <AccountValue label={tr('Use until')} value={formatDate(user.useNextTime)} />}
@@ -227,6 +228,10 @@ function shuffle<T>(items: T[]) {
 
 function AccountValue({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return <div className="account-value"><span>{label}</span><strong>{value || '—'}</strong>{hint && <small>{hint}</small>}</div>;
+}
+
+function formatVnd(value: number) {
+  return new Intl.NumberFormat('vi-VN', { style: 'currency', currency: 'VND', maximumFractionDigits: 0 }).format(value);
 }
 
 function formatDate(value?: string | null) {
