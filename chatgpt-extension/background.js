@@ -21,6 +21,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       } catch (error) { sendResponse({ ok: false, error: errorMessage(error) }); }
       return false;
     }
+    if (message.action === 'open-tab') {
+      void openConversationTab(message.conversationUrl).then(() => sendResponse({ ok: true })).catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
+      return true;
+    }
     if (message.action === 'focus-tab') {
       void focusConversationTab(message.conversationUrl).then(() => sendResponse({ ok: true })).catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
       return true;
@@ -167,6 +171,17 @@ async function acquireNewConversationTab() {
   if (!tab?.id) tab = await chrome.tabs.create({ url: CHATGPT_HOME, active: true });
   if (!tab?.id) throw new Error('Không thể tự mở tab ChatGPT mới. Hãy kiểm tra quyền của extension rồi thử lại.');
   await waitForTab(tab.id);
+  return tab;
+}
+
+async function openConversationTab(conversationUrl) {
+  const target = conversationTarget(conversationUrl);
+  const existing = await findConversationTab(target);
+  if (existing?.id) return existing;
+  const tab = await chrome.tabs.create({ url: target, active: false });
+  if (!tab?.id) throw new Error('Không thể mở tab ChatGPT của cuộc trò chuyện này.');
+  const conversationId = conversationIdFromUrl(target);
+  if (conversationId) await bindConversationTab(conversationId, tab.id);
   return tab;
 }
 
