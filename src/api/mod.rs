@@ -66,6 +66,7 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
             get(pending_conversation_approvals),
         )
         .route("/tasks/{id}", get(task).delete(delete_task))
+        .route("/tasks/{id}/title", axum::routing::put(set_task_title))
         .route(
             "/tasks/{id}/command-execution-mode",
             get(task_execution_mode).put(set_task_execution_mode),
@@ -293,6 +294,40 @@ async fn task(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, Problem> {
+    task_detail(&state, &id).await
+}
+
+#[derive(Debug, Deserialize)]
+struct TaskTitleInput {
+    title: String,
+}
+
+async fn set_task_title(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(input): Json<TaskTitleInput>,
+) -> Result<Json<Value>, Problem> {
+    let title = input.title.trim();
+    if title.is_empty() || title.chars().count() > 160 {
+        return Err(Problem::new(
+            StatusCode::BAD_REQUEST,
+            "Invalid title",
+            "title must contain between 1 and 160 characters",
+        ));
+    }
+    let affected = sqlx::query("UPDATE tasks SET title=? WHERE id=?")
+        .bind(title)
+        .bind(&id)
+        .execute(state.repository.pool())
+        .await
+        .map_err(db_problem)?
+        .rows_affected();
+    if affected == 0 {
+        return Err(not_found());
+    }
+    let mut event = AppEvent::new("conversation.title_updated", json!({ "title": title }));
+    event.task_id = Some(id.clone());
+    state.publish(event);
     task_detail(&state, &id).await
 }
 
