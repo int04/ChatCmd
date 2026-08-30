@@ -63,6 +63,7 @@ impl RuntimeHost {
         let project_folder = if tool.starts_with("fs_")
             || tool.starts_with("git_")
             || tool == "shell_create"
+            || tool == "workspace_roots"
             || matches!(tool, "skills_list" | "skill_read")
         {
             <Self as chatcmd_mcp::RuntimeApi>::project_folder(self, context.task_id.as_deref())
@@ -71,12 +72,14 @@ impl RuntimeHost {
         } else {
             None
         };
-        let mut task_path_scopes =
-            if tool.starts_with("fs_") || tool.starts_with("git_") || tool == "shell_create" {
-                self.task_user_path_scopes(&context).await?
-            } else {
-                Vec::new()
-            };
+        let mut task_path_scopes = if tool.starts_with("fs_")
+            || tool.starts_with("git_")
+            || matches!(tool, "shell_create" | "workspace_roots")
+        {
+            self.task_user_path_scopes(&context).await?
+        } else {
+            Vec::new()
+        };
         if let Some(project_folder) = project_folder.as_ref().filter(|path| path.is_dir())
             && !task_path_scopes.contains(project_folder)
         {
@@ -214,7 +217,10 @@ impl RuntimeHost {
                 let input: SessionInput = parse(arguments)?;
                 value(self.shell.inspect(&input.session_id).await?)
             }
-            "workspace_roots" => value(self.workspace.roots()),
+            "workspace_roots" => match project_folder {
+                Some(project_folder) => value(vec![project_folder]),
+                None => value(task_path_scopes),
+            },
             "fs_list" => {
                 let input: ListInput = parse(arguments)?;
                 value(

@@ -30,6 +30,65 @@ async fn runtime_api_resolves_task_project_folder() {
 }
 
 #[tokio::test]
+async fn user_message_and_workspace_roots_report_the_task_project_folder() {
+    let (host, agent_id, configured_workspace) = test_host().await;
+    let project = TempDir::new().expect("external task project");
+    let expected = project
+        .path()
+        .canonicalize()
+        .expect("canonical task project")
+        .to_string_lossy()
+        .into_owned();
+    let turn_id = "turn-task-workspace-result";
+    let accepted = host
+        .call_persisted(
+            "agent_user_message",
+            turn_context(
+                "task-workspace-user-message",
+                &agent_id,
+                "agent_user_message",
+                turn_id,
+                "conversation-task-workspace-result",
+            ),
+            json!({"content":format!("Kiểm tra dự án `{expected}`")}),
+        )
+        .await
+        .expect("sync task project folder");
+    assert_eq!(accepted["projectFolder"], expected);
+
+    let mut roots_context =
+        OperationContext::new("task-workspace-roots", &agent_id, "workspace_roots");
+    roots_context.task_id = accepted["taskId"].as_str().map(str::to_owned);
+    roots_context.turn_id = Some(turn_id.to_owned());
+    let roots = host
+        .dispatch("workspace_roots", roots_context, json!({}))
+        .await
+        .expect("read task workspace roots");
+
+    assert_eq!(roots, json!([expected]));
+    assert_ne!(
+        roots,
+        json!([configured_workspace.path().display().to_string()]),
+        "workspace_roots must not expose the process-wide configured root"
+    );
+}
+
+#[tokio::test]
+async fn workspace_roots_without_task_context_does_not_fallback_to_process_root() {
+    let (host, agent_id, _configured_workspace) = test_host().await;
+    let roots = host
+        .dispatch(
+            "workspace_roots",
+            OperationContext::new("workspace-roots-without-task", agent_id, "workspace_roots"),
+            json!({}),
+        )
+        .await
+        .expect("read roots without task context");
+
+    assert_eq!(roots, json!([]));
+}
+
+#[tokio::test]
 async fn shell_create_requires_a_task_project_folder_when_working_directory_is_omitted() {
     let (host, agent_id, _directory) = test_host().await;
     let error = host

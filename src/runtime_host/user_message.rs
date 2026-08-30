@@ -197,6 +197,13 @@ impl RuntimeHost {
                 payload,
             );
         }
+        let project_folder = self
+            .repository
+            .task(&task_id)
+            .await
+            .map_err(storage_error)?
+            .and_then(|task| task.project_folder)
+            .filter(|folder| !folder.trim().is_empty());
         Ok(json!({
             "accepted": true,
             "duplicate": inserted == 0,
@@ -204,6 +211,7 @@ impl RuntimeHost {
             "isFirstMessage": is_first_message,
             "suggestedTitleRequired": is_first_message,
             "provisionalTitle": is_first_message.then_some(provisional_title),
+            "projectFolder": project_folder,
             "taskId": task_id.as_str(),
             "turnId": turn_id.as_str()
         }))

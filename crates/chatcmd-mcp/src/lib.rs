@@ -540,7 +540,7 @@ tool_methods!(
     (
         workspace_roots,
         NoArgs,
-        "List canonical workspace roots. No tool-specific fields."
+        "List roots granted to the current task/conversation. When the task has a project folder, this returns that folder rather than a process-wide or Agent workspace. No tool-specific fields."
     ),
     (
         fs_list,
