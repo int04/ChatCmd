@@ -1,4 +1,4 @@
-import { Bot, CircleAlert, CircleStop, ExternalLink, LoaderCircle, MessageSquarePlus, Send, ShieldCheck, Unplug } from 'lucide-react';
+import { Bot, CircleAlert, CircleStop, ExternalLink, FolderOpen, LoaderCircle, MessageSquarePlus, Send, ShieldCheck, Unplug, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -19,13 +19,21 @@ export function NewChatGptConversation() {
   const navigate = useNavigate();
   const enabledAgents = useMemo(() => (agents.data ?? []).filter((agent) => agent.enabled), [agents.data]);
   const [agentId, setAgentId] = useState('');
+  const [projectFolder, setProjectFolder] = useState('');
   const [content, setContent] = useState('');
+  const [folderPicking, setFolderPicking] = useState(false);
+  const [confirmWithoutFolder, setConfirmWithoutFolder] = useState(false);
   const [extensionReady, setExtensionReady] = useState<boolean | null>(null);
   const [chatGptTabOpen, setChatGptTabOpen] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
-  useEffect(() => { if (!agentId && enabledAgents[0]) setAgentId(enabledAgents[0].id); }, [agentId, enabledAgents]);
+  useEffect(() => {
+    if (!agentId && enabledAgents[0]) {
+      setAgentId(enabledAgents[0].id);
+      setProjectFolder(enabledAgents[0].projectFolder || '');
+    }
+  }, [agentId, enabledAgents]);
   useEffect(() => {
     let disposed = false;
     const refresh = () => void chatGptExtensionStatus().then((status) => {
@@ -39,15 +47,36 @@ export function NewChatGptConversation() {
   }, []);
 
 
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
+  const selectAgent = (nextAgentId: string) => {
+    setAgentId(nextAgentId);
+    const nextAgent = enabledAgents.find((agent) => agent.id === nextAgentId);
+    setProjectFolder(nextAgent?.projectFolder || '');
+  };
+
+  const pickFolder = async () => {
+    if (busy || folderPicking) return;
+    setFolderPicking(true); setError('');
+    try {
+      const result = await api.pickProjectFolder();
+      if (result.path) setProjectFolder(result.path);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Không thể mở trình chọn thư mục.');
+    } finally { setFolderPicking(false); }
+  };
+
+  const sendNewConversation = async (allowWithoutFolder: boolean) => {
     if (!agentId || !content.trim() || busy) return;
+    if (!projectFolder.trim() && !allowWithoutFolder) {
+      setConfirmWithoutFolder(true);
+      return;
+    }
+    setConfirmWithoutFolder(false);
     setBusy(true); setError('');
     try {
       const status = await chatGptExtensionStatus();
       setExtensionReady(status.ready); setChatGptTabOpen(status.chatGptTabOpen);
       if (!status.ready) throw new Error(tr('ChatCMD ChatGPT Bridge extension is not ready. Enable or reload it, then try again.'));
-      const request = await api.createChatGptRequest({ agentId, model: DEFAULT_MODEL, content: content.trim() });
+      const request = await api.createChatGptRequest({ agentId, model: DEFAULT_MODEL, projectFolder: projectFolder.trim(), content: content.trim() });
       await dispatchChatGptRequest({ requestId: request.id, submittedContent: request.submittedContent, model: request.model });
       const taskId = await waitForTaskBinding(request.id);
       navigate(`/tasks/${encodeURIComponent(taskId)}`, { replace: true });
@@ -55,6 +84,11 @@ export function NewChatGptConversation() {
       setError(reason instanceof Error ? reason.message : tr('Could not send the message to ChatGPT.'));
       setBusy(false);
     }
+  };
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    void sendNewConversation(false);
   };
 
   const selectedAgent = enabledAgents.find((agent) => agent.id === agentId);
@@ -84,17 +118,35 @@ export function NewChatGptConversation() {
 
       <form className="chatgpt-chat-composer" onSubmit={(event) => void submit(event)}>
         {error && <p className="chatgpt-form-error" role="alert"><CircleAlert />{error}</p>}
-        <label className="chatgpt-agent-picker chatgpt-composer-agent"><span>{tr('MCP agent')}</span><select value={agentId} onChange={(event) => setAgentId(event.target.value)} disabled={busy || agents.loading} required>
-          {!enabledAgents.length && <option value="">{tr('No enabled agent')}</option>}
-          {enabledAgents.map((agent) => <option value={agent.id} key={agent.id}>@{agent.name}</option>)}
-        </select></label>
+        <div className="chatgpt-composer-context">
+          <label className="chatgpt-agent-picker chatgpt-composer-agent"><span>{tr('MCP agent')}</span><select value={agentId} onChange={(event) => selectAgent(event.target.value)} disabled={busy || agents.loading} required>
+            {!enabledAgents.length && <option value="">{tr('No enabled agent')}</option>}
+            {enabledAgents.map((agent) => <option value={agent.id} key={agent.id}>@{agent.name}</option>)}
+          </select></label>
+          <div className="chatgpt-folder-picker">
+            <span>Thư mục dự án</span>
+            <div className="chatgpt-folder-picker-control">
+              <button className={`chatgpt-folder-select ${projectFolder ? '' : 'empty'}`} type="button" onClick={() => void pickFolder()} disabled={busy || folderPicking} title={projectFolder || 'Chọn thư mục dự án'}>
+                {folderPicking ? <LoaderCircle className="spin" /> : <FolderOpen />}<span>{projectFolder || 'Chọn thư mục'}</span>
+              </button>
+              {projectFolder && <button className="chatgpt-folder-clear" type="button" onClick={() => setProjectFolder('')} disabled={busy || folderPicking} aria-label="Bỏ chọn thư mục"><X /></button>}
+            </div>
+          </div>
+        </div>
         <div className="chatgpt-chat-input-wrap">
           <textarea rows={3} value={content} onChange={(event) => setContent(event.target.value)} disabled={busy} placeholder={tr('Enter a request for ChatGPT…')} required />
           <button className="chatgpt-chat-send" type="submit" aria-label={tr('Send to ChatGPT')} disabled={busy || !agentId || !content.trim() || extensionReady === false}>{busy ? <LoaderCircle className="spin" /> : <Send />}</button>
         </div>
-        <div className="chatgpt-chat-composer-meta"><span>{selectedAgent ? `Gửi tới @${selectedAgent.name}` : tr('No enabled agent')}</span><span><ShieldCheck />{tr('Actual message')}: <code>{selectedPrompt(enabledAgents, agentId, content)}</code></span></div>
+        <div className="chatgpt-chat-composer-meta"><span>{selectedAgent ? `Gửi tới @${selectedAgent.name}` : tr('No enabled agent')}</span><span><ShieldCheck />{tr('Actual message')}: <code>{selectedPrompt(enabledAgents, agentId, projectFolder, content)}</code></span></div>
       </form>
     </section>
+    {confirmWithoutFolder && <div className="modal-backdrop chatgpt-folder-warning-backdrop">
+      <div className="modal chatgpt-folder-warning" role="alertdialog" aria-modal="true" aria-labelledby="chatgpt-folder-warning-title">
+        <span className="chatgpt-folder-warning-icon"><CircleAlert /></span>
+        <div><h2 id="chatgpt-folder-warning-title">Bạn chưa chọn thư mục</h2><p>Chọn thư mục dự án cụ thể giúp AI làm việc tốt hơn trên môi trường đó, bạn có muốn vẫn tiếp tục mà không có thư mục không?</p></div>
+        <div className="modal-actions"><button className="button secondary" type="button" onClick={() => setConfirmWithoutFolder(false)}>Hủy</button><button className="button primary" type="button" onClick={() => void sendNewConversation(true)}>Tiếp tục mà không cần thư mục</button></div>
+      </div>
+    </div>}
   </div>;
 }
 
@@ -281,9 +333,9 @@ async function waitForDispatchState(requestId: string) {
   return api.chatGptRequest(requestId);
 }
 
-function selectedPrompt(agents: Agent[], agentId: string, content: string) {
+function selectedPrompt(agents: Agent[], agentId: string, projectFolder: string, content: string) {
   const name = agents.find((agent) => agent.id === agentId)?.name || 'agent';
-  return tr('Use plugin @{name} to perform the following request:\n\n{content}', { name, content: content || '…' });
+  return `Sử dụng plugin @${name}\n\nThư mục dự án: ${projectFolder.trim()}\n\nđể thực hiện yêu cầu sau: ${content || '…'}`;
 }
 
 function isSendDisabledError(value: string) { return value.includes(SEND_DISABLED_ERROR_VI) || value.includes(SEND_DISABLED_ERROR_EN); }

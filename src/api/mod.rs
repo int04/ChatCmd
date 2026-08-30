@@ -4,6 +4,7 @@ mod backend;
 mod chatgpt;
 mod chatgpt_support;
 mod crypto;
+mod folders;
 mod sessions;
 mod settings;
 mod skills;
@@ -13,6 +14,7 @@ mod task_delete;
 
 use agents::*;
 use chatgpt::*;
+use folders::*;
 use sessions::*;
 use settings::*;
 use skills::*;
@@ -53,6 +55,7 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/mcp/agents/{id}/enabled", patch(set_enabled))
         .route("/mcp/tools", get(tools))
         .route("/mcp/tool-presets", get(presets))
+        .route("/system/folder-picker", post(pick_project_folder))
         .route("/chatgpt/requests", post(create_request))
         .route("/chatgpt/requests/{id}", get(request))
         .route("/chatgpt/tasks/{task_id}", get(task_bridge))

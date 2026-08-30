@@ -220,8 +220,22 @@ pub(super) fn normalize_model(value: Option<&str>) -> String {
         .collect()
 }
 
-pub(super) fn wrapped_message(agent_name: &str, content: &str) -> String {
-    format!("Sử dụng plugin @{agent_name} để thực hiện yêu cầu sau:\n\n{content}")
+pub(super) fn wrapped_message(
+    agent_name: &str,
+    project_folder: Option<&str>,
+    content: &str,
+) -> String {
+    match project_folder
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(project_folder) => format!(
+            "Sử dụng plugin @{agent_name}\n\nThư mục dự án: {project_folder}\n\nđể thực hiện yêu cầu sau: {content}"
+        ),
+        None => format!(
+            "Sử dụng plugin @{agent_name}\n\nThư mục dự án: \n\nđể thực hiện yêu cầu sau: {content}"
+        ),
+    }
 }
 
 pub(super) fn openai_scope(conversation_id: &str) -> String {

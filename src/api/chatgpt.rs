@@ -20,6 +20,7 @@ use super::{Problem, db_problem, now_ms};
 pub(super) struct CreateRequest {
     agent_id: String,
     model: Option<String>,
+    project_folder: Option<String>,
     content: String,
 }
 
@@ -56,7 +57,11 @@ pub(super) async fn create_request(
     let agent_id = input.agent_id.trim();
     let agent_name = enabled_agent_name(&state, agent_id).await?;
     let model = normalize_model(input.model.as_deref());
-    let submitted = wrapped_message(&agent_name, input.content.trim());
+    let submitted = wrapped_message(
+        &agent_name,
+        input.project_folder.as_deref(),
+        input.content.trim(),
+    );
     let now = now_ms();
     let request_id = Uuid::new_v4().to_string();
     let turn_id = format!("chatgpt-turn-{}", Uuid::new_v4());
@@ -124,7 +129,10 @@ pub(super) async fn continue_message(
         .as_deref()
         .map(|value| normalize_model(Some(value)))
         .unwrap_or_else(|| row.get::<String, _>("model"));
-    let submitted = wrapped_message(&agent_name, input.content.trim());
+    let submitted = format!(
+        "Sử dụng plugin @{agent_name} để thực hiện yêu cầu sau:\n\n{}",
+        input.content.trim()
+    );
     let request_id = Uuid::new_v4().to_string();
     let turn_id = format!("chatgpt-turn-{}", Uuid::new_v4());
     let now = now_ms();
