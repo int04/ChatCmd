@@ -1,7 +1,4 @@
-use std::{
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::sync::Arc;
 
 use axum::{
     Json,
@@ -14,7 +11,6 @@ use axum::{
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sqlx::Row;
 
 use super::Problem;
 use crate::{backend_api::BackendApiResponse, websocket::AppState};
@@ -295,39 +291,63 @@ async fn send_authorized(
 pub(super) async fn load_session(
     state: &Arc<AppState>,
 ) -> Result<Option<StoredAuthSession>, Problem> {
-    let row = sqlx::query(
-        "SELECT access_token,refresh_token FROM local_auth_session WHERE singleton_id=1",
-    )
-    .fetch_optional(state.repository.pool())
-    .await
-    .map_err(super::db_problem)?;
-    row.map(|row| {
-        Ok(StoredAuthSession {
-            access_token: row.try_get("access_token").map_err(super::db_problem)?,
-            refresh_token: row.try_get("refresh_token").map_err(super::db_problem)?,
-        })
+    let account = state.backend_api.base_url().to_owned();
+    let secret = tokio::task::spawn_blocking(move || {
+        let entry = keyring::Entry::new("chatcmd.client.auth", &account)
+            .map_err(|error| error.to_string())?;
+        match entry.get_password() {
+            Ok(value) => Ok(Some(value)),
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(error) => Err(error.to_string()),
+        }
     })
-    .transpose()
+    .await
+    .map_err(|_| secure_store_problem())?
+    .map_err(|error| {
+        tracing::warn!(error, "read auth session from OS credential vault failed");
+        secure_store_problem()
+    })?;
+    let Some(secret) = secret else { return Ok(None); };
+    let tokens: TokenResponse = serde_json::from_str(&secret).map_err(|_| secure_store_problem())?;
+    Ok(Some(StoredAuthSession {
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+    }))
 }
 
 async fn save_session(state: &Arc<AppState>, tokens: &TokenResponse) -> Result<(), Problem> {
-    sqlx::query("INSERT INTO local_auth_session(singleton_id,access_token,refresh_token,access_token_expires_at,refresh_token_expires_at,updated_at_ms) VALUES(1,?,?,?,?,?) ON CONFLICT(singleton_id) DO UPDATE SET access_token=excluded.access_token,refresh_token=excluded.refresh_token,access_token_expires_at=excluded.access_token_expires_at,refresh_token_expires_at=excluded.refresh_token_expires_at,updated_at_ms=excluded.updated_at_ms")
-        .bind(&tokens.access_token)
-        .bind(&tokens.refresh_token)
-        .bind(&tokens.access_token_expires_at)
-        .bind(&tokens.refresh_token_expires_at)
-        .bind(now_ms())
-        .execute(state.repository.pool())
-        .await
-        .map_err(super::db_problem)?;
+    let account = state.backend_api.base_url().to_owned();
+    let secret = serde_json::to_string(tokens).map_err(|_| internal_problem())?;
+    tokio::task::spawn_blocking(move || {
+        keyring::Entry::new("chatcmd.client.auth", &account)
+            .and_then(|entry| entry.set_password(&secret))
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|_| secure_store_problem())?
+    .map_err(|error| {
+        tracing::warn!(error, "write auth session to OS credential vault failed");
+        secure_store_problem()
+    })?;
     Ok(())
 }
 
 async fn clear_session(state: &Arc<AppState>) -> Result<(), Problem> {
-    sqlx::query("DELETE FROM local_auth_session WHERE singleton_id=1")
-        .execute(state.repository.pool())
-        .await
-        .map_err(super::db_problem)?;
+    let account = state.backend_api.base_url().to_owned();
+    tokio::task::spawn_blocking(move || {
+        let entry = keyring::Entry::new("chatcmd.client.auth", &account)
+            .map_err(|error| error.to_string())?;
+        match entry.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(error) => Err(error.to_string()),
+        }
+    })
+    .await
+    .map_err(|_| secure_store_problem())?
+    .map_err(|error| {
+        tracing::warn!(error, "delete auth session from OS credential vault failed");
+        secure_store_problem()
+    })?;
     state.backend_api.reset_session().await;
     Ok(())
 }
@@ -379,9 +399,10 @@ fn internal_problem() -> Problem {
     )
 }
 
-fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|value| value.as_millis().min(i64::MAX as u128) as i64)
-        .unwrap_or_default()
+fn secure_store_problem() -> Problem {
+    Problem::new(
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Secure credential store unavailable",
+        "ChatCMD could not access the operating system credential vault.",
+    )
 }
