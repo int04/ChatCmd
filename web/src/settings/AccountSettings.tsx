@@ -19,6 +19,7 @@ export function AccountSettings() {
   const [challengeVerified, setChallengeVerified] = useState(false);
   const [challengeHint, setChallengeHint] = useState('');
   const [challengeOpen, setChallengeOpen] = useState(false);
+  const [challengePurpose, setChallengePurpose] = useState<'password' | 'giftcode' | null>(null);
   const [giftCode, setGiftCode] = useState('');
   const [giftRedeeming, setGiftRedeeming] = useState(false);
   const [giftProblem, setGiftProblem] = useState('');
@@ -41,7 +42,22 @@ export function AccountSettings() {
       setGiftProblem(giftCodeErrorMessage(error));
     } finally {
       setGiftRedeeming(false);
+      setChallengeOpen(false);
+      setChallengePurpose(null);
     }
+  };
+
+  const openChallenge = (purpose: 'password' | 'giftcode') => {
+    resetChallenge();
+    setChallengePurpose(purpose);
+    setChallengeOpen(true);
+  };
+
+  const requestGiftCodeRedeem = () => {
+    setGiftProblem('');
+    setGiftResult(null);
+    if (!giftCode.trim()) return setGiftProblem(tr('Enter a gift code first.'));
+    openChallenge('giftcode');
   };
 
   const resetChallenge = () => {
@@ -70,8 +86,7 @@ export function AccountSettings() {
     if (newPassword.length < 8) return setProblem(tr('New password must contain at least 8 characters.'));
     if (newPassword !== confirmPassword) return setProblem(tr('Password confirmation does not match.'));
     if (currentPassword === newPassword) return setProblem(tr('New password must be different from current password.'));
-    resetChallenge();
-    setChallengeOpen(true);
+    openChallenge('password');
   };
 
   const pickAndContinue = (token: string) => {
@@ -87,7 +102,10 @@ export function AccountSettings() {
     setChallengeHint('');
     if (next.length === challenge.sequence.length) {
       setChallengeVerified(true);
-      window.setTimeout(() => void submitPasswordChange(), 320);
+      window.setTimeout(() => {
+        if (challengePurpose === 'giftcode') void redeemGiftCode();
+        else if (challengePurpose === 'password') void submitPasswordChange();
+      }, 320);
     }
   };
 
@@ -115,8 +133,8 @@ export function AccountSettings() {
       <div className="account-giftcode-form">
         <label htmlFor="account-giftcode-input">{tr('Gift code')}</label>
         <div className="account-giftcode-input-row">
-          <input id="account-giftcode-input" value={giftCode} maxLength={200} autoComplete="off" spellCheck={false} placeholder={tr('Enter gift code')} onKeyDown={(event) => { if (event.key === 'Enter' && !giftRedeeming && giftCode.trim()) { event.preventDefault(); void redeemGiftCode(); } }} onChange={(event) => { setGiftCode(event.target.value); setGiftProblem(''); setGiftResult(null); }} />
-          <button type="button" className="button primary" disabled={giftRedeeming || !giftCode.trim()} onClick={() => void redeemGiftCode()}><Gift />{giftRedeeming ? tr('Redeeming...') : tr('Redeem')}</button>
+          <input id="account-giftcode-input" value={giftCode} maxLength={200} autoComplete="off" spellCheck={false} placeholder={tr('Enter gift code')} onKeyDown={(event) => { if (event.key === 'Enter' && !giftRedeeming && giftCode.trim()) { event.preventDefault(); requestGiftCodeRedeem(); } }} onChange={(event) => { setGiftCode(event.target.value); setGiftProblem(''); setGiftResult(null); }} />
+          <button type="button" className="button primary" disabled={giftRedeeming || !giftCode.trim()} onClick={requestGiftCodeRedeem}><Gift />{giftRedeeming ? tr('Redeeming...') : tr('Redeem')}</button>
         </div>
         <small>{tr('Gift codes are not case-sensitive. Spaces at the beginning or end are ignored.')}</small>
       </div>
@@ -143,12 +161,12 @@ export function AccountSettings() {
       <div className="account-password-actions"><button type="button" className="button primary" disabled={submitting} onClick={requestPasswordChange}><KeyRound />{submitting ? tr('Changing password...') : tr('Change password')}</button></div>
     </div>}
 
-    {challengeOpen && <div className="modal-backdrop account-constellation-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !submitting) setChallengeOpen(false); }}>
+    {challengeOpen && <div className="modal-backdrop account-constellation-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !submitting && !giftRedeeming) { setChallengeOpen(false); setChallengePurpose(null); } }}>
       <div className={`modal account-constellation-modal ${challengeVerified ? 'verified' : ''}`} role="dialog" aria-modal="true" aria-labelledby="security-constellation-title">
         <div className="account-constellation-heading">
           <span><Orbit /></span>
           <div><strong id="security-constellation-title">{tr('Security constellation')}</strong><small>{tr('Connect the stars in the shown order to unlock this action.')}</small></div>
-          <button type="button" disabled={submitting} onClick={resetChallenge}>{tr('Shuffle')}</button>
+          <button type="button" disabled={submitting || giftRedeeming} onClick={resetChallenge}>{tr('Shuffle')}</button>
         </div>
         <div className="account-constellation-sequence" aria-label={tr('Constellation route')}>
           {challenge.sequence.map((token, index) => <span key={token} className={index < challengeProgress.length ? 'done' : ''}>{token}</span>)}
@@ -161,10 +179,10 @@ export function AccountSettings() {
               return from && to ? <line key={`${from.id}-${to.id}`} x1={from.x} y1={from.y} x2={to.x} y2={to.y} /> : null;
             })}
           </svg>
-          {challenge.nodes.map((node) => <button key={node.id} type="button" className={challengeProgress.includes(node.id) ? 'active' : ''} style={{ left: `${node.x / 3}%`, top: `${node.y / 3}%` }} disabled={submitting || challengeVerified || challengeProgress.includes(node.id)} onClick={() => pickAndContinue(node.id)} aria-label={node.id}><span>{node.id}</span></button>)}
+          {challenge.nodes.map((node) => <button key={node.id} type="button" className={challengeProgress.includes(node.id) ? 'active' : ''} style={{ left: `${node.x / 3}%`, top: `${node.y / 3}%` }} disabled={submitting || giftRedeeming || challengeVerified || challengeProgress.includes(node.id)} onClick={() => pickAndContinue(node.id)} aria-label={node.id}><span>{node.id}</span></button>)}
         </div>
-        <div className="account-constellation-status" role="status">{submitting ? tr('Changing password...') : challengeVerified ? tr('Security check complete. You can continue.') : challengeHint || tr('{count}/{total} stars connected', { count: challengeProgress.length, total: challenge.sequence.length })}</div>
-        <div className="account-constellation-modal-actions"><button type="button" className="button secondary" disabled={submitting} onClick={() => setChallengeOpen(false)}>{tr('Cancel')}</button></div>
+        <div className="account-constellation-status" role="status">{giftRedeeming ? tr('Redeeming...') : submitting ? tr('Changing password...') : challengeVerified ? tr('Security check complete. You can continue.') : challengeHint || tr('{count}/{total} stars connected', { count: challengeProgress.length, total: challenge.sequence.length })}</div>
+        <div className="account-constellation-modal-actions"><button type="button" className="button secondary" disabled={submitting || giftRedeeming} onClick={() => { setChallengeOpen(false); setChallengePurpose(null); }}>{tr('Cancel')}</button></div>
       </div>
     </div>}
   </div>;

@@ -23,7 +23,7 @@ export function SettingsPage() {
   const [problem, setProblem] = useState('');
   const [confirming, setConfirming] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [activeTab, setActiveTab] = useState<SettingsTab>('network');
+  const [activeTab, setActiveTab] = useState<SettingsTab>('account');
 
   useEffect(() => {
     if (!result.data) return;
