@@ -357,6 +357,12 @@ pub(super) async fn stop_conversation(
     }
 
     let now = now_ms();
+    sqlx::query("UPDATE chatgpt_bridge_requests SET status='stop_requested',updated_at_ms=? WHERE task_id=? AND status IN ('queued','running')")
+        .bind(now)
+        .bind(id)
+        .execute(state.repository.pool())
+        .await
+        .map_err(db_problem)?;
     sqlx::query("UPDATE terminal_sessions SET status='closed',updated_at_ms=?,closed_at_ms=COALESCE(closed_at_ms,?) WHERE task_id=? AND status IN ('starting','running')")
         .bind(now).bind(now).bind(id).execute(state.repository.pool()).await.map_err(db_problem)?;
     sqlx::query("UPDATE task_sessions SET status='closed',updated_at_ms=? WHERE task_id=? AND status IN ('starting','running')")

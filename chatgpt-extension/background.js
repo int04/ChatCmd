@@ -59,6 +59,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     void hasReturnSource(sender.tab?.id).then((enabled) => sendResponse({ ok: true, enabled })).catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
     return true;
   }
+  if (message.type === 'chatcmd-chatgpt-request-status') {
+    void bridgeRequestState(message.requestId, sender.tab?.id)
+      .then((state) => sendResponse({ ok: true, ...state }))
+      .catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
+    return true;
+  }
+  if (message.type === 'chatcmd-chatgpt-recovery') {
+    const reason = message.reason === 'thread_error' ? 'ChatGPT hiển thị lỗi luồng' : 'ChatGPT ngừng phản hồi nhưng composer đã sẵn sàng';
+    void logExtension('warn', 'recovery', `${reason}; tự động tiếp tục lần ${Number(message.attempt) || 1} cho request ${message.requestId || 'unknown'}.`)
+      .then(() => sendResponse({ ok: true }))
+      .catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
+    return true;
+  }
   return false;
 });
 
@@ -386,6 +399,32 @@ async function postJson(baseUrl, path, body) {
     throw new Error(message);
   }
   return response.status === 204 ? undefined : response.json();
+}
+
+async function getJson(baseUrl, path) {
+  const response = await fetch(`${baseUrl}${path}`, {
+    method: 'GET',
+    headers: { 'X-ChatCmdClient': 'chatgpt-extension' },
+  });
+  if (!response.ok) {
+    let message = `ChatCMD local API trả lỗi ${response.status}.`;
+    try { message = (await response.json()).detail || message; } catch { /* non-json error */ }
+    throw new Error(message);
+  }
+  return response.json();
+}
+
+async function bridgeRequestState(requestId, tabId) {
+  if (!requestId) return { running: false, stopRequested: false, hasFinalResponse: false, active: false };
+  const context = await requestContext(requestId);
+  if (!context?.localBaseUrl || !context?.tabId || context.tabId !== tabId) {
+    return { running: false, stopRequested: false, hasFinalResponse: false, active: false };
+  }
+  const request = await getJson(context.localBaseUrl, `/api/local/chatgpt/requests/${encodeURIComponent(requestId)}`);
+  const running = request?.status === 'running';
+  const stopRequested = request?.status === 'stop_requested';
+  const hasFinalResponse = request?.hasFinalResponse === true;
+  return { running, stopRequested, hasFinalResponse, active: running && !hasFinalResponse };
 }
 
 async function requestContext(requestId) {

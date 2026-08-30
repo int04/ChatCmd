@@ -315,7 +315,7 @@ pub(super) async fn bridge_result(
         "stopped" => "interrupted",
         _ => "failed",
     };
-    sqlx::query("UPDATE tasks SET status=?,updated_at_ms=? WHERE id=?")
+    sqlx::query("UPDATE tasks SET status=CASE WHEN status='stopped' THEN status ELSE ? END,updated_at_ms=? WHERE id=?")
         .bind(task_status)
         .bind(now)
         .bind(&task_id)

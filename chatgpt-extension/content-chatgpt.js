@@ -1,3 +1,8 @@
+const AUTO_RECOVERY_PROMPT = 'Tôi vừa bị gián đoạn kết nối. Vui lòng kiểm tra trạng thái công việc ở lượt trước. Nếu chưa hoàn tất, hãy tiếp tục từ trạng thái hiện tại và hoàn thành phần còn lại; không làm lại những phần đã xong. Nếu đã hoàn tất, hãy trả lại kết quả cuối.';
+const MAX_AUTO_RECOVERIES = 2;
+const SILENT_RECOVERY_GRACE_MS = 8_000;
+const ERROR_RECOVERY_GRACE_MS = 2_500;
+
 let activeRequest = null;
 
 void chrome.runtime.sendMessage({ type: 'chatcmd-return-binding-status' }, (response) => {
@@ -10,7 +15,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       sendResponse({ ok: false, error: 'Tab ChatGPT này đang xử lý một yêu cầu khác.' });
       return false;
     }
-    activeRequest = { id: message.requestId, stopRequested: false };
+    activeRequest = { id: message.requestId, stopRequested: false, recoveryCount: 0 };
     void runRequest(message).finally(() => { activeRequest = null; });
     sendResponse({ ok: true });
     return false;
@@ -64,7 +69,7 @@ async function runRequest(message) {
       model: message.model || 'Auto',
       userText: latestMessageText('user') || message.submittedContent,
     });
-    const result = await waitForAssistant(assistantCount);
+    const result = await waitForAssistant(assistantCount, message.requestId);
     await progress({
       requestId: message.requestId,
       stage: 'result',
@@ -257,30 +262,130 @@ async function waitForConversationIdentity() {
   }, 15_000, 'ChatGPT chưa tạo conversation ID trên URL.');
 }
 
-async function waitForAssistant(previousCount) {
+async function waitForAssistant(previousCount, requestId) {
+  let baselineCount = previousCount;
   let lastText = '';
   let stableSince = 0;
+  let lastActivityAt = Date.now();
+  let lastStateCheckAt = 0;
   const startedAt = Date.now();
   while (Date.now() - startedAt < 10 * 60_000) {
+    const now = Date.now();
     const nodes = assistantNodes();
     const latest = nodes.at(-1);
     const text = latest?.innerText?.trim() || latest?.textContent?.trim() || '';
+    const stopButton = findStopButton();
+    const threadError = findThreadError();
+
     if (activeRequest?.stopRequested) {
       clickStopButton();
       if (!findStopButton()) return text;
     }
-    if (nodes.length > previousCount && text) {
-      if (text === lastText) {
-        if (!stableSince) stableSince = Date.now();
-        if (!findStopButton() && Date.now() - stableSince > 1_200) return text;
-      } else {
+
+    if (!activeRequest?.stopRequested && now - lastStateCheckAt > 800) {
+      lastStateCheckAt = now;
+      const state = await requestState(requestId);
+      if (state.stopRequested) {
+        activeRequest.stopRequested = true;
+        clickStopButton();
+        await delay(250);
+        continue;
+      }
+    }
+
+    if (stopButton) lastActivityAt = now;
+    if (nodes.length > baselineCount && text && !threadError) {
+      if (text !== lastText) {
         lastText = text;
-        stableSince = Date.now();
+        stableSince = now;
+        lastActivityAt = now;
+      } else if (!stableSince) {
+        stableSince = now;
+      }
+
+      if (!stopButton && stableSince && now - stableSince > 1_200 && now - lastStateCheckAt > 800) {
+        lastStateCheckAt = now;
+        const state = await requestState(requestId);
+        if (state.hasFinalResponse || !state.running) return text;
+      }
+    }
+
+    if (!stopButton && findComposer()) {
+      const idleMs = now - lastActivityAt;
+      const reason = threadError && idleMs >= ERROR_RECOVERY_GRACE_MS
+        ? 'thread_error'
+        : idleMs >= SILENT_RECOVERY_GRACE_MS
+          ? 'silent_interrupt'
+          : null;
+      if (reason) {
+        const state = await requestState(requestId);
+        if (state.hasFinalResponse) {
+          if (nodes.length > baselineCount && text) return text;
+          await delay(350);
+          continue;
+        }
+        if (!state.active) {
+          if (nodes.length > baselineCount && text) return text;
+          await delay(350);
+          continue;
+        }
+        if ((activeRequest?.recoveryCount || 0) >= MAX_AUTO_RECOVERIES) {
+          throw new Error(`ChatGPT vẫn bị gián đoạn sau ${MAX_AUTO_RECOVERIES} lần tự động tiếp tục.`);
+        }
+        baselineCount = nodes.length;
+        lastText = '';
+        stableSince = 0;
+        await recoverInterruptedRequest(requestId, reason);
+        lastActivityAt = Date.now();
+        await delay(650);
+        continue;
       }
     }
     await delay(350);
   }
   throw new Error('Quá lâu chưa nhận được phản hồi hoàn tất từ ChatGPT.');
+}
+
+function findThreadError() {
+  const latestUser = [...document.querySelectorAll('[data-message-author-role="user"]')].filter(isVisible).at(-1);
+  const candidates = [...document.querySelectorAll([
+    'button[data-testid="regenerate-thread-error-button"]',
+    '[class*="text-token-text-error"]',
+    '[class*="bg-token-surface-error"]',
+    '[class*="border-token-surface-error"]',
+  ].join(','))].filter(isVisible);
+  return candidates.reverse().find((element) => {
+    if (!latestUser) return true;
+    return Boolean(latestUser.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING);
+  }) || null;
+}
+
+async function recoverInterruptedRequest(requestId, reason) {
+  const composer = await waitForComposer();
+  activeRequest.recoveryCount = (activeRequest.recoveryCount || 0) + 1;
+  await recoveryEvent(requestId, reason, activeRequest.recoveryCount);
+  setComposerText(composer, AUTO_RECOVERY_PROMPT);
+  await submitPrompt(composer);
+}
+
+async function requestState(requestId) {
+  try {
+    const response = await chrome.runtime.sendMessage({ type: 'chatcmd-chatgpt-request-status', requestId });
+    if (response?.ok !== true) return { running: false, stopRequested: false, hasFinalResponse: false, active: false };
+    return {
+      running: response.running === true,
+      stopRequested: response.stopRequested === true,
+      hasFinalResponse: response.hasFinalResponse === true,
+      active: response.active === true,
+    };
+  } catch {
+    return { running: false, stopRequested: false, hasFinalResponse: false, active: false };
+  }
+}
+
+async function recoveryEvent(requestId, reason, attempt) {
+  try { await chrome.runtime.sendMessage({ type: 'chatcmd-chatgpt-recovery', requestId, reason, attempt }); }
+  catch (error) { console.warn('[ChatCMD recovery]', error); }
 }
 
 function assistantNodes() { return [...document.querySelectorAll('[data-message-author-role="assistant"]')].filter(isVisible); }

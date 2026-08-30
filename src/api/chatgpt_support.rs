@@ -14,7 +14,24 @@ const MAX_MESSAGE_CHARS: usize = 100_000;
 
 pub(super) async fn request_json(state: &Arc<AppState>, id: &str) -> Result<Json<Value>, Problem> {
     let row = bridge_request_row(state, id).await?;
-    Ok(Json(request_value(&row)))
+    let task_id = row.get::<Option<String>, _>("task_id");
+    let turn_id = row.get::<String, _>("turn_id");
+    let has_final_response = if let Some(task_id) = task_id.as_deref() {
+        sqlx::query_scalar::<_, i64>("SELECT EXISTS(SELECT 1 FROM timeline_events WHERE task_id=? AND turn_id=? AND actor='assistant' AND kind='status' AND json_extract(payload_json,'$.status')='completed' LIMIT 1)")
+            .bind(task_id)
+            .bind(&turn_id)
+            .fetch_one(state.repository.pool())
+            .await
+            .map_err(db_problem)?
+            != 0
+    } else {
+        false
+    };
+    let mut value = request_value(&row);
+    if let Some(object) = value.as_object_mut() {
+        object.insert("hasFinalResponse".to_owned(), json!(has_final_response));
+    }
+    Ok(Json(value))
 }
 
 pub(super) async fn bridge_request_row(
