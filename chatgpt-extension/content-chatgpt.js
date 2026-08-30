@@ -333,25 +333,90 @@ function renderReturnToChatCmd(enabled) {
   const id = 'chatcmd-return-to-app';
   document.getElementById(id)?.remove();
   if (!enabled) return;
+
   const button = document.createElement('button');
   button.id = id;
   button.type = 'button';
   button.setAttribute('aria-label', 'Quay lại ChatCMD');
   button.title = 'Quay lại ChatCMD';
-  button.innerHTML = '<span aria-hidden="true">↩</span><strong>ChatCMD</strong>';
+  button.innerHTML = `
+    <span data-chatcmd-return-icon aria-hidden="true">↩</span>
+    <span data-chatcmd-return-copy>
+      <strong>Quay lại ChatCMD</strong>
+      <small>Bấm để trở về</small>
+    </span>
+    <i data-chatcmd-return-dot aria-hidden="true"></i>
+  `;
+
   Object.assign(button.style, {
-    position: 'fixed', right: '18px', bottom: '92px', zIndex: '2147483647',
-    display: 'inline-flex', alignItems: 'center', gap: '8px', minHeight: '42px',
-    padding: '0 14px', border: '1px solid rgba(255,255,255,.16)', borderRadius: '999px',
-    background: 'rgba(20,20,20,.92)', color: '#fff', boxShadow: '0 12px 36px rgba(0,0,0,.28)',
-    backdropFilter: 'blur(14px)', font: '600 13px/1 system-ui,-apple-system,Segoe UI,sans-serif', cursor: 'pointer'
+    position: 'fixed', right: '24px', bottom: '112px', zIndex: '2147483647',
+    display: 'grid', gridTemplateColumns: '46px minmax(0,1fr) 10px', alignItems: 'center', gap: '11px',
+    minWidth: '220px', minHeight: '66px', padding: '9px 15px 9px 10px',
+    border: '1px solid rgba(255,255,255,.28)', borderRadius: '20px',
+    background: 'linear-gradient(135deg,rgba(124,58,237,.98),rgba(37,99,235,.98))', color: '#fff',
+    boxShadow: '0 18px 46px rgba(76,29,149,.42),0 0 0 1px rgba(255,255,255,.08) inset',
+    backdropFilter: 'blur(18px)', WebkitBackdropFilter: 'blur(18px)',
+    font: '600 13px/1.2 system-ui,-apple-system,Segoe UI,sans-serif', cursor: 'pointer',
+    transformOrigin: 'right center', transition: 'transform 180ms ease,box-shadow 180ms ease,filter 180ms ease',
+    isolation: 'isolate', overflow: 'hidden'
   });
-  button.addEventListener('mouseenter', () => { button.style.transform = 'translateY(-1px)'; button.style.background = 'rgba(34,34,34,.96)'; });
-  button.addEventListener('mouseleave', () => { button.style.transform = ''; button.style.background = 'rgba(20,20,20,.92)'; });
+
+  const icon = button.querySelector('[data-chatcmd-return-icon]');
+  const copy = button.querySelector('[data-chatcmd-return-copy]');
+  const dot = button.querySelector('[data-chatcmd-return-dot]');
+  Object.assign(icon.style, {
+    width: '46px', height: '46px', display: 'grid', placeItems: 'center', borderRadius: '15px',
+    background: 'rgba(255,255,255,.16)', boxShadow: '0 0 0 1px rgba(255,255,255,.14) inset',
+    fontSize: '25px', fontWeight: '800'
+  });
+  Object.assign(copy.style, { minWidth: '0', display: 'grid', gap: '4px', textAlign: 'left' });
+  Object.assign(copy.querySelector('strong').style, { fontSize: '14px', letterSpacing: '-.01em', whiteSpace: 'nowrap' });
+  Object.assign(copy.querySelector('small').style, { color: 'rgba(255,255,255,.78)', fontSize: '11px', fontWeight: '550' });
+  Object.assign(dot.style, {
+    width: '9px', height: '9px', borderRadius: '50%', background: '#86efac',
+    boxShadow: '0 0 0 4px rgba(134,239,172,.16),0 0 16px rgba(134,239,172,.8)'
+  });
+
+  const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  if (!reducedMotion) {
+    button.animate([
+      { boxShadow: '0 18px 46px rgba(76,29,149,.42),0 0 0 0 rgba(139,92,246,.34)' },
+      { boxShadow: '0 20px 54px rgba(76,29,149,.52),0 0 0 12px rgba(139,92,246,0)' }
+    ], { duration: 1900, iterations: Infinity, easing: 'ease-out' });
+    icon.animate([
+      { transform: 'translateX(0) rotate(0deg)' },
+      { transform: 'translateX(-3px) rotate(-8deg)' },
+      { transform: 'translateX(0) rotate(0deg)' }
+    ], { duration: 1450, iterations: Infinity, easing: 'ease-in-out' });
+    dot.animate([{ opacity: .55 }, { opacity: 1 }, { opacity: .55 }], { duration: 1100, iterations: Infinity, easing: 'ease-in-out' });
+    button.animate([
+      { opacity: 0, transform: 'translateX(26px) scale(.9)' },
+      { opacity: 1, transform: 'translateX(0) scale(1.04)' },
+      { opacity: 1, transform: 'translateX(0) scale(1)' }
+    ], { duration: 520, easing: 'cubic-bezier(.16,1,.3,1)' });
+  }
+
+  button.addEventListener('mouseenter', () => {
+    button.style.transform = 'translateY(-4px) scale(1.035)';
+    button.style.filter = 'brightness(1.1) saturate(1.08)';
+    button.style.boxShadow = '0 24px 64px rgba(76,29,149,.55),0 0 0 1px rgba(255,255,255,.18) inset';
+  });
+  button.addEventListener('mouseleave', () => {
+    button.style.transform = '';
+    button.style.filter = '';
+    button.style.boxShadow = '0 18px 46px rgba(76,29,149,.42),0 0 0 1px rgba(255,255,255,.08) inset';
+  });
   button.addEventListener('click', () => {
     button.disabled = true;
-    chrome.runtime.sendMessage({ type: 'chatcmd-return-to-source' }, () => { button.disabled = false; });
+    button.style.opacity = '.7';
+    copy.querySelector('small').textContent = 'Đang quay lại…';
+    chrome.runtime.sendMessage({ type: 'chatcmd-return-to-source' }, () => {
+      button.disabled = false;
+      button.style.opacity = '';
+      copy.querySelector('small').textContent = 'Bấm để trở về';
+    });
   });
+
   document.documentElement.appendChild(button);
 }
 
