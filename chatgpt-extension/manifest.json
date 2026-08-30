@@ -3,7 +3,7 @@
   "name": "ChatCMD ChatGPT Bridge",
   "version": "0.1.0",
   "description": "Bridges the local ChatCMD console to an already signed-in chatgpt.com tab.",
-  "permissions": ["tabs", "storage"],
+  "permissions": ["tabs", "storage", "scripting"],
   "host_permissions": [
     "https://chatgpt.com/*",
     "http://localhost/*",

@@ -1,5 +1,7 @@
 const REQUEST_PREFIX = 'chatcmd-request:';
 const CONVERSATION_PREFIX = 'chatcmd-conversation:';
+const LOG_KEY = 'chatcmd-extension-logs';
+const MAX_LOGS = 200;
 const CHATGPT_HOME = 'https://chatgpt.com/';
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -18,6 +20,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: true });
       } catch (error) { sendResponse({ ok: false, error: errorMessage(error) }); }
       return false;
+    }
+    if (message.action === 'logs') {
+      void extensionLogs().then((logs) => sendResponse({ ok: true, logs })).catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
+      return true;
+    }
+    if (message.action === 'clear-logs') {
+      void chrome.storage.local.remove(LOG_KEY).then(() => sendResponse({ ok: true })).catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
+      return true;
     }
     if (message.action === 'stop') {
       void stopRequest(message).then(() => sendResponse({ ok: true })).catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
@@ -136,6 +146,7 @@ async function acquireNewConversationTab() {
   return tab;
 }
 
+
 async function acquireConversationTab(target) {
   const tab = await findConversationTab(target);
   if (!tab?.id) throw new Error('Tab ChatGPT của cuộc trò chuyện này không còn mở. Hãy mở lại link cuộc trò chuyện rồi thử lại.');
@@ -191,15 +202,61 @@ async function releaseRequest(requestId) {
 
 async function sendToChatGpt(tabId, payload) {
   let lastError;
-  for (let attempt = 0; attempt < 12; attempt++) {
+  let reinjected = false;
+  await logExtension('info', 'background', `Gửi ${payload?.type || 'message'} tới tab ${tabId}.`);
+  for (let attempt = 0; attempt < 20; attempt++) {
     try {
       const response = await chrome.tabs.sendMessage(tabId, payload);
-      if (response?.ok) return;
-      lastError = new Error(response?.error || 'ChatGPT content script chưa sẵn sàng.');
-    } catch (error) { lastError = error; }
-    await delay(250);
+      if (response?.ok) {
+        await logExtension('info', 'background', `Tab ${tabId} phản hồi thành công ở lần ${attempt + 1}.`);
+        return response;
+      }
+      lastError = new Error(response?.error || 'ChatGPT content script không thể hoàn tất yêu cầu.');
+      await logExtension('error', 'content-chatgpt', `Tab ${tabId} đã nhận yêu cầu nhưng trả lỗi: ${errorMessage(lastError)}`);
+      throw lastError;
+    } catch (error) {
+      lastError = error;
+      if (!isMissingReceiverError(error)) {
+        await logExtension('error', 'background', `Tab ${tabId} trả lỗi thực tế: ${errorMessage(error)}`);
+        throw error;
+      }
+      await logExtension('warn', 'background', `Không có receiver ở tab ${tabId}, lần ${attempt + 1}: ${errorMessage(error)}`);
+      if (!reinjected) {
+        reinjected = true;
+        try {
+          await logExtension('info', 'background', `Inject lại content-chatgpt.js vào tab ${tabId}.`);
+          await chrome.scripting.executeScript({ target: { tabId }, files: ['content-chatgpt.js'] });
+          await logExtension('info', 'background', `Inject content-chatgpt.js vào tab ${tabId} thành công.`);
+          await delay(150);
+          continue;
+        } catch (injectError) {
+          lastError = injectError;
+          await logExtension('error', 'background', `Inject tab ${tabId} thất bại: ${errorMessage(injectError)}`);
+          throw injectError;
+        }
+      }
+    }
+    await delay(300);
   }
+  await logExtension('error', 'background', `Không thể gửi tới tab ${tabId}: ${errorMessage(lastError)}`);
   throw lastError || new Error('Không thể kết nối content script trên chatgpt.com.');
+}
+
+async function logExtension(level, source, message) {
+  const stored = await chrome.storage.local.get(LOG_KEY);
+  const logs = Array.isArray(stored[LOG_KEY]) ? stored[LOG_KEY] : [];
+  logs.push({ at: new Date().toISOString(), level, source, message: String(message || '') });
+  await chrome.storage.local.set({ [LOG_KEY]: logs.slice(-MAX_LOGS) });
+}
+
+async function extensionLogs() {
+  const stored = await chrome.storage.local.get(LOG_KEY);
+  return Array.isArray(stored[LOG_KEY]) ? stored[LOG_KEY] : [];
+}
+
+function isMissingReceiverError(error) {
+  const message = errorMessage(error).toLowerCase();
+  return message.includes('receiving end does not exist') || message.includes('could not establish connection');
 }
 
 async function waitForTab(tabId) {

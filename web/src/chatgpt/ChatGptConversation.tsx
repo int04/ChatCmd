@@ -40,6 +40,7 @@ export function NewChatGptConversation() {
     return () => { disposed = true; window.clearInterval(timer); };
   }, []);
 
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!agentId || !content.trim() || busy) return;
@@ -63,6 +64,7 @@ export function NewChatGptConversation() {
       <header><span className="chatgpt-logo"><Bot /></span><div><span className="eyebrow">{tr('CHATGPT.COM')}</span><h1>{tr('New message')}</h1><p>{tr('Send using the signed-in ChatGPT session in Chrome / Edge.')}</p></div></header>
       <ExtensionState ready={extensionReady} />
       {extensionReady && chatGptTabOpen === false && <p className="chatgpt-input-warning" role="status"><CircleAlert /><span><strong>{tr('No blank ChatGPT tab is open for a new conversation.')}</strong> {tr('After you send the message, ChatCMD will automatically open a new ChatGPT tab and continue there.')}</span></p>}
+      <button className="button secondary chatgpt-open-log-window" type="button" onClick={() => window.dispatchEvent(new Event('chatcmd:open-extension-logs'))}>{tr('View extension logs')}</button>
       <form onSubmit={(event) => void submit(event)}>
         <div className="chatgpt-form-grid">
           <label><span>{tr('MCP agent')}</span><select value={agentId} onChange={(event) => setAgentId(event.target.value)} disabled={busy || agents.loading} required>

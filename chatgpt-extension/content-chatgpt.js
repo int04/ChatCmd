@@ -140,21 +140,55 @@ function composerMissingMessage() {
 async function selectModel(model) {
   const target = String(model || '').trim();
   if (!target || ['auto', 'default', 'mặc định'].includes(target.toLowerCase())) return;
-  const button = findVisible([
-    'button[data-testid="model-switcher-dropdown-button"]',
-    'button[aria-label*="model" i]',
-    'button[id*="model" i]',
-  ]);
-  if (!button) throw new Error(`Không tìm thấy bộ chọn model ChatGPT. Chọn Auto hoặc mở đúng giao diện chatgpt.com.`);
+  const button = findModelSwitcherButton();
+  if (!button) throw new Error(`ChatGPT hiện không hiển thị bộ chọn model cụ thể. Hãy dùng Auto trên giao diện ChatCMD.`);
   button.click();
   await delay(250);
   const option = await waitFor(() => {
-    const candidates = [...document.querySelectorAll('[role="menuitem"], [role="option"], [data-radix-collection-item]')].filter(isVisible);
+    const candidates = [...document.querySelectorAll('[role="menuitem"], [role="option"], [data-radix-collection-item]')]
+      .filter((item) => isVisible(item) && !item.closest('form[data-type="unified-composer"]'));
     const wanted = normalize(target);
     return candidates.find((item) => normalize(item.textContent).includes(wanted)) || null;
   }, 4_000, `Không tìm thấy model “${target}” trong menu ChatGPT.`);
   option.click();
   await delay(200);
+}
+
+
+function findModelSwitcherButton() {
+  const selectors = [
+    'button[data-testid="model-switcher-dropdown-button"]',
+    'button[aria-label*="model" i]',
+    'button[id*="model" i]',
+  ];
+  for (const selector of selectors) {
+    for (const button of document.querySelectorAll(selector)) {
+      if (isVisible(button) && !button.closest('form[data-type="unified-composer"]')) return button;
+    }
+  }
+
+  const header = document.querySelector('#page-header');
+  if (!header) return null;
+  return [...header.querySelectorAll('button[aria-haspopup="menu"]')].find((button) => {
+    if (!isVisible(button) || button.closest('form[data-type="unified-composer"]')) return false;
+    return looksLikeModelLabel(cleanModelLabel(button.textContent || button.getAttribute('aria-label') || ''));
+  }) || null;
+}
+
+
+function looksLikeModelLabel(value) {
+  const text = String(value || '').trim();
+  if (!text) return false;
+  return /^(?:GPT(?:[-\s]?[0-9][\w.-]*)?(?:\s+(?:Pro|Thinking|Instant|Mini))?|o[1-9](?:[-\s][\w.-]+)?)$/i.test(text);
+}
+
+function cleanModelLabel(value) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  const stripped = text.replace(/^model\s*[:：-]?\s*/i, '').trim();
+  const ignored = ['model', 'models', 'select model', 'choose model', 'chatgpt', 'suy luận', 'vừa', 'thinking', 'reasoning'];
+  if (!stripped || ignored.includes(stripped.toLowerCase())) return '';
+  return stripped;
 }
 
 function setComposerText(composer, text) {
