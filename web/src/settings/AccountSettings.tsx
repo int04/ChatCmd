@@ -126,6 +126,7 @@ export function AccountSettings() {
         <div className="account-giftcode-result-grid">
           <AccountValue label={tr('Plan received')} value={giftResult.planName} />
           <AccountValue label={tr('Added time')} value={tr('{days} days', { days: giftResult.days })} />
+          <AccountValue label={tr('Remaining uses')} value={String(giftResult.remainingUses)} />
           <AccountValue label={tr('Expires at')} value={formatDate(giftResult.expiresAt)} />
         </div>
       </div>}
@@ -176,6 +177,7 @@ function giftCodeErrorMessage(error: unknown) {
     case 'giftcode_too_long': return tr('Gift code is too long.');
     case 'giftcode_not_found': return tr('Gift code does not exist.');
     case 'giftcode_already_used': return tr('This gift code has already been used by your account.');
+    case 'giftcode_exhausted': return tr('Gift code has no remaining uses.');
     case 'giftcode_plan_lower_than_current': return tr('This gift code is for a lower plan than your current plan.');
     case 'giftcode_invalid':
     case 'giftcode_invalid_days':

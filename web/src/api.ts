@@ -13,6 +13,7 @@ export interface GiftCodeRedeemResult {
   planType: number;
   planName: string;
   days: number;
+  remainingUses: number;
   expiresAt: string;
 }
 
