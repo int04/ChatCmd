@@ -42,22 +42,48 @@ impl RuntimeHost {
         } else {
             None
         };
+        let pending_chatgpt_bridge_task = if delegated_task.is_none()
+            && chatgpt_bridge_task.is_none()
+            && mapped_scope_task.is_none()
+        {
+            let bound = if first_user_message.is_none() {
+                self.unique_recent_chatgpt_bridge_task(&context.agent_id)
+                    .await?
+            } else {
+                None
+            };
+            match bound {
+                Some(task_id) => Some(task_id),
+                None => {
+                    self.claim_unbound_chatgpt_bridge_task(
+                        &context.agent_id,
+                        conversation_scope.as_deref(),
+                        first_user_message,
+                    )
+                    .await?
+                }
+            }
+        } else {
+            None
+        };
         let task = delegated_task.unwrap_or_else(|| {
             chatgpt_bridge_task.unwrap_or_else(|| {
                 mapped_scope_task.unwrap_or_else(|| {
-                    if let (Some(scope), Some(message)) =
-                        (conversation_scope.as_deref(), first_user_message)
-                    {
-                        task_identity_from_first_message(&context.agent_id, scope, message)
-                    } else {
-                        select_task_identity(
-                            &context.agent_id,
-                            conversation_scope.as_deref(),
-                            context.task_id.as_deref(),
-                            bound_task.as_deref(),
-                            &context.request_id,
-                        )
-                    }
+                    pending_chatgpt_bridge_task.unwrap_or_else(|| {
+                        if let (Some(scope), Some(message)) =
+                            (conversation_scope.as_deref(), first_user_message)
+                        {
+                            task_identity_from_first_message(&context.agent_id, scope, message)
+                        } else {
+                            select_task_identity(
+                                &context.agent_id,
+                                conversation_scope.as_deref(),
+                                context.task_id.as_deref(),
+                                bound_task.as_deref(),
+                                &context.request_id,
+                            )
+                        }
+                    })
                 })
             })
         });
@@ -268,11 +294,11 @@ impl RuntimeHost {
     ) -> RuntimeResult<Option<String>> {
         let cutoff = now_ms().saturating_sub(5 * 60 * 1000);
         sqlx::query_scalar::<_, String>(
-            r#"SELECT c.task_id
-               FROM chatgpt_conversations c
-               JOIN chatgpt_bridge_requests r ON r.id=c.active_request_id
-               JOIN tasks t ON t.id=c.task_id
-               WHERE t.agent_id=? AND t.source='chatgpt_web'
+            r#"SELECT r.task_id
+               FROM chatgpt_bridge_requests r
+               JOIN tasks t ON t.id=r.task_id
+               WHERE r.task_id IS NOT NULL
+                 AND t.agent_id=? AND t.source='chatgpt_web'
                  AND r.submitted_content=?
                  AND r.status IN ('queued','running','stop_requested')
                  AND r.updated_at_ms>=?
@@ -287,6 +313,33 @@ impl RuntimeHost {
         .map_err(|_| {
             RuntimeError::new("storage_error", "ChatGPT bridge task binding lookup failed")
         })
+    }
+
+    async fn unique_recent_chatgpt_bridge_task(
+        &self,
+        agent_id: &str,
+    ) -> RuntimeResult<Option<String>> {
+        let cutoff = now_ms().saturating_sub(90_000);
+        let rows = sqlx::query_scalar::<_, String>(
+            r#"SELECT r.task_id
+               FROM chatgpt_bridge_requests r
+               JOIN tasks t ON t.id=r.task_id
+               WHERE r.task_id IS NOT NULL
+                 AND t.agent_id=? AND t.source='chatgpt_web'
+                 AND r.status IN ('queued','running','stop_requested')
+                 AND r.updated_at_ms>=?
+               GROUP BY r.task_id
+               ORDER BY MAX(r.updated_at_ms) DESC
+               LIMIT 2"#,
+        )
+        .bind(agent_id)
+        .bind(cutoff)
+        .fetch_all(self.repository.pool())
+        .await
+        .map_err(|_| {
+            RuntimeError::new("storage_error", "pending ChatGPT bridge task lookup failed")
+        })?;
+        Ok((rows.len() == 1).then(|| rows[0].clone()))
     }
 
     async fn bound_task_for_turn(

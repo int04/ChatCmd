@@ -307,8 +307,11 @@ pub(super) async fn load_session(
         tracing::warn!(error, "read auth session from OS credential vault failed");
         secure_store_problem()
     })?;
-    let Some(secret) = secret else { return Ok(None); };
-    let tokens: TokenResponse = serde_json::from_str(&secret).map_err(|_| secure_store_problem())?;
+    let Some(secret) = secret else {
+        return Ok(None);
+    };
+    let tokens: TokenResponse =
+        serde_json::from_str(&secret).map_err(|_| secure_store_problem())?;
     Ok(Some(StoredAuthSession {
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,

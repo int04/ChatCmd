@@ -561,9 +561,7 @@ mod tests {
         fs::create_dir_all(&directory).expect("create skill directory");
         fs::write(
             directory.join("SKILL.md"),
-            format!(
-                "---\nname: {name}\ndescription: test skill\n---\n\n{marker}\n"
-            ),
+            format!("---\nname: {name}\ndescription: test skill\n---\n\n{marker}\n"),
         )
         .expect("write skill");
     }
@@ -592,7 +590,15 @@ mod tests {
 
         assert!(from_a.instructions.contains("project-a"));
         assert!(from_b.instructions.contains("project-b"));
-        assert!(from_a.source.starts_with(project_a.to_string_lossy().as_ref()));
-        assert!(from_b.source.starts_with(project_b.to_string_lossy().as_ref()));
+        assert!(
+            from_a
+                .source
+                .starts_with(project_a.to_string_lossy().as_ref())
+        );
+        assert!(
+            from_b
+                .source
+                .starts_with(project_b.to_string_lossy().as_ref())
+        );
     }
 }

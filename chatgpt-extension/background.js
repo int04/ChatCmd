@@ -76,7 +76,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-  void handleClosedTab(tabId);
+  setTimeout(() => void handleClosedTab(tabId), 400);
+});
+
+chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
+  void migrateTabBindings(removedTabId, addedTabId);
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (!changeInfo.url || !isChatGptUrl(changeInfo.url)) return;
+  void refreshConversationAliases(tabId, tab?.url || changeInfo.url);
 });
 
 async function startRequest(message) {
@@ -125,6 +134,9 @@ async function handleProgress(message, tabId) {
     return;
   }
   if (message.stage === 'result') {
+    if (message.conversationId && context.tabId) {
+      await bindConversationTab(message.conversationId, context.tabId);
+    }
     await postJson(context.localBaseUrl, `/api/local/chatgpt/bridge/${encodeURIComponent(message.requestId)}/result`, {
       status: message.status,
       conversationId: message.conversationId,
@@ -165,6 +177,43 @@ async function handleClosedTab(tabId) {
   }
   if (removals.length) await chrome.storage.session.remove([...new Set(removals)]);
   await Promise.allSettled(failures);
+}
+
+async function migrateTabBindings(removedTabId, addedTabId) {
+  if (!removedTabId || !addedTabId || removedTabId === addedTabId) return;
+  const stored = await chrome.storage.session.get(null);
+  const updates = {};
+  const removals = [];
+  for (const [key, value] of Object.entries(stored)) {
+    if (!value || typeof value !== 'object') continue;
+    if (key === `${RETURN_TAB_PREFIX}${removedTabId}`) {
+      updates[`${RETURN_TAB_PREFIX}${addedTabId}`] = value;
+      removals.push(key);
+      continue;
+    }
+    let changed = false;
+    const next = { ...value };
+    if (value.tabId === removedTabId) {
+      next.tabId = addedTabId;
+      changed = true;
+    }
+    if (value.sourceTabId === removedTabId) {
+      next.sourceTabId = addedTabId;
+      changed = true;
+    }
+    if (changed) updates[key] = next;
+  }
+  if (Object.keys(updates).length) await chrome.storage.session.set(updates);
+  if (removals.length) await chrome.storage.session.remove(removals);
+  const tab = await safeTab(addedTabId);
+  if (tab?.url) await refreshConversationAliases(addedTabId, tab.url);
+  await logExtension('info', 'background', `Chrome thay tab ${removedTabId} bằng ${addedTabId}; đã chuyển binding ChatCMD sang tab mới.`);
+}
+
+async function refreshConversationAliases(tabId, tabUrl) {
+  const liveId = conversationIdFromUrl(tabUrl || '');
+  if (!tabId || !liveId) return;
+  await bindConversationTab(liveId, tabId);
 }
 
 async function chatGptTabStatus(conversationUrl) {
@@ -256,6 +305,14 @@ async function findConversationTab(target) {
   if (bound?.tabId) {
     const tab = await safeTab(bound.tabId);
     if (tab && sameConversationUrl(tab.url, target)) return tab;
+    if (tab && isChatGptUrl(tab.url) && isProvisionalConversationId(conversationId)) {
+      const liveId = conversationIdFromUrl(tab.url);
+      if (liveId && !isProvisionalConversationId(liveId)) {
+        await bindConversationTab(liveId, tab.id);
+      }
+      return tab;
+    }
+    if (tab?.status === 'loading' && isChatGptUrl(tab.url)) return tab;
   }
   const tabs = await chatGptTabs();
   const discovered = tabs.find((tab) => tab.id && sameConversationUrl(tab.url, target));
@@ -446,8 +503,11 @@ function conversationTarget(value) {
 }
 
 function conversationIdFromUrl(value) {
-  try { return new URL(value).pathname.match(/^\/c\/([^/?#]+)/)?.[1] || null; }
-  catch { return null; }
+  try {
+    const url = new URL(value);
+    if (url.origin !== 'https://chatgpt.com') return null;
+    return url.pathname.match(/(?:^|\/)c\/([^/?#]+)/)?.[1] || null;
+  } catch { return null; }
 }
 
 function sameConversationUrl(left, right) {
@@ -461,6 +521,15 @@ function isNewConversationUrl(value) {
     const url = new URL(value || '');
     return url.origin === 'https://chatgpt.com' && url.pathname === '/';
   } catch { return false; }
+}
+
+function isChatGptUrl(value) {
+  try { return new URL(value || '').origin === 'https://chatgpt.com'; }
+  catch { return false; }
+}
+
+function isProvisionalConversationId(value) {
+  return /^WEB:/i.test(String(value || ''));
 }
 
 function localOrigin(value) {

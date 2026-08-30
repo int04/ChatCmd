@@ -5,33 +5,39 @@ export function useLoad<T>(loader: () => Promise<T>, dependencies: unknown[] = [
   const [data, setData] = useState<T>();
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
-  const refreshingRef = useRef(false);
+  const requestGenerationRef = useRef(0);
 
   const reload = useCallback(async () => {
+    const generation = ++requestGenerationRef.current;
     setLoading(true);
     setError('');
     try {
-      setData(await loader());
+      const result = await loader();
+      if (generation !== requestGenerationRef.current) return;
+      setData(result);
     } catch (value) {
+      if (generation !== requestGenerationRef.current) return;
       setError(value instanceof Error ? value.message : tr('Unknown error'));
     } finally {
-      setLoading(false);
+      if (generation === requestGenerationRef.current) setLoading(false);
     }
   }, dependencies); // eslint-disable-line react-hooks/exhaustive-deps
 
   const refresh = useCallback(async () => {
-    if (refreshingRef.current) return;
-    refreshingRef.current = true;
+    const generation = ++requestGenerationRef.current;
     try {
-      setData(await loader());
+      const result = await loader();
+      if (generation !== requestGenerationRef.current) return;
+      setData(result);
       setError('');
     } catch {
       // Background refresh must preserve the currently visible data and error state.
-    } finally {
-      refreshingRef.current = false;
     }
   }, dependencies); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { void reload(); }, [reload]);
+  useEffect(() => {
+    void reload();
+    return () => { requestGenerationRef.current += 1; };
+  }, [reload]);
   return { data, setData, error, loading, reload, refresh };
 }

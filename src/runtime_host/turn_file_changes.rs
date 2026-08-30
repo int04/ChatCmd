@@ -319,9 +319,7 @@ fn transient_file(path: &Path) -> bool {
         .and_then(|value| value.to_str())
         .unwrap_or_default();
     let lower = name.to_ascii_lowercase();
-    lower.starts_with(".tmp_")
-        || lower.starts_with("tmp_agent_")
-        || is_named_tempfile_name(name)
+    lower.starts_with(".tmp_") || lower.starts_with("tmp_agent_") || is_named_tempfile_name(name)
 }
 
 fn is_named_tempfile_name(name: &str) -> bool {

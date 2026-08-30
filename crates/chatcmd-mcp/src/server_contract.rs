@@ -61,9 +61,14 @@ mod tests {
     fn server_instructions_require_regular_progress_updates() {
         assert!(SERVER_INSTRUCTIONS.contains("PROGRESS RULE"));
         assert!(SERVER_INSTRUCTIONS.contains("agent_progress is mandatory"));
-        assert!(SERVER_INSTRUCTIONS.contains("after approximately 2-4 substantive non-progress tool calls"));
+        assert!(
+            SERVER_INSTRUCTIONS
+                .contains("after approximately 2-4 substantive non-progress tool calls")
+        );
         assert!(SERVER_INSTRUCTIONS.contains("whenever the work changes phase"));
-        assert!(SERVER_INSTRUCTIONS.contains("Never call agent_progress after agent_turn_complete"));
+        assert!(
+            SERVER_INSTRUCTIONS.contains("Never call agent_progress after agent_turn_complete")
+        );
     }
 
     #[test]
@@ -99,16 +104,28 @@ mod tests {
         assert!(SERVER_INSTRUCTIONS.contains("'chia agent'"));
         assert!(SERVER_INSTRUCTIONS.contains("'chia ra N agent'"));
         assert!(SERVER_INSTRUCTIONS.contains("'dùng nhiều agent'"));
-        assert!(SERVER_INSTRUCTIONS.contains("MUST attempt host-native delegation/subagent execution"));
-        assert!(SERVER_INSTRUCTIONS.contains("register/synchronize each delegated child with ChatCMD via agent_subagent_start"));
+        assert!(
+            SERVER_INSTRUCTIONS.contains("MUST attempt host-native delegation/subagent execution")
+        );
+        assert!(SERVER_INSTRUCTIONS.contains(
+            "register/synchronize each delegated child with ChatCMD via agent_subagent_start"
+        ));
         assert!(SERVER_INSTRUCTIONS.contains("Do not substitute a local Codex fallback"));
     }
 
     #[test]
     fn server_instructions_require_parent_to_continue_when_sampling_is_unavailable() {
-        assert!(SERVER_INSTRUCTIONS.contains("parent MUST continue handling the original user request"));
-        assert!(SERVER_INSTRUCTIONS.contains("MUST explicitly report that native child-agent delegation was unavailable"));
-        assert!(SERVER_INSTRUCTIONS.contains("MUST NOT end the turn merely to report that sub-agent creation is unavailable"));
+        assert!(
+            SERVER_INSTRUCTIONS.contains("parent MUST continue handling the original user request")
+        );
+        assert!(
+            SERVER_INSTRUCTIONS.contains(
+                "MUST explicitly report that native child-agent delegation was unavailable"
+            )
+        );
+        assert!(SERVER_INSTRUCTIONS.contains(
+            "MUST NOT end the turn merely to report that sub-agent creation is unavailable"
+        ));
         assert!(SERVER_INSTRUCTIONS.contains("MUST NOT treat samplingUnavailable as completion"));
     }
 }

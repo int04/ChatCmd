@@ -379,7 +379,8 @@ mod tests {
             Some("ok")
         );
 
-        let invalid_register = br#"{"email":"invalid","password":"short","machineId":"interop-machine"}"#;
+        let invalid_register =
+            br#"{"email":"invalid","password":"short","machineId":"interop-machine"}"#;
         let response = client
             .request(
                 Method::POST,
@@ -390,6 +391,9 @@ mod tests {
             )
             .await
             .expect("encrypted backend JSON request");
-        assert_ne!(response.status, 415, "decrypted JSON must reach ASP.NET model binding as application/json");
+        assert_ne!(
+            response.status, 415,
+            "decrypted JSON must reach ASP.NET model binding as application/json"
+        );
     }
 }

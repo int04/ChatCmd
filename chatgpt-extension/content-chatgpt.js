@@ -70,12 +70,17 @@ async function runRequest(message) {
       userText: latestMessageText('user') || message.submittedContent,
     });
     const result = await waitForAssistant(assistantCount, message.requestId);
+    const finalIdentity = currentConversationIdentity();
+    if (finalIdentity && !isProvisionalConversationId(finalIdentity.conversationId)) {
+      conversationId = finalIdentity.conversationId;
+      conversationUrl = finalIdentity.conversationUrl;
+    }
     await progress({
       requestId: message.requestId,
       stage: 'result',
       status: activeRequest?.stopRequested ? 'stopped' : 'completed',
       conversationId,
-      conversationUrl: window.location.href,
+      conversationUrl: conversationUrl || window.location.href,
       assistantContent: result,
     });
   } catch (error) {
@@ -255,11 +260,20 @@ async function submitPrompt(composer) {
 }
 
 async function waitForConversationIdentity() {
-  return waitFor(() => {
-    const match = window.location.pathname.match(/^\/c\/([^/?#]+)/);
-    if (!match) return null;
-    return { conversationId: decodeURIComponent(match[1]), conversationUrl: window.location.href };
-  }, 15_000, 'ChatGPT chưa tạo conversation ID trên URL.');
+  return waitFor(currentConversationIdentity, 15_000, 'ChatGPT chưa tạo conversation ID trên URL.');
+}
+
+function currentConversationIdentity() {
+  const match = window.location.pathname.match(/(?:^|\/)c\/([^/?#]+)/);
+  if (!match) return null;
+  return {
+    conversationId: decodeURIComponent(match[1]),
+    conversationUrl: window.location.href,
+  };
+}
+
+function isProvisionalConversationId(value) {
+  return /^WEB:/i.test(String(value || ''));
 }
 
 async function waitForAssistant(previousCount, requestId) {
@@ -268,6 +282,7 @@ async function waitForAssistant(previousCount, requestId) {
   let stableSince = 0;
   let lastActivityAt = Date.now();
   let lastStateCheckAt = 0;
+  let generationObserved = false;
   const startedAt = Date.now();
   while (Date.now() - startedAt < 10 * 60_000) {
     const now = Date.now();
@@ -276,6 +291,7 @@ async function waitForAssistant(previousCount, requestId) {
     const text = latest?.innerText?.trim() || latest?.textContent?.trim() || '';
     const stopButton = findStopButton();
     const threadError = findThreadError();
+    if (stopButton || nodes.length > baselineCount || threadError) generationObserved = true;
 
     if (activeRequest?.stopRequested) {
       clickStopButton();
@@ -314,7 +330,7 @@ async function waitForAssistant(previousCount, requestId) {
       const idleMs = now - lastActivityAt;
       const reason = threadError && idleMs >= ERROR_RECOVERY_GRACE_MS
         ? 'thread_error'
-        : idleMs >= SILENT_RECOVERY_GRACE_MS
+        : generationObserved && idleMs >= SILENT_RECOVERY_GRACE_MS
           ? 'silent_interrupt'
           : null;
       if (reason) {

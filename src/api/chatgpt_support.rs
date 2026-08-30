@@ -15,14 +15,34 @@ const MAX_MESSAGE_CHARS: usize = 100_000;
 pub(super) async fn request_json(state: &Arc<AppState>, id: &str) -> Result<Json<Value>, Problem> {
     let row = bridge_request_row(state, id).await?;
     let task_id = row.get::<Option<String>, _>("task_id");
-    let turn_id = row.get::<String, _>("turn_id");
+    let submitted = row.get::<String, _>("submitted_content");
+    let created_at_ms = row.get::<i64, _>("created_at_ms");
     let has_final_response = if let Some(task_id) = task_id.as_deref() {
-        sqlx::query_scalar::<_, i64>("SELECT EXISTS(SELECT 1 FROM timeline_events WHERE task_id=? AND turn_id=? AND actor='assistant' AND kind='status' AND json_extract(payload_json,'$.status')='completed' LIMIT 1)")
-            .bind(task_id)
-            .bind(&turn_id)
-            .fetch_one(state.repository.pool())
-            .await
-            .map_err(db_problem)?
+        sqlx::query_scalar::<_, i64>(
+            r#"SELECT EXISTS(
+                SELECT 1
+                FROM timeline_events user_event
+                JOIN timeline_events final_event
+                  ON final_event.task_id=user_event.task_id
+                 AND final_event.turn_id=user_event.turn_id
+                WHERE user_event.task_id=?
+                  AND user_event.actor='user'
+                  AND user_event.kind='message'
+                  AND json_extract(user_event.payload_json,'$.content')=?
+                  AND user_event.created_at_ms>=?
+                  AND final_event.actor='assistant'
+                  AND final_event.kind='status'
+                  AND json_extract(final_event.payload_json,'$.status')='completed'
+                  AND final_event.created_at_ms>=user_event.created_at_ms
+                LIMIT 1
+            )"#,
+        )
+        .bind(task_id)
+        .bind(&submitted)
+        .bind(created_at_ms)
+        .fetch_one(state.repository.pool())
+        .await
+        .map_err(db_problem)?
             != 0
     } else {
         false

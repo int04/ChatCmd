@@ -188,3 +188,142 @@ async fn chatgpt_bridge_reuses_existing_task_when_mcp_scope_differs_from_url_sco
         .expect("count tasks");
     assert_eq!(task_count, 1);
 }
+
+#[tokio::test]
+async fn chatgpt_bridge_claims_first_tool_call_before_user_message_sync() {
+    let (host, agent_id, _directory) = test_host().await;
+    let task_id = "task-chatgpt-bridge-pre-user-tool";
+    let request_id = "chatgpt-request-pre-user-tool";
+    let submitted = "Sử dụng plugin @User message sync test để thực hiện yêu cầu sau:\n\nKiểm tra tool đến trước user message";
+    let now = now_ms();
+
+    sqlx::query(
+        "INSERT INTO tasks(id,agent_id,device_id,conversation_scope_hash,title,source,status,active_session_id,generation,stopped_at_ms,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,'chatgpt_web','running',NULL,1,NULL,?,?)",
+    )
+    .bind(task_id)
+    .bind(&agent_id)
+    .bind(host.device.id.as_str())
+    .bind("openai:WEB:temporary-browser-scope")
+    .bind("Tool trước user message")
+    .bind(now)
+    .bind(now)
+    .execute(host.repository.pool())
+    .await
+    .expect("insert bridge task");
+
+    sqlx::query(
+        "INSERT INTO chatgpt_bridge_requests(id,task_id,turn_id,agent_id,model,user_content,submitted_content,status,conversation_id,conversation_url,assistant_content,error_message,created_at_ms,updated_at_ms,completed_at_ms) VALUES(?,?,?,?,?,?,?,'running',?,?,NULL,NULL,?,?,NULL)",
+    )
+    .bind(request_id)
+    .bind(task_id)
+    .bind("chatgpt-turn-pre-user-tool")
+    .bind(&agent_id)
+    .bind("Auto")
+    .bind("Kiểm tra tool đến trước user message")
+    .bind(submitted)
+    .bind("WEB:temporary-browser-id")
+    .bind("https://chatgpt.com/c/WEB:temporary-browser-id")
+    .bind(now)
+    .bind(now)
+    .execute(host.repository.pool())
+    .await
+    .expect("insert active bridge request");
+
+    let mut context = turn_context(
+        "pre-user-tool-call",
+        &agent_id,
+        "workspace_roots",
+        "turn-from-openai-session",
+        "openai:host-session-scope",
+    );
+    host.ensure_call_identity(&mut context, None)
+        .await
+        .expect("first tool call should reuse the unique active ChatGPT bridge task");
+
+    assert_eq!(context.task_id.as_deref(), Some(task_id));
+    let row = sqlx::query("SELECT source,conversation_scope_hash FROM tasks WHERE id=?")
+        .bind(task_id)
+        .fetch_one(host.repository.pool())
+        .await
+        .expect("read reused bridge task");
+    assert_eq!(row.get::<String, _>("source"), "chatgpt_web");
+    assert_eq!(
+        row.get::<String, _>("conversation_scope_hash"),
+        "openai:host-session-scope"
+    );
+    let task_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks WHERE agent_id=?")
+        .bind(&agent_id)
+        .fetch_one(host.repository.pool())
+        .await
+        .expect("count tasks");
+    assert_eq!(
+        task_count, 1,
+        "pre-user tool call must not create a ghost approval task"
+    );
+}
+
+#[tokio::test]
+async fn chatgpt_bridge_claims_unbound_request_before_bridge_started() {
+    let (host, agent_id, _directory) = test_host().await;
+    let request_id = "chatgpt-request-unbound-before-started";
+    let submitted = "Sử dụng plugin @User message sync test để thực hiện yêu cầu sau:\n\nClaim request trước bridge_started";
+    let now = now_ms();
+
+    sqlx::query(
+        "INSERT INTO chatgpt_bridge_requests(id,task_id,turn_id,agent_id,model,user_content,submitted_content,status,conversation_id,conversation_url,assistant_content,error_message,created_at_ms,updated_at_ms,completed_at_ms) VALUES(?,NULL,?,?,?,?,?,'queued',NULL,NULL,NULL,NULL,?,?,NULL)",
+    )
+    .bind(request_id)
+    .bind("chatgpt-turn-unbound")
+    .bind(&agent_id)
+    .bind("Auto")
+    .bind("Claim request trước bridge_started")
+    .bind(submitted)
+    .bind(now)
+    .bind(now)
+    .execute(host.repository.pool())
+    .await
+    .expect("insert unbound bridge request");
+
+    let mut context = turn_context(
+        "early-tool-before-started",
+        &agent_id,
+        "workspace_roots",
+        "turn-early-tool-before-started",
+        "openai:early-host-scope",
+    );
+    host.ensure_call_identity(&mut context, None)
+        .await
+        .expect("early tool should claim the only unbound ChatGPT bridge request");
+
+    let task_id = context.task_id.clone().expect("claimed task id");
+    let request_task: Option<String> =
+        sqlx::query_scalar("SELECT task_id FROM chatgpt_bridge_requests WHERE id=?")
+            .bind(request_id)
+            .fetch_one(host.repository.pool())
+            .await
+            .expect("read claimed request task");
+    assert_eq!(request_task.as_deref(), Some(task_id.as_str()));
+
+    let row =
+        sqlx::query("SELECT source,allow_execute,conversation_scope_hash FROM tasks WHERE id=?")
+            .bind(&task_id)
+            .fetch_one(host.repository.pool())
+            .await
+            .expect("read claimed task");
+    assert_eq!(row.get::<String, _>("source"), "chatgpt_web");
+    assert_eq!(row.get::<i64, _>("allow_execute"), 1);
+    assert_eq!(
+        row.get::<String, _>("conversation_scope_hash"),
+        "openai:early-host-scope"
+    );
+
+    let task_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks WHERE agent_id=?")
+        .bind(&agent_id)
+        .fetch_one(host.repository.pool())
+        .await
+        .expect("count claimed tasks");
+    assert_eq!(
+        task_count, 1,
+        "claiming must not create an approval ghost task"
+    );
+}

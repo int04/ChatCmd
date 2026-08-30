@@ -1,6 +1,7 @@
 mod activity_control;
 mod agent_lifecycle;
 mod approval;
+mod chatgpt_identity;
 mod dispatch;
 mod filesystem_dispatch;
 mod finalization_watchdog;
