@@ -1,4 +1,4 @@
-import { Bot, CircleAlert, CircleStop, ExternalLink, LoaderCircle, MessageSquarePlus, Send, Unplug } from 'lucide-react';
+import { Bot, CircleAlert, CircleStop, ExternalLink, LoaderCircle, MessageSquarePlus, Send, ShieldCheck, Unplug } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -10,7 +10,6 @@ import type { Agent } from '../types';
 import { useLoad } from '../useLoad';
 
 const DEFAULT_MODEL = 'Auto';
-const MODEL_SUGGESTIONS = ['Auto', 'Instant', 'Thinking', 'Pro'];
 const SEND_DISABLED_ERROR_VI = 'Nút gửi ChatGPT đang bị vô hiệu hóa.';
 const SEND_DISABLED_ERROR_EN = 'The ChatGPT send button is disabled.';
 const RETRY_DELAY_SECONDS = 10;
@@ -20,7 +19,6 @@ export function NewChatGptConversation() {
   const navigate = useNavigate();
   const enabledAgents = useMemo(() => (agents.data ?? []).filter((agent) => agent.enabled), [agents.data]);
   const [agentId, setAgentId] = useState('');
-  const [model, setModel] = useState(DEFAULT_MODEL);
   const [content, setContent] = useState('');
   const [extensionReady, setExtensionReady] = useState<boolean | null>(null);
   const [chatGptTabOpen, setChatGptTabOpen] = useState<boolean | null>(null);
@@ -49,7 +47,7 @@ export function NewChatGptConversation() {
       const status = await chatGptExtensionStatus();
       setExtensionReady(status.ready); setChatGptTabOpen(status.chatGptTabOpen);
       if (!status.ready) throw new Error(tr('ChatCMD ChatGPT Bridge extension is not ready. Enable or reload it, then try again.'));
-      const request = await api.createChatGptRequest({ agentId, model, content: content.trim() });
+      const request = await api.createChatGptRequest({ agentId, model: DEFAULT_MODEL, content: content.trim() });
       await dispatchChatGptRequest({ requestId: request.id, submittedContent: request.submittedContent, model: request.model });
       const taskId = await waitForTaskBinding(request.id);
       navigate(`/tasks/${encodeURIComponent(taskId)}`, { replace: true });
@@ -59,24 +57,42 @@ export function NewChatGptConversation() {
     }
   };
 
+  const selectedAgent = enabledAgents.find((agent) => agent.id === agentId);
+
   return <div className="chatgpt-new-shell">
-    <section className="chatgpt-new-card">
-      <header><span className="chatgpt-logo"><Bot /></span><div><span className="eyebrow">{tr('CHATGPT.COM')}</span><h1>{tr('New message')}</h1><p>{tr('Send using the signed-in ChatGPT session in Chrome / Edge.')}</p></div></header>
-      <ExtensionState ready={extensionReady} />
-      {extensionReady && chatGptTabOpen === false && <p className="chatgpt-input-warning" role="status"><CircleAlert /><span><strong>{tr('No blank ChatGPT tab is open for a new conversation.')}</strong> {tr('After you send the message, ChatCMD will automatically open a new ChatGPT tab and continue there.')}</span></p>}
-      <button className="button secondary chatgpt-open-log-window" type="button" onClick={() => window.dispatchEvent(new Event('chatcmd:open-extension-logs'))}>{tr('View extension logs')}</button>
-      <form onSubmit={(event) => void submit(event)}>
-        <div className="chatgpt-form-grid">
-          <label><span>{tr('MCP agent')}</span><select value={agentId} onChange={(event) => setAgentId(event.target.value)} disabled={busy || agents.loading} required>
-            {!enabledAgents.length && <option value="">{tr('No enabled agent')}</option>}
-            {enabledAgents.map((agent) => <option value={agent.id} key={agent.id}>@{agent.name}</option>)}
-          </select></label>
-          <label><span>{tr('ChatGPT model')}</span><input list="chatgpt-model-options" value={model} onChange={(event) => setModel(event.target.value)} disabled={busy} placeholder="Auto" /><datalist id="chatgpt-model-options">{MODEL_SUGGESTIONS.map((value) => <option value={value} key={value} />)}</datalist></label>
+    <section className="chatgpt-new-card chatgpt-chat-window">
+      <header className="chatgpt-chat-topbar">
+        <div className="chatgpt-chat-identity">
+          <span className="chatgpt-logo"><Bot /></span>
+          <div><strong>ChatGPT</strong><small>{tr('Send using the signed-in ChatGPT session in Chrome / Edge.')}</small></div>
         </div>
-        <label className="chatgpt-message-field"><span>{tr('Content')}</span><textarea rows={8} value={content} onChange={(event) => setContent(event.target.value)} disabled={busy} placeholder={tr('Enter a request for ChatGPT…')} required /></label>
-        <div className="chatgpt-prompt-preview"><strong>{tr('Actual message')}</strong><code>{selectedPrompt(enabledAgents, agentId, content)}</code></div>
+        <div className="chatgpt-chat-controls">
+          <span className={`chatgpt-connection-dot ${extensionReady === false ? 'missing' : extensionReady ? 'ready' : ''}`} title={extensionReady === null ? tr('Checking extension…') : extensionReady ? tr('Extension ready') : tr('Extension not connected')}>{extensionReady === null ? <LoaderCircle className="spin" /> : extensionReady ? <MessageSquarePlus /> : <Unplug />}</span>
+          <button className="chatgpt-log-link" type="button" onClick={() => window.dispatchEvent(new Event('chatcmd:open-extension-logs'))}>{tr('View extension logs')}</button>
+        </div>
+      </header>
+
+      {extensionReady && chatGptTabOpen === false && <div className="chatgpt-chat-notice" role="status"><CircleAlert /><span><strong>{tr('No blank ChatGPT tab is open for a new conversation.')}</strong> {tr('After you send the message, ChatCMD will automatically open a new ChatGPT tab and continue there.')}</span></div>}
+
+      <div className="chatgpt-chat-thread" aria-live="polite">
+        <div className="chatgpt-ai-message">
+          <span className="chatgpt-message-avatar"><Bot /></span>
+          <div className="chatgpt-message-copy"><strong>ChatGPT</strong><p>{selectedAgent ? `Bạn muốn mình giao công việc gì cho @${selectedAgent.name}?` : 'Chọn một MCP agent để bắt đầu cuộc trò chuyện.'}</p><small>Yêu cầu của bạn sẽ được gửi qua ChatGPT và agent sẽ thực hiện công việc trong ChatCMD.</small></div>
+        </div>
+        {content.trim() && <div className="chatgpt-user-message"><div>{content}</div></div>}
+      </div>
+
+      <form className="chatgpt-chat-composer" onSubmit={(event) => void submit(event)}>
         {error && <p className="chatgpt-form-error" role="alert"><CircleAlert />{error}</p>}
-        <footer><button className="button primary chatgpt-send-button" type="submit" disabled={busy || !agentId || !content.trim() || extensionReady === false}>{busy ? <LoaderCircle className="spin" /> : <Send />}<span>{busy ? tr('Sending to ChatGPT…') : tr('Send to ChatGPT')}</span></button></footer>
+        <label className="chatgpt-agent-picker chatgpt-composer-agent"><span>{tr('MCP agent')}</span><select value={agentId} onChange={(event) => setAgentId(event.target.value)} disabled={busy || agents.loading} required>
+          {!enabledAgents.length && <option value="">{tr('No enabled agent')}</option>}
+          {enabledAgents.map((agent) => <option value={agent.id} key={agent.id}>@{agent.name}</option>)}
+        </select></label>
+        <div className="chatgpt-chat-input-wrap">
+          <textarea rows={3} value={content} onChange={(event) => setContent(event.target.value)} disabled={busy} placeholder={tr('Enter a request for ChatGPT…')} required />
+          <button className="chatgpt-chat-send" type="submit" aria-label={tr('Send to ChatGPT')} disabled={busy || !agentId || !content.trim() || extensionReady === false}>{busy ? <LoaderCircle className="spin" /> : <Send />}</button>
+        </div>
+        <div className="chatgpt-chat-composer-meta"><span>{selectedAgent ? `Gửi tới @${selectedAgent.name}` : tr('No enabled agent')}</span><span><ShieldCheck />{tr('Actual message')}: <code>{selectedPrompt(enabledAgents, agentId, content)}</code></span></div>
       </form>
     </section>
   </div>;
