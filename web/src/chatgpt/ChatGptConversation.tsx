@@ -1,10 +1,10 @@
-import { Bot, CircleAlert, CircleStop, ExternalLink, FolderOpen, LoaderCircle, MessageSquarePlus, Send, ShieldCheck, Unplug, X } from 'lucide-react';
+import { Bot, CircleAlert, CircleStop, ExternalLink, FolderOpen, LoaderCircle, MessageSquarePlus, Send, ShieldCheck, Sparkles, Unplug, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { api } from '../api';
-import { chatGptExtensionAvailable, chatGptExtensionStatus, closeChatGptConversationTab, dispatchChatGptRequest, focusChatGptConversationTab, openChatGptConversationTab, stopChatGptRequest } from '../chatgptBridge';
+import { chatGptExtensionAvailable, chatGptExtensionStatus, closeChatGptConversationTab, dispatchChatGptRequest, focusChatGptConversationTab, openChatGptConversationTab, prepareChatGptModelTab, stopChatGptRequest } from '../chatgptBridge';
 import { tr } from '../i18n';
 import type { Agent } from '../types';
 import { useLoad } from '../useLoad';
@@ -22,6 +22,7 @@ export function NewChatGptConversation() {
   const [projectFolder, setProjectFolder] = useState('');
   const [content, setContent] = useState('');
   const [folderPicking, setFolderPicking] = useState(false);
+  const [modelTabOpening, setModelTabOpening] = useState(false);
   const [confirmWithoutFolder, setConfirmWithoutFolder] = useState(false);
   const [extensionReady, setExtensionReady] = useState<boolean | null>(null);
   const [chatGptTabOpen, setChatGptTabOpen] = useState<boolean | null>(null);
@@ -62,6 +63,18 @@ export function NewChatGptConversation() {
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Không thể mở trình chọn thư mục.');
     } finally { setFolderPicking(false); }
+  };
+
+  const chooseModel = async () => {
+    if (busy || modelTabOpening) return;
+    setModelTabOpening(true); setError('');
+    try {
+      await prepareChatGptModelTab();
+      setExtensionReady(true);
+      setChatGptTabOpen(true);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : tr('Could not open ChatGPT to choose a model.'));
+    } finally { setModelTabOpening(false); }
   };
 
   const sendNewConversation = async (allowWithoutFolder: boolean) => {
@@ -130,6 +143,15 @@ export function NewChatGptConversation() {
                 {folderPicking ? <LoaderCircle className="spin" /> : <FolderOpen />}<span>{projectFolder || 'Chọn thư mục'}</span>
               </button>
               {projectFolder && <button className="chatgpt-folder-clear" type="button" onClick={() => setProjectFolder('')} disabled={busy || folderPicking} aria-label="Bỏ chọn thư mục"><X /></button>}
+            </div>
+          </div>
+          <div className="chatgpt-model-picker">
+            <span>{tr('Model')}</span>
+            <div className="chatgpt-model-picker-row">
+              <button className="chatgpt-model-select" type="button" onClick={() => void chooseModel()} disabled={busy || modelTabOpening}>
+                {modelTabOpening ? <LoaderCircle className="spin" /> : <Sparkles />}<span>{tr('Choose model')}</span><ExternalLink />
+              </button>
+              <small>{tr('Stronger models can take longer to complete the request.')}</small>
             </div>
           </div>
         </div>

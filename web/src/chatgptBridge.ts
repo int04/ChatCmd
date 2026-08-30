@@ -5,6 +5,7 @@ const RESPONSE_TYPE = 'chatcmd-chatgpt-extension-response';
 
 type BridgeCommand =
   | { action: 'ping'; nonce: string; conversationUrl?: string }
+  | { action: 'prepare-tab'; nonce: string }
   | { action: 'open-tab'; nonce: string; conversationUrl: string }
   | { action: 'focus-tab'; nonce: string; conversationUrl: string }
   | { action: 'close-tab'; nonce: string; conversationUrl: string }
@@ -35,6 +36,10 @@ export async function chatGptExtensionStatus(conversationUrl?: string): Promise<
 
 export async function chatGptExtensionAvailable() {
   return (await chatGptExtensionStatus()).ready;
+}
+
+export async function prepareChatGptModelTab() {
+  return bridge({ action: 'prepare-tab', nonce: nonce() }, 3_000);
 }
 
 export async function openChatGptConversationTab(conversationUrl: string) {
