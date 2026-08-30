@@ -1,6 +1,6 @@
 import { decodeEncryptedApiResponse, encryptedApiFetch } from './apiCrypto';
 import { tr } from './i18n';
-import type { Agent, AgentInput, AuthInfo, AuthResult, ChatGptBridge, ChatGptRequest, CommandExecutionMode, LiveTerminalOutput, LocalSettings, McpStatus, Overview, ProblemDetails, SecretResult, Session, SessionDetail, Skill, SkillOptionValue, Task, TaskDetail, TaskPage, Tool, ToolPreset, UserSkill } from './types';
+import type { Agent, AgentInput, AuthInfo, AuthResult, ChatGptBridge, ChatGptRequest, CommandExecutionMode, LiveTerminalOutput, LocalSettings, McpStatus, Overview, ProblemDetails, SecretResult, Session, SessionDetail, Skill, SkillOptionValue, Task, TaskDetail, TaskPage, Tool, ToolPreset, UserSkill, WorkspaceProject } from './types';
 
 export class ApiError extends Error {
   constructor(message: string, public status?: number, public problem?: ProblemDetails) { super(message); this.name = 'ApiError'; }
@@ -105,6 +105,8 @@ export const api = {
   tools: () => request<Tool[]>('/api/local/mcp/tools'),
   presets: () => request<ToolPreset[]>('/api/local/mcp/tool-presets'),
   pickProjectFolder: () => request<{ path: string | null }>('/api/local/system/folder-picker', { method: 'POST', body: '{}' }),
+  workspaceProjects: () => request<WorkspaceProject[]>('/api/local/workspaces/projects'),
+  saveWorkspaceProject: (input: { name: string; path: string }) => request<WorkspaceProject>('/api/local/workspaces/projects', { method: 'POST', body: json(input) }),
   createChatGptRequest: (input: { agentId: string; model?: string; projectFolder?: string; content: string }) => request<ChatGptRequest>('/api/local/chatgpt/requests', { method: 'POST', body: json(input) }),
   chatGptRequest: (id: string) => request<ChatGptRequest>(`/api/local/chatgpt/requests/${item(id)}`),
   chatGptBridge: (taskId: string) => request<ChatGptBridge>(`/api/local/chatgpt/tasks/${item(taskId)}`),

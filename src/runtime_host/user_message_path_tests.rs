@@ -30,6 +30,22 @@ async fn user_supplied_absolute_path_grant_persists_for_task() {
         .await
         .expect("sync user path message");
     let task_id = accepted["taskId"].as_str().expect("task id").to_owned();
+    let bound_task = host
+        .repository
+        .task(&TaskId::new(task_id.clone()).expect("task id model"))
+        .await
+        .expect("read bound task")
+        .expect("bound task");
+    assert_eq!(
+        bound_task.project_folder.as_deref(),
+        Some(
+            granted_directory
+                .canonicalize()
+                .expect("canonical granted directory")
+                .to_string_lossy()
+                .as_ref()
+        )
+    );
     host.repository
         .set_execution_mode(&TaskExecutionMode {
             task_id: TaskId::new(task_id.clone()).expect("task id model"),
@@ -99,6 +115,102 @@ async fn user_supplied_absolute_path_grant_persists_for_task() {
         .await
         .expect("user path grant must remain available in later turns of the same task");
     assert_eq!(continued["content"], "outside workspace");
+}
+
+#[tokio::test]
+async fn single_file_path_binds_its_parent_and_later_messages_do_not_override_it() {
+    let (host, agent_id, _workspace_directory) = test_host().await;
+    let first = TempDir::new().expect("first project directory");
+    let file = first.path().join("src.rs");
+    std::fs::write(&file, "fn main() {}").expect("write project file");
+    let second = TempDir::new().expect("second project directory");
+    let scope = "conversation-file-project-binding";
+
+    let accepted = host
+        .call_persisted(
+            "agent_user_message",
+            turn_context(
+                "file-path-user",
+                &agent_id,
+                "agent_user_message",
+                "turn-file-path",
+                scope,
+            ),
+            json!({"content": format!("Kiểm tra file `{}`", file.display())}),
+        )
+        .await
+        .expect("sync file path message");
+    let task_id = accepted["taskId"].as_str().expect("task id").to_owned();
+
+    let mut next_context = turn_context(
+        "second-path-user",
+        &agent_id,
+        "agent_user_message",
+        "turn-second-path",
+        scope,
+    );
+    next_context.task_id = Some(task_id.clone());
+    host.call_persisted(
+        "agent_user_message",
+        next_context,
+        json!({"content": format!("Tiếp tục ở `{}`", second.path().display())}),
+    )
+    .await
+    .expect("sync later path message");
+
+    let task = host
+        .repository
+        .task(&TaskId::new(task_id).expect("task id model"))
+        .await
+        .expect("read task")
+        .expect("task");
+    assert_eq!(
+        task.project_folder.as_deref(),
+        Some(
+            first
+                .path()
+                .canonicalize()
+                .expect("canonical first project")
+                .to_string_lossy()
+                .as_ref()
+        )
+    );
+}
+
+#[tokio::test]
+async fn multiple_absolute_paths_do_not_bind_an_ambiguous_project_folder() {
+    let (host, agent_id, _workspace_directory) = test_host().await;
+    let first = TempDir::new().expect("first directory");
+    let second = TempDir::new().expect("second directory");
+    let accepted = host
+        .call_persisted(
+            "agent_user_message",
+            turn_context(
+                "ambiguous-path-user",
+                &agent_id,
+                "agent_user_message",
+                "turn-ambiguous-path",
+                "conversation-ambiguous-path-binding",
+            ),
+            json!({
+                "content": format!(
+                    "So sánh `{}` với `{}`",
+                    first.path().display(),
+                    second.path().display()
+                )
+            }),
+        )
+        .await
+        .expect("sync ambiguous path message");
+    let task_id =
+        TaskId::new(accepted["taskId"].as_str().expect("task id")).expect("task id model");
+    let task = host
+        .repository
+        .task(&task_id)
+        .await
+        .expect("read task")
+        .expect("task");
+    assert_eq!(task.project_folder, None);
 }
 
 #[tokio::test]

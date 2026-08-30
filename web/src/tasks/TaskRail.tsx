@@ -1,4 +1,4 @@
-import { AlertTriangle, Bot, ChevronUp, LayoutDashboard, LoaderCircle, LogOut, Plus, RefreshCw, ScrollText, Search, Settings, TerminalSquare, Trash2, UserRound, Wrench, X } from 'lucide-react';
+import { AlertTriangle, Bot, ChevronDown, ChevronUp, FolderOpen, LayoutDashboard, LoaderCircle, LogOut, Plus, RefreshCw, ScrollText, Search, Settings, TerminalSquare, Trash2, UserRound, Wrench, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEventHandler, type PointerEvent as ReactPointerEvent } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 
@@ -9,12 +9,15 @@ import { getChatGptExtensionLogs } from '../chatgptBridge';
 import type { ChatGptExtensionLog } from '../chatgptBridge';
 import { formatAppNumber, tr } from '../i18n';
 import { useRealtime } from '../realtime';
-import type { Task, TimelineEvent } from '../types';
+import type { Task, TimelineEvent, WorkspaceProject } from '../types';
 import { upsertTaskEvent } from './taskTimeline';
 import { useResizableWidth } from './useResizableWidth';
+import { groupTasksByWorkspaceProjects } from './workspaceProjects';
 
 const READ_FINAL_COUNTS_KEY = 'chatcmd.tasks.readFinalCounts.v1';
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 50;
+const COLLAPSED_PROJECT_TASKS = 3;
+const UNCLASSIFIED_GROUP = '__unclassified__';
 const menuItems = [
   { to: '/', end: true, label: 'Overview', icon: LayoutDashboard },
   { to: '/sessions', label: 'Session', icon: TerminalSquare },
@@ -74,12 +77,15 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
   const location = useLocation(); const navigate = useNavigate(); const taskId = activeTaskId(location.pathname);
   const [loadedTasks, setLoadedTasks] = useState<Task[]>([]); const [nextCursor, setNextCursor] = useState<string>(); const [loading, setLoading] = useState(true); const [loadingMore, setLoadingMore] = useState(false); const [error, setError] = useState(''); const [query, setQuery] = useState(''); const [menuOpen, setMenuOpen] = useState(false); const [contextMenu, setContextMenu] = useState<{ task: Task; x: number; y: number }>(); const [deleteTarget, setDeleteTarget] = useState<Task>(); const [deleting, setDeleting] = useState(false); const [deleteError, setDeleteError] = useState('');
   const [readFinalCounts, setReadFinalCounts] = useState<Record<string, number>>(readStoredFinalCounts);
+  const [projects, setProjects] = useState<WorkspaceProject[]>([]);
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  const [projectModalOpen, setProjectModalOpen] = useState(false); const [projectName, setProjectName] = useState(''); const [projectPath, setProjectPath] = useState(''); const [projectFolderPicking, setProjectFolderPicking] = useState(false); const [projectSaving, setProjectSaving] = useState(false); const [projectError, setProjectError] = useState('');
   const visibleTaskIds = useRef(new Set<string>()); const loadingMoreRef = useRef(false); const hadStoredReadCounts = useRef(typeof localStorage !== 'undefined' && localStorage.getItem(READ_FINAL_COUNTS_KEY) !== null);
   const railResize = useResizableWidth({ storageKey: 'chatcmd.layout.taskRailWidth.v1', cssVariable: '--task-rail-width', defaultWidth: typeof window !== 'undefined' && window.innerWidth <= 1180 ? 270 : 284, minWidth: 240, maxWidth: 480 });
 
   const applyFirstPage = useCallback(async () => {
     setLoading(true); setError('');
-    try { const page = await api.tasks(undefined, PAGE_SIZE); setLoadedTasks(pageItems(page).filter((task) => !task.isSubagent)); setNextCursor(pageCursor(page)); }
+    try { const [page, workspaceProjects] = await Promise.all([api.tasks(undefined, PAGE_SIZE), api.workspaceProjects()]); setLoadedTasks(pageItems(page).filter((task) => !task.isSubagent)); setNextCursor(pageCursor(page)); setProjects(workspaceProjects); }
     catch (value) { setError(value instanceof Error ? value.message : tr('Could not load conversations.')); }
     finally { setLoading(false); }
   }, []);
@@ -100,7 +106,6 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
   useEffect(() => { if (!taskId) return; const task = loadedTasks.find((item) => item.id === taskId); if (!task) return; const count = task.finalResponseCount ?? 0; setReadFinalCounts((current) => (current[taskId] ?? 0) >= count ? current : { ...current, [taskId]: count }); }, [taskId, loadedTasks]);
   useEffect(() => { setMenuOpen(false); setContextMenu(undefined); onClose(); }, [location.pathname, onClose]);
   useEffect(() => { if (!contextMenu) return; const close = () => setContextMenu(undefined); window.addEventListener('pointerdown', close); window.addEventListener('blur', close); return () => { window.removeEventListener('pointerdown', close); window.removeEventListener('blur', close); }; }, [contextMenu]);
-
   const deleteConversation = useCallback(async () => {
     if (!deleteTarget || !canDeleteTask(deleteTarget)) return; setDeleting(true); setDeleteError('');
     try { await api.deleteTask(deleteTarget.id); setLoadedTasks((current) => current.filter((task) => task.id !== deleteTarget.id)); setReadFinalCounts((current) => { const next = { ...current }; delete next[deleteTarget.id]; return next; }); if (taskId === deleteTarget.id) navigate('/tasks'); setDeleteTarget(undefined); }
@@ -109,6 +114,33 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
   }, [deleteTarget, navigate, taskId]);
 
   const tasks = useMemo(() => [...loadedTasks].sort((a, b) => Date.parse(b.updatedAtUtc) - Date.parse(a.updatedAtUtc)).filter((task) => `${conversationName(task)} ${task.id} ${task.outputPreview ?? ''}`.toLowerCase().includes(query.toLowerCase())), [query, loadedTasks]);
+  const taskGroups = useMemo(() => groupTasksByWorkspaceProjects(projects, tasks), [projects, tasks]);
+
+  const startTask = (project?: WorkspaceProject) => navigate('/tasks/new', { state: project ? { projectFolder: project.path, projectName: project.name } : undefined });
+  const openProjectModal = () => { setProjectName(''); setProjectPath(''); setProjectError(''); setProjectModalOpen(true); };
+  const pickProjectFolder = async () => {
+    if (projectFolderPicking) return;
+    setProjectFolderPicking(true); setProjectError('');
+    try { const result = await api.pickProjectFolder(); if (result.path) setProjectPath(result.path); }
+    catch (reason) { setProjectError(reason instanceof Error ? reason.message : 'Không thể mở trình chọn thư mục.'); }
+    finally { setProjectFolderPicking(false); }
+  };
+  const saveProject = async () => {
+    if (!projectName.trim() || !projectPath.trim()) { setProjectError('Vui lòng nhập tên và chọn thư mục dự án.'); return; }
+    setProjectSaving(true); setProjectError('');
+    try { await api.saveWorkspaceProject({ name: projectName.trim(), path: projectPath.trim() }); setProjects(await api.workspaceProjects()); setProjectModalOpen(false); }
+    catch (reason) { setProjectError(reason instanceof Error ? reason.message : 'Không thể lưu dự án.'); }
+    finally { setProjectSaving(false); }
+  };
+  const renderRow = (task: Task) => <TaskRailRow task={task} selected={task.id === taskId} unread={Math.max(0, (task.finalResponseCount ?? 0) - (readFinalCounts[task.id] ?? 0))} onRenamed={(updated) => setLoadedTasks((current) => current.map((item) => item.id === updated.id ? { ...item, ...updated } : item))} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ task, x: Math.min(event.clientX, window.innerWidth - 236), y: Math.min(event.clientY, window.innerHeight - 108) }); }} key={task.id} />;
+  const renderGroup = (key: string, name: string, groupTasks: Task[], project?: WorkspaceProject) => {
+    const expanded = Boolean(expandedGroups[key]); const visible = expanded ? groupTasks : groupTasks.slice(0, COLLAPSED_PROJECT_TASKS);
+    return <section className="task-project-group" key={key}>
+      <header className="task-project-heading"><div><strong title={project?.path}>{name}</strong>{project && <small title={project.path}>{project.path}</small>}</div><button type="button" onClick={() => startTask(project)} aria-label={`Tạo đoạn trò chuyện trong ${name}`} title={`Tạo đoạn trò chuyện trong ${name}`}><Plus /></button></header>
+      <div className="task-project-conversations">{visible.length ? visible.map(renderRow) : <p className="task-project-empty">Chưa có đoạn trò chuyện</p>}</div>
+      {groupTasks.length > COLLAPSED_PROJECT_TASKS && <button className="task-project-more" type="button" onClick={() => { setExpandedGroups((current) => ({ ...current, [key]: !expanded })); if (!expanded && nextCursor) void loadMore(); }}>{expanded ? <><ChevronUp />Thu gọn</> : <><ChevronDown />Xem thêm ({groupTasks.length - COLLAPSED_PROJECT_TASKS})</>}</button>}
+    </section>;
+  };
 
   return <aside className={`task-rail ${open ? 'open' : ''}`} aria-label={tr('Conversations')}>
     <div className="panel-resize-handle task-rail-resize-handle" role="separator" aria-label={tr('Resize conversations')} aria-orientation="vertical" aria-valuemin={240} aria-valuemax={480} aria-valuenow={railResize.width} tabIndex={0} onPointerDown={railResize.onPointerDown} onKeyDown={railResize.onKeyDown} />
@@ -117,16 +149,21 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
         <label className="tasks-conversation-search"><Search /><span className="sr-only">{tr('Search conversations')}</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={tr('Search')} /></label>
         <Link className="task-rail-new-message" to="/tasks/new" aria-label={tr('New message')} title={tr('New message')}><Plus /></Link>
       </div>
+      <div className="task-projects-title"><strong>Dự án</strong><button type="button" onClick={openProjectModal} aria-label="Thêm dự án" title="Thêm dự án"><Plus /></button></div>
     </header>
     <div className="task-rail-body"><div className="task-rail-list" onScroll={(event) => { const target = event.currentTarget; if (target.scrollHeight - target.scrollTop - target.clientHeight < 180) void loadMore(); }}>
-      {loading ? <Loading label={tr('Loading tasks')} /> : error && !tasks.length ? <ErrorState message={error} retry={() => void applyFirstPage()} /> : !tasks.length ? <Empty title={tr('No conversations yet')} body={tr('Agent conversations will appear here.')} /> : <>
-        {tasks.map((task) => <TaskRailRow task={task} selected={task.id === taskId} unread={Math.max(0, (task.finalResponseCount ?? 0) - (readFinalCounts[task.id] ?? 0))} onRenamed={(updated) => setLoadedTasks((current) => current.map((item) => item.id === updated.id ? { ...item, ...updated } : item))} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ task, x: Math.min(event.clientX, window.innerWidth - 236), y: Math.min(event.clientY, window.innerHeight - 108) }); }} key={task.id} />)}
+      {loading ? <Loading label={tr('Loading tasks')} /> : error && !tasks.length ? <ErrorState message={error} retry={() => void applyFirstPage()} /> : <>
+        {taskGroups.projects.map(({ project, tasks: projectTasks }) => renderGroup(project.id, project.name, projectTasks, project))}
+        {renderGroup(UNCLASSIFIED_GROUP, 'Chưa phân loại', taskGroups.unclassified)}
+        {!projects.length && !taskGroups.unclassified.length && <Empty title={tr('No conversations yet')} body="Thêm dự án hoặc tạo đoạn trò chuyện mới để bắt đầu." />}
         {loadingMore && <div className="task-rail-load-more" role="status"><LoaderCircle className="spin" /><span>{tr('Loading more…')}</span></div>}
+        {nextCursor && !loadingMore && <button className="task-rail-load-retry" type="button" onClick={() => void loadMore()}>Tải thêm đoạn trò chuyện</button>}
         {error && <button className="task-rail-load-retry" type="button" onClick={() => void loadMore()}>{tr('Reload')}</button>}
       </>}
     </div></div>
     {contextMenu && <div className="task-context-menu" role="menu" style={{ left: contextMenu.x, top: contextMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button type="button" role="menuitem" className="danger" disabled={!canDeleteTask(contextMenu.task)} onClick={() => { setDeleteError(''); setDeleteTarget(contextMenu.task); setContextMenu(undefined); }}><Trash2 /><span>{tr('Delete conversation')}</span></button>{!canDeleteTask(contextMenu.task) && <small>{tr('You can only delete a task after it has finished.')}</small>}</div>}
     {deleteTarget && <Modal title={tr('Delete conversation?')} description={conversationName(deleteTarget)} close={() => !deleting && setDeleteTarget(undefined)} dangerous><div className="task-delete-warning"><AlertTriangle /><div><strong>{tr('Warning')}</strong><p>{tr('Deleting removes this conversation and its linked data from the list. This conversation may not work again in the future.')}</p></div></div>{deleteError && <p className="task-delete-error" role="alert">{deleteError}</p>}<div className="modal-actions"><button className="button secondary" type="button" disabled={deleting} onClick={() => setDeleteTarget(undefined)}>{tr('Cancel')}</button><button className="button danger" type="button" disabled={deleting} onClick={() => void deleteConversation()}>{deleting ? tr('Deleting…') : tr('Delete conversation')}</button></div></Modal>}
+    {projectModalOpen && <Modal className="workspace-project-modal" title="Thêm dự án" description="Lưu tên hiển thị và thư mục gốc để nhóm các đoạn trò chuyện theo dự án." close={() => !projectFolderPicking && !projectSaving && setProjectModalOpen(false)}><div className="workspace-project-form"><label><span>Tên</span><input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="Ví dụ: Dotty" autoFocus maxLength={160} disabled={projectSaving} /></label><label><span>Thư mục dự án</span><button className={`workspace-project-folder ${projectPath ? '' : 'empty'}`} type="button" onClick={() => void pickProjectFolder()} disabled={projectFolderPicking || projectSaving}>{projectFolderPicking ? <LoaderCircle className="spin" /> : <FolderOpen />}<span>{projectPath || 'Chọn folder'}</span></button></label>{projectError && <p className="workspace-project-error" role="alert">{projectError}</p>}<div className="modal-actions"><button className="button secondary" type="button" onClick={() => setProjectModalOpen(false)} disabled={projectFolderPicking || projectSaving}>Hủy</button><button className="button primary" type="button" onClick={() => void saveProject()} disabled={projectFolderPicking || projectSaving || !projectName.trim() || !projectPath.trim()}>{projectSaving ? 'Đang lưu…' : 'Lưu'}</button></div></div></Modal>}
     <footer className="task-rail-footer">{menuOpen && <div className="task-rail-account-menu" role="menu"><button type="button" role="menuitem" className="task-rail-logout" onClick={() => { setMenuOpen(false); void logout().finally(() => navigate('/login', { replace: true })); }}><LogOut /><span>{tr('Log out')}</span></button></div>}<button className="task-rail-account" type="button" aria-expanded={menuOpen} onClick={() => setMenuOpen((value) => !value)}><span className="task-rail-avatar"><UserRound /></span><span className="task-rail-account-copy"><strong title={user?.email}>{user?.email ?? 'ChatCMD'}</strong><small title={user?.plan.expriAt ?? undefined}>{user?.plan.name ?? 'FREE'}</small></span><ChevronUp className={menuOpen ? 'open' : ''} /></button></footer>
   </aside>;
 }

@@ -6,7 +6,7 @@ import { tr } from '../i18n';
 import type { Agent, AgentInput, SecretResult, Tool } from '../types';
 import { useLoad } from '../useLoad';
 
-const blank: AgentInput = { name: '', enabled: true, projectFolder: '', toolIds: [] };
+const blank: AgentInput = { name: '', enabled: true, toolIds: [] };
 const groupOrder = ['group-device', 'group-terminal', 'group-files', 'group-git', 'group-process', 'group-skills', 'group-tasks'];
 const groupNames: Record<string, string> = {
   'group-device': 'Device',
@@ -52,11 +52,11 @@ export function AgentsPage() {
     } catch (error) { setProblem(error instanceof Error ? error.message : tr('Delete failed')); }
   };
   return <div>
-    <PageHeading eyebrow={tr('MCP ACCESS')} title={tr('Agents')} body={tr('Local clients, project scope, and tool permissions.')} actions={<button className="button primary" onClick={() => setEditor('new')}><Plus />{tr('New agent')}</button>} />
+    <PageHeading eyebrow={tr('MCP ACCESS')} title={tr('Agents')} body={tr('Local clients and tool permissions.')} actions={<button className="button primary" onClick={() => setEditor('new')}><Plus />{tr('New agent')}</button>} />
     <ProblemBanner message={problem} clear={() => setProblem('')} />
     {agents.loading ? <Loading label={tr('Loading agents')} /> : agents.error ? <ErrorState message={agents.error} retry={() => void agents.reload()} /> : !agents.data?.length ? <Empty title={tr('No MCP agents')} body={tr('Create an agent to receive a one-time MCP connection URL.')} /> : <div className="agent-grid">{agents.data.map((agent) => <article className="agent-card" key={agent.id}>
       <header><span className="agent-avatar"><KeyRound /></span><div><strong>{agent.name}</strong><code>{agent.id}</code></div><StatusBadge state={agent.enabled ? 'ready' : 'stopped'} label={agent.enabled ? tr('Enabled') : tr('Disabled')} /></header>
-      <dl><div><dt>{tr('Project folder')}</dt><dd>{agent.projectFolder || tr('All configured roots')}</dd></div><div><dt>{tr('Tool access')}</dt><dd>{tr('{count} selected', { count: agent.toolIds.length })}{agent.presetId ? ` · preset ${agent.presetId}` : ''}</dd></div><div><dt>{tr('Token')}</dt><dd>{agent.secretLast4 ? `•••• ${agent.secretLast4}` : tr('Hidden')}</dd></div></dl>
+      <dl><div><dt>{tr('Tool access')}</dt><dd>{tr('{count} selected', { count: agent.toolIds.length })}{agent.presetId ? ` · preset ${agent.presetId}` : ''}</dd></div><div><dt>{tr('Token')}</dt><dd>{agent.secretLast4 ? `•••• ${agent.secretLast4}` : tr('Hidden')}</dd></div></dl>
       <div className="button-row"><button className="button secondary compact" onClick={() => setEditor(agent)}><Pencil />{tr('Edit')}</button><button className="button secondary compact" onClick={() => void rotate(agent)}><RotateCw />{tr('Rotate token')}</button><button className="icon-button danger-icon" aria-label={tr('Delete {name}', { name: agent.name })} onClick={() => void remove(agent)}><Trash2 /></button></div>
     </article>)}</div>}
     {editor && <AgentEditor agent={editor === 'new' ? undefined : editor} tools={tools.data ?? []} presets={presets.data ?? []} close={() => setEditor(undefined)} save={save} />}
@@ -65,7 +65,7 @@ export function AgentsPage() {
 }
 
 function AgentEditor({ agent, tools, presets, close, save }: { agent?: Agent; tools: Awaited<ReturnType<typeof api.tools>>; presets: Awaited<ReturnType<typeof api.presets>>; close: () => void; save: (input: AgentInput) => Promise<void> }) {
-  const [value, setValue] = useState<AgentInput>(agent ? { name: agent.name, enabled: agent.enabled, projectFolder: agent.projectFolder, presetId: agent.presetId, toolIds: agent.toolIds } : blank);
+  const [value, setValue] = useState<AgentInput>(agent ? { name: agent.name, enabled: agent.enabled, presetId: agent.presetId, toolIds: agent.toolIds } : blank);
   const [busy, setBusy] = useState(false);
   const groups = useMemo(() => {
     const map = new Map<string, Tool[]>();
@@ -80,7 +80,6 @@ function AgentEditor({ agent, tools, presets, close, save }: { agent?: Agent; to
   return <Modal title={agent ? tr('Edit {name}', { name: agent.name }) : tr('Create MCP agent')} description={tr('Permissions apply only to this local endpoint.')} close={close}>
     <form className="form-stack" onSubmit={submit}>
       <label>{tr('Name')}<input required maxLength={100} value={value.name} onChange={(event) => setValue({ ...value, name: event.target.value })} /></label>
-      <label>{tr('Project folder')}<input value={value.projectFolder} onChange={(event) => setValue({ ...value, projectFolder: event.target.value })} placeholder="D:\Projects\example" /></label>
       <label>{tr('Permission preset')}<select value={value.presetId ?? ''} onChange={(event) => { const presetId = event.target.value || undefined; const preset = presets.find((item) => item.id === presetId); setValue({ ...value, presetId, toolIds: preset ? preset.toolIds : value.toolIds }); }}><option value="">{tr('Custom permissions')}</option>{presets.map((preset) => <option value={preset.id} key={preset.id}>{preset.name}</option>)}</select></label>
       <fieldset className="permission-fieldset">
         <div className="permission-heading"><legend>{tr('Per-tool permissions')}</legend><div><span>{tr('{selected}/{total} selected', { selected: value.toolIds.length, total: tools.length })}</span><button type="button" className="button secondary compact" onClick={() => toggleAll(!allSelected)}>{allSelected ? tr('Clear all') : tr('Select all')}</button></div></div>

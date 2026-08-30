@@ -15,14 +15,15 @@ export interface Overview {
 }
 export interface McpStatus { state: HealthState; endpoint?: string; connectedClients?: number; lastError?: string }
 export interface TimelineEvent { id: Id; type: string; occurredAt: string; taskId?: Id; sessionId?: Id; turnId?: Id; payload?: unknown }
-export interface Agent { id: Id; name: string; enabled: boolean; projectFolder: string; presetId?: Id; toolIds: Id[]; secretLast4?: string; updatedAtUtc?: string }
-export interface AgentInput { name: string; enabled: boolean; projectFolder: string; presetId?: Id; toolIds: Id[] }
+export interface Agent { id: Id; name: string; enabled: boolean; presetId?: Id; toolIds: Id[]; secretLast4?: string; updatedAtUtc?: string }
+export interface AgentInput { name: string; enabled: boolean; presetId?: Id; toolIds: Id[] }
 export interface SecretResult { agent?: Agent; endpoint: string }
 export interface Tool { id: Id; name: string; description?: string; group?: string; dangerous?: boolean }
 export interface ToolPreset { id: Id; name: string; description?: string; toolIds: Id[] }
-export interface Task { id: Id; title?: string; source?: string; allowExecute?: boolean | null; approvalDeadlineUtc?: string | null; status: string; updatedAtUtc: string; createdAtUtc?: string; generation?: number; turnCount?: number; activeSessionId?: Id; outputPreview?: string; approvalPending?: boolean; finalResponseCount?: number; isSubagent?: boolean; parentTaskId?: Id; parentTurnId?: Id; agentName?: string }
+export interface Task { id: Id; title?: string; source?: string; projectFolder?: string | null; allowExecute?: boolean | null; approvalDeadlineUtc?: string | null; status: string; updatedAtUtc: string; createdAtUtc?: string; generation?: number; turnCount?: number; activeSessionId?: Id; outputPreview?: string; approvalPending?: boolean; finalResponseCount?: number; isSubagent?: boolean; parentTaskId?: Id; parentTurnId?: Id; agentName?: string }
 export interface TaskPage { items: Task[]; nextCursor?: string }
-export interface ChatGptRequest { id: Id; taskId?: Id; turnId: Id; agentId: Id; model: string; userContent: string; submittedContent: string; status: string; conversationId?: string; conversationUrl?: string; assistantContent?: string; errorMessage?: string }
+export interface WorkspaceProject { id: Id; name: string; path: string; createdAtUtc?: string; updatedAtUtc?: string }
+export interface ChatGptRequest { id: Id; taskId?: Id; turnId: Id; agentId: Id; model: string; userContent: string; submittedContent: string; projectFolder?: string | null; status: string; conversationId?: string; conversationUrl?: string; assistantContent?: string; errorMessage?: string }
 export interface ChatGptBridge { taskId: Id; conversationId: string; conversationUrl: string; model: string; activeRequestId?: Id; activeStatus?: string; activeSubmittedContent?: string }
 export interface SubagentRun { id: Id; parentTurnId: Id; taskId?: Id; name: string; request: string; status: string; createdAtUtc: string; updatedAtUtc: string; completedAtUtc?: string }
 export interface SubagentApproval { activityId: Id; childTaskId: Id; subagentId: Id; agentName: string; parentTurnId: Id; childTurnId?: Id; tool?: string; input?: unknown; createdAtUtc: string }

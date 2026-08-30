@@ -173,18 +173,15 @@ impl RuntimeHost {
 
     async fn turn_workspace_root(&self, context: &OperationContext) -> Option<PathBuf> {
         if let Ok(Some(project_folder)) =
-            <Self as chatcmd_mcp::RuntimeApi>::project_folder(self, &context.agent_id).await
+            <Self as chatcmd_mcp::RuntimeApi>::project_folder(self, context.task_id.as_deref())
+                .await
         {
             let path = PathBuf::from(project_folder);
             if path.is_dir() {
                 return Some(path);
             }
         }
-        self.workspace
-            .roots()
-            .first()
-            .filter(|path| path.is_dir())
-            .cloned()
+        None
     }
 }
 

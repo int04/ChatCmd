@@ -6,7 +6,6 @@ use serde::Deserialize;
 pub(super) struct AgentInput {
     name: String,
     enabled: bool,
-    project_folder: String,
     #[serde(default)]
     preset_id: Option<String>,
     tool_ids: Vec<String>,
@@ -49,7 +48,6 @@ pub(super) async fn create_agent(
             id: None,
             name: input.name,
             enabled: input.enabled,
-            project_folder: optional(input.project_folder),
         })
         .await
         .map_err(storage_problem)?;
@@ -87,7 +85,6 @@ pub(super) async fn update_agent(
                 id: None,
                 name: input.name,
                 enabled: input.enabled,
-                project_folder: optional(input.project_folder),
             },
         )
         .await
@@ -243,7 +240,7 @@ async fn agent_value(state: &Arc<AppState>, agent: McpAgent) -> Result<Value, Pr
         })
         .map(|preset| preset.id);
     Ok(
-        json!({ "id":agent.id.as_str(),"name":agent.name,"enabled":agent.enabled,"projectFolder":agent.project_folder.unwrap_or_default(),"presetId":preset,"toolIds":ids,"secretLast4":agent.secret_last4,"updatedAtUtc":iso_ms(agent.updated_at_ms) }),
+        json!({ "id":agent.id.as_str(),"name":agent.name,"enabled":agent.enabled,"presetId":preset,"toolIds":ids,"secretLast4":agent.secret_last4,"updatedAtUtc":iso_ms(agent.updated_at_ms) }),
     )
 }
 fn validate_agent_input(input: &AgentInput) -> Result<(), Problem> {
@@ -256,9 +253,6 @@ fn validate_agent_input(input: &AgentInput) -> Result<(), Problem> {
     } else {
         Ok(())
     }
-}
-fn optional(value: String) -> Option<String> {
-    (!value.trim().is_empty()).then(|| value.trim().to_owned())
 }
 fn agent_id(value: String) -> Result<AgentId, Problem> {
     AgentId::new(value).map_err(|_| bad_id())

@@ -60,7 +60,7 @@ pub trait RuntimeApi: Send + Sync {
 
     fn project_folder<'a>(
         &'a self,
-        _agent_id: &'a str,
+        _task_id: Option<&'a str>,
     ) -> BoxFuture<'a, RuntimeResult<Option<String>>> {
         Box::pin(async { Ok(None) })
     }

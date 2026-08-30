@@ -12,15 +12,14 @@ impl RuntimeHost {
             return Ok(cwd);
         }
         if let Some(project_folder) =
-            <Self as chatcmd_mcp::RuntimeApi>::project_folder(self, &context.agent_id).await?
+            <Self as chatcmd_mcp::RuntimeApi>::project_folder(self, context.task_id.as_deref())
+                .await?
         {
             return Ok(project_folder.into());
         }
-        self.workspace.roots().first().cloned().ok_or_else(|| {
-            RuntimeError::new(
-                "workspace_not_configured",
-                "git cwd was omitted and no project folder or workspace root is configured",
-            )
-        })
+        Err(RuntimeError::new(
+            "project_folder_required",
+            "git cwd was omitted; provide the project folder or an explicit absolute working path",
+        ))
     }
 }

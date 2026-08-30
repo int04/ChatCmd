@@ -9,9 +9,9 @@ impl McpAgentStore for SqliteRepository {
             AgentId::new(uuid::Uuid::new_v4().to_string()).expect("UUID is non-empty")
         });
         let now = now_ms()?;
-        let result = sqlx::query("INSERT INTO mcp_agents(id,name,secret_hash,secret_last4,enabled,project_folder,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?,?)")
+        let result = sqlx::query("INSERT INTO mcp_agents(id,name,secret_hash,secret_last4,enabled,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?)")
             .bind(id.as_str()).bind(input.name.trim()).bind(digest.as_bytes().as_slice()).bind(generated.last4())
-            .bind(input.enabled).bind(&input.project_folder).bind(now).bind(now)
+            .bind(input.enabled).bind(now).bind(now)
             .execute(&self.pool).await;
         if let Err(error) = result {
             return Err(map_sqlx_conflict("create MCP agent", error));
@@ -20,7 +20,6 @@ impl McpAgentStore for SqliteRepository {
             id,
             name: input.name.trim().to_owned(),
             enabled: input.enabled,
-            project_folder: input.project_folder,
             secret_last4: generated.last4().to_owned(),
             created_at_ms: now,
             updated_at_ms: now,
@@ -33,13 +32,13 @@ impl McpAgentStore for SqliteRepository {
     }
 
     async fn list_agents(&self) -> Result<Vec<McpAgent>, StorageError> {
-        let rows = sqlx::query("SELECT id,name,enabled,project_folder,secret_last4,created_at_ms,updated_at_ms,last_used_at_ms FROM mcp_agents ORDER BY name COLLATE NOCASE")
+        let rows = sqlx::query("SELECT id,name,enabled,secret_last4,created_at_ms,updated_at_ms,last_used_at_ms FROM mcp_agents ORDER BY name COLLATE NOCASE")
             .fetch_all(&self.pool).await.map_err(|error| backend("list MCP agents", error))?;
         rows.iter().map(map_agent).collect()
     }
 
     async fn agent(&self, id: &AgentId) -> Result<Option<McpAgent>, StorageError> {
-        let row = sqlx::query("SELECT id,name,enabled,project_folder,secret_last4,created_at_ms,updated_at_ms,last_used_at_ms FROM mcp_agents WHERE id=?")
+        let row = sqlx::query("SELECT id,name,enabled,secret_last4,created_at_ms,updated_at_ms,last_used_at_ms FROM mcp_agents WHERE id=?")
             .bind(id.as_str()).fetch_optional(&self.pool).await.map_err(|error| backend("read MCP agent", error))?;
         row.as_ref().map(map_agent).transpose()
     }
@@ -93,18 +92,16 @@ impl McpAgentStore for SqliteRepository {
         id: &AgentId,
         input: NewMcpAgent,
     ) -> Result<McpAgent, StorageError> {
-        let affected = sqlx::query(
-            "UPDATE mcp_agents SET name=?,enabled=?,project_folder=?,updated_at_ms=? WHERE id=?",
-        )
-        .bind(input.name.trim())
-        .bind(input.enabled)
-        .bind(input.project_folder)
-        .bind(now_ms()?)
-        .bind(id.as_str())
-        .execute(&self.pool)
-        .await
-        .map_err(|error| map_sqlx_conflict("update MCP agent", error))?
-        .rows_affected();
+        let affected =
+            sqlx::query("UPDATE mcp_agents SET name=?,enabled=?,updated_at_ms=? WHERE id=?")
+                .bind(input.name.trim())
+                .bind(input.enabled)
+                .bind(now_ms()?)
+                .bind(id.as_str())
+                .execute(&self.pool)
+                .await
+                .map_err(|error| map_sqlx_conflict("update MCP agent", error))?
+                .rows_affected();
         if affected == 0 {
             return Err(StorageError::NotFound(format!("MCP agent {id}")));
         }
@@ -133,7 +130,7 @@ impl PolicyLookup for SqliteRepository {
         raw_token: &str,
     ) -> Result<Option<McpAgentPolicy>, StorageError> {
         let candidate = SecretHash::from_token(raw_token);
-        let row = sqlx::query("SELECT id,name,enabled,project_folder,secret_last4,secret_hash,created_at_ms,updated_at_ms,last_used_at_ms FROM mcp_agents WHERE secret_hash=? AND enabled=1")
+        let row = sqlx::query("SELECT id,name,enabled,secret_last4,secret_hash,created_at_ms,updated_at_ms,last_used_at_ms FROM mcp_agents WHERE secret_hash=? AND enabled=1")
             .bind(candidate.as_bytes().as_slice()).fetch_optional(&self.pool).await
             .map_err(|error| backend("lookup MCP path token", error))?;
         let Some(row) = row else {

@@ -21,7 +21,7 @@ describe('routing and runtime states', () => {
 
 describe('agent MCP URLs', () => {
   it('shows create and rotate URLs only in the focused modal', async () => {
-    const agent = { id: 'agent-1', name: 'Local IDE', enabled: true, projectFolder: 'D:\\work', toolIds: [] };
+    const agent = { id: 'agent-1', name: 'Local IDE', enabled: true, toolIds: [] };
     vi.mocked(fetch).mockImplementation((input, init) => { const path = String(input); if (path.endsWith('/agents') && init?.method === 'POST') return json({ agent, endpoint: 'http://127.0.0.1:8080/mcp/create-once-secret' }) as never; if (path.endsWith('/rotate-secret')) return json({ endpoint: 'http://127.0.0.1:8080/mcp/rotate-once-secret' }) as never; if (path.endsWith('/agents')) return json([]) as never; return json([]) as never; });
     at('/agents'); await userEvent.click(await screen.findByRole('button', { name: 'New agent' })); await userEvent.type(screen.getByLabelText('Name'), 'Local IDE'); await userEvent.click(screen.getByRole('button', { name: 'Save agent' })); const dialog = await screen.findByRole('alertdialog'); expect(dialog).toHaveTextContent('http://127.0.0.1:8080/mcp/create-once-secret'); expect(dialog).toHaveTextContent('No Authorization header is required.'); expect(dialog.contains(document.activeElement)).toBe(true); await userEvent.click(screen.getByRole('button', { name: 'I saved the MCP URL' })); expect(screen.queryByText('http://127.0.0.1:8080/mcp/create-once-secret')).not.toBeInTheDocument(); await userEvent.click(screen.getByRole('button', { name: 'Rotate token' })); expect(await screen.findByText('http://127.0.0.1:8080/mcp/rotate-once-secret')).toBeInTheDocument();
   });

@@ -173,7 +173,6 @@ pub struct McpAgent {
     pub id: AgentId,
     pub name: String,
     pub enabled: bool,
-    pub project_folder: Option<String>,
     pub secret_last4: String,
     pub created_at_ms: i64,
     pub updated_at_ms: i64,
@@ -186,7 +185,6 @@ pub struct NewMcpAgent {
     pub id: Option<AgentId>,
     pub name: String,
     pub enabled: bool,
-    pub project_folder: Option<String>,
 }
 
 /// Resolved MCP policy for a path-token-authenticated request.
@@ -257,6 +255,7 @@ pub struct Task {
     pub conversation_scope_hash: Option<String>,
     pub title: Option<String>,
     pub source: Option<String>,
+    pub project_folder: Option<String>,
     pub allow_execute: Option<bool>,
     pub status: TaskStatus,
     pub active_session_id: Option<SessionId>,

@@ -60,24 +60,35 @@ impl RuntimeHost {
         context: OperationContext,
         arguments: Value,
     ) -> RuntimeResult<Value> {
-        let user_path_scopes =
+        let project_folder = if tool.starts_with("fs_")
+            || tool.starts_with("git_")
+            || tool == "shell_create"
+            || matches!(tool, "skills_list" | "skill_read")
+        {
+            <Self as chatcmd_mcp::RuntimeApi>::project_folder(self, context.task_id.as_deref())
+                .await?
+                .map(std::path::PathBuf::from)
+        } else {
+            None
+        };
+        let mut task_path_scopes =
             if tool.starts_with("fs_") || tool.starts_with("git_") || tool == "shell_create" {
                 self.task_user_path_scopes(&context).await?
             } else {
                 Vec::new()
             };
+        if let Some(project_folder) = project_folder.as_ref().filter(|path| path.is_dir())
+            && !task_path_scopes.contains(project_folder)
+        {
+            task_path_scopes.push(project_folder.clone());
+        }
         let scoped_workspace = if tool.starts_with("fs_") || tool.starts_with("git_") {
-            Some(self.workspace.with_additional_scopes(&user_path_scopes)?)
+            Some(self.workspace.with_additional_scopes(&task_path_scopes)?)
         } else {
             None
         };
         let workspace = scoped_workspace.as_ref().unwrap_or(&self.workspace);
         let arguments = if tool.starts_with("fs_") {
-            let project_folder =
-                <Self as chatcmd_mcp::RuntimeApi>::project_folder(self, &context.agent_id)
-                    .await?
-                    .map(std::path::PathBuf::from)
-                    .or_else(|| self.workspace.roots().first().cloned());
             filesystem_dispatch::resolve_relative_paths(arguments, project_folder.as_deref())?
         } else {
             arguments
@@ -101,20 +112,30 @@ impl RuntimeHost {
             }
             "shell_create" => {
                 let input: ShellCreate = parse(arguments)?;
+                let working_directory = match input.working_directory {
+                    Some(value) if value.is_absolute() => value,
+                    Some(value) => project_folder
+                        .as_ref()
+                        .map(|folder| folder.join(value))
+                        .ok_or_else(project_folder_required_for_shell)?,
+                    None => project_folder
+                        .clone()
+                        .ok_or_else(project_folder_required_for_shell)?,
+                };
                 let info = self
                     .shell
                     .create_with_additional_scopes(
                         &context,
                         ShellCreateRequest {
                             request_id: context.request_id.clone(),
-                            working_directory: input.working_directory,
+                            working_directory: Some(working_directory),
                             executable: input.executable,
                             arguments: input.arguments,
                             environment: input.environment,
                             columns: input.columns,
                             rows: input.rows,
                         },
-                        &user_path_scopes,
+                        &task_path_scopes,
                     )
                     .await?;
                 self.persist_shell_session(&context, &info).await?;
@@ -323,25 +344,13 @@ impl RuntimeHost {
                     .await?;
                 Ok(json!({ "killed": true }))
             }
-            "skills_list" => {
-                let project_folder =
-                    <Self as chatcmd_mcp::RuntimeApi>::project_folder(self, &context.agent_id)
-                        .await?
-                        .map(std::path::PathBuf::from)
-                        .or_else(|| self.workspace.roots().first().cloned());
-                value(
-                    self.skills
-                        .list_for_workspace(project_folder.as_deref())
-                        .await?,
-                )
-            }
+            "skills_list" => value(
+                self.skills
+                    .list_for_workspace(project_folder.as_deref())
+                    .await?,
+            ),
             "skill_read" => {
                 let input: SkillInput = parse(arguments)?;
-                let project_folder =
-                    <Self as chatcmd_mcp::RuntimeApi>::project_folder(self, &context.agent_id)
-                        .await?
-                        .map(std::path::PathBuf::from)
-                        .or_else(|| self.workspace.roots().first().cloned());
                 value(
                     self.skills
                         .read_for_workspace(&input.skill_id, project_folder.as_deref())
@@ -480,4 +489,11 @@ impl RuntimeHost {
 fn context_task_id(context: &OperationContext) -> RuntimeResult<TaskId> {
     TaskId::new(context.task_id.as_deref().unwrap_or_default())
         .map_err(|error| invalid("taskId", error))
+}
+
+fn project_folder_required_for_shell() -> RuntimeError {
+    RuntimeError::new(
+        "project_folder_required",
+        "shell working directory requires the task project folder or an explicit absolute working path",
+    )
 }

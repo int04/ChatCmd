@@ -11,6 +11,7 @@ mod skills;
 mod subagents;
 mod task_controls;
 mod task_delete;
+mod workspaces;
 
 use agents::*;
 use chatgpt::*;
@@ -21,6 +22,7 @@ use skills::*;
 use subagents::*;
 use task_controls::*;
 use task_delete::*;
+use workspaces::*;
 
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -56,6 +58,10 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/mcp/tools", get(tools))
         .route("/mcp/tool-presets", get(presets))
         .route("/system/folder-picker", post(pick_project_folder))
+        .route(
+            "/workspaces/projects",
+            get(workspace_projects).post(save_workspace_project),
+        )
         .route("/chatgpt/requests", post(create_request))
         .route("/chatgpt/requests/{id}", get(request))
         .route("/chatgpt/tasks/{task_id}", get(task_bridge))
@@ -479,7 +485,7 @@ fn task_value(task: chatcmd_core::Task) -> Value {
         .allow_execute
         .is_none()
         .then(|| iso_ms(task.created_at_ms.saturating_add(60_000)));
-    json!({"id":task.id.as_str(),"title":task.title,"source":task.source,"allowExecute":task.allow_execute,"approvalDeadlineUtc":approval_deadline_utc,"status":task.status.as_str(),"updatedAtUtc":iso_ms(task.updated_at_ms),"createdAtUtc":iso_ms(task.created_at_ms),"generation":task.generation,"activeSessionId":task.active_session_id.map(|id|id.into_string())})
+    json!({"id":task.id.as_str(),"title":task.title,"source":task.source,"projectFolder":task.project_folder,"allowExecute":task.allow_execute,"approvalDeadlineUtc":approval_deadline_utc,"status":task.status.as_str(),"updatedAtUtc":iso_ms(task.updated_at_ms),"createdAtUtc":iso_ms(task.created_at_ms),"generation":task.generation,"activeSessionId":task.active_session_id.map(|id|id.into_string())})
 }
 pub(super) fn timeline_row(row: &sqlx::sqlite::SqliteRow) -> Value {
     json!({"id":row.get::<String,_>("event_id"),"type":row.get::<String,_>("kind"),"occurredAt":iso_ms(row.get("created_at_ms")),"turnId":row.get::<Option<String>,_>("turn_id"),"sessionId":row.get::<Option<String>,_>("session_id"),"payload":serde_json::from_str::<Value>(&row.get::<String,_>("payload_json")).unwrap_or(Value::Null)})

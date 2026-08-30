@@ -157,6 +157,9 @@ impl RuntimeHost {
                     .as_ref()
                     .and_then(|task| task.source.clone())
                     .or_else(|| Some("mcp".to_owned())),
+                project_folder: current
+                    .as_ref()
+                    .and_then(|task| task.project_folder.clone()),
                 allow_execute,
                 status: if allow_execute.is_none() {
                     TaskStatus::Pending

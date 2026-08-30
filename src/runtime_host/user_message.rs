@@ -77,6 +77,44 @@ impl RuntimeHost {
         Ok(scopes.into_iter().collect())
     }
 
+    async fn bind_project_folder_from_user_message(
+        &self,
+        task_id: &TaskId,
+        content: &str,
+    ) -> RuntimeResult<()> {
+        let Some(mut task) = self.repository.task(task_id).await.map_err(storage_error)? else {
+            return Err(RuntimeError::new("not_found", "task missing"));
+        };
+        if task
+            .project_folder
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            return Ok(());
+        }
+        let paths = extract_explicit_absolute_paths(content);
+        if paths.len() != 1 {
+            return Ok(());
+        }
+        let path = &paths[0];
+        let folder = if path.is_dir() {
+            Some(path.clone())
+        } else if path.is_file() {
+            path.parent().map(std::path::Path::to_path_buf)
+        } else {
+            None
+        };
+        let Some(folder) = folder else {
+            return Ok(());
+        };
+        task.project_folder = Some(folder.to_string_lossy().into_owned());
+        task.updated_at_ms = now_ms();
+        self.repository
+            .upsert_task(&task)
+            .await
+            .map_err(storage_error)
+    }
+
     pub(super) async fn save_user_message(
         &self,
         context: &OperationContext,
@@ -99,7 +137,6 @@ impl RuntimeHost {
             &context.agent_id,
             &format!("{}\0{}", task_id.as_str(), turn_id.as_str()),
         );
-        self.begin_turn_file_tracking(context).await;
         let payload = json!({
             "tool": context.tool_name,
             "role": "user",
@@ -140,6 +177,9 @@ impl RuntimeHost {
                 ));
             }
         }
+        self.bind_project_folder_from_user_message(&task_id, content)
+            .await?;
+        self.begin_turn_file_tracking(context).await;
 
         let first_turn = first_turn_before.or_else(|| Some(turn_id.as_str().to_owned()));
         let is_first_message = first_turn.as_deref() == Some(turn_id.as_str());

@@ -35,8 +35,8 @@ pub(super) fn resolve_relative_paths(
         }
         let base = base.ok_or_else(|| {
             RuntimeError::new(
-                "workspace_not_configured",
-                "relative filesystem path requires an agent project folder or workspace root",
+                "project_folder_required",
+                "relative filesystem path requires the task project folder or an explicit absolute work path",
             )
         })?;
         object.insert(
@@ -205,10 +205,14 @@ mod tests {
     }
 
     #[test]
-    fn relative_path_requires_a_project_or_workspace_base() {
+    fn relative_path_requires_the_task_project_folder() {
         let error = resolve_relative_paths(json!({"path":"src/main.rs"}), None)
             .expect_err("relative path without base must fail explicitly");
-        assert_eq!(error.code, "workspace_not_configured");
+        assert_eq!(error.code, "project_folder_required");
+        assert_eq!(
+            error.message,
+            "relative filesystem path requires the task project folder or an explicit absolute work path"
+        );
     }
 }
 

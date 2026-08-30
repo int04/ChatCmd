@@ -57,21 +57,23 @@ pub(super) async fn create_request(
     let agent_id = input.agent_id.trim();
     let agent_name = enabled_agent_name(&state, agent_id).await?;
     let model = normalize_model(input.model.as_deref());
-    let submitted = wrapped_message(
-        &agent_name,
-        input.project_folder.as_deref(),
-        input.content.trim(),
-    );
+    let project_folder = input
+        .project_folder
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let submitted = wrapped_message(&agent_name, project_folder, input.content.trim());
     let now = now_ms();
     let request_id = Uuid::new_v4().to_string();
     let turn_id = format!("chatgpt-turn-{}", Uuid::new_v4());
-    sqlx::query("INSERT INTO chatgpt_bridge_requests(id,task_id,turn_id,agent_id,model,user_content,submitted_content,status,conversation_id,conversation_url,assistant_content,error_message,created_at_ms,updated_at_ms,completed_at_ms) VALUES(?,NULL,?,?,?,?,?,'queued',NULL,NULL,NULL,NULL,?,?,NULL)")
+    sqlx::query("INSERT INTO chatgpt_bridge_requests(id,task_id,turn_id,agent_id,model,user_content,submitted_content,project_folder,status,conversation_id,conversation_url,assistant_content,error_message,created_at_ms,updated_at_ms,completed_at_ms) VALUES(?,NULL,?,?,?,?,?,?,'queued',NULL,NULL,NULL,NULL,?,?,NULL)")
         .bind(&request_id)
         .bind(&turn_id)
         .bind(agent_id)
         .bind(&model)
         .bind(input.content.trim())
         .bind(&submitted)
+        .bind(project_folder)
         .bind(now)
         .bind(now)
         .execute(state.repository.pool())
@@ -115,7 +117,7 @@ pub(super) async fn continue_message(
 ) -> Result<Json<Value>, Problem> {
     validate_message(&input.content)?;
     let task_id = task_id.trim();
-    let row = sqlx::query("SELECT c.conversation_id,c.conversation_url,c.model,t.agent_id,a.name FROM chatgpt_conversations c JOIN tasks t ON t.id=c.task_id JOIN mcp_agents a ON a.id=t.agent_id WHERE c.task_id=?")
+    let row = sqlx::query("SELECT c.conversation_id,c.conversation_url,c.model,t.agent_id,t.project_folder,a.name FROM chatgpt_conversations c JOIN tasks t ON t.id=c.task_id JOIN mcp_agents a ON a.id=t.agent_id WHERE c.task_id=?")
         .bind(task_id)
         .fetch_optional(state.repository.pool())
         .await
@@ -129,14 +131,12 @@ pub(super) async fn continue_message(
         .as_deref()
         .map(|value| normalize_model(Some(value)))
         .unwrap_or_else(|| row.get::<String, _>("model"));
-    let submitted = format!(
-        "Sử dụng plugin @{agent_name} để thực hiện yêu cầu sau:\n\n{}",
-        input.content.trim()
-    );
+    let project_folder = row.get::<Option<String>, _>("project_folder");
+    let submitted = wrapped_message(&agent_name, project_folder.as_deref(), input.content.trim());
     let request_id = Uuid::new_v4().to_string();
     let turn_id = format!("chatgpt-turn-{}", Uuid::new_v4());
     let now = now_ms();
-    sqlx::query("INSERT INTO chatgpt_bridge_requests(id,task_id,turn_id,agent_id,model,user_content,submitted_content,status,conversation_id,conversation_url,assistant_content,error_message,created_at_ms,updated_at_ms,completed_at_ms) VALUES(?,?,?,?,?,?,?,'queued',?,?,NULL,NULL,?,?,NULL)")
+    sqlx::query("INSERT INTO chatgpt_bridge_requests(id,task_id,turn_id,agent_id,model,user_content,submitted_content,project_folder,status,conversation_id,conversation_url,assistant_content,error_message,created_at_ms,updated_at_ms,completed_at_ms) VALUES(?,?,?,?,?,?,?,?, 'queued',?,?,NULL,NULL,?,?,NULL)")
         .bind(&request_id)
         .bind(task_id)
         .bind(&turn_id)
@@ -144,6 +144,7 @@ pub(super) async fn continue_message(
         .bind(&model)
         .bind(input.content.trim())
         .bind(&submitted)
+        .bind(project_folder.as_deref())
         .bind(row.get::<String, _>("conversation_id"))
         .bind(row.get::<String, _>("conversation_url"))
         .bind(now)
@@ -197,6 +198,7 @@ pub(super) async fn bridge_started(
     let agent_id = row.get::<String, _>("agent_id");
     let submitted = row.get::<String, _>("submitted_content");
     let user_content = row.get::<String, _>("user_content");
+    let project_folder = row.get::<Option<String>, _>("project_folder");
     let existing_task = row.get::<Option<String>, _>("task_id");
     let scope = openai_scope(&input.conversation_id);
     let task_id = if let Some(id) = existing_task {
@@ -208,12 +210,13 @@ pub(super) async fn bridge_started(
     };
     let now = now_ms();
     let title = compact_title(&user_content);
-    sqlx::query("INSERT INTO tasks(id,agent_id,device_id,conversation_scope_hash,title,source,allow_execute,status,active_session_id,generation,stopped_at_ms,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,'chatgpt_web',1,'running',NULL,1,NULL,?,?) ON CONFLICT(id) DO UPDATE SET conversation_scope_hash=excluded.conversation_scope_hash,title=COALESCE(tasks.title,excluded.title),source='chatgpt_web',allow_execute=1,status='running',stopped_at_ms=NULL,updated_at_ms=excluded.updated_at_ms")
+    sqlx::query("INSERT INTO tasks(id,agent_id,device_id,conversation_scope_hash,title,source,project_folder,allow_execute,status,active_session_id,generation,stopped_at_ms,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,'chatgpt_web',?,1,'running',NULL,1,NULL,?,?) ON CONFLICT(id) DO UPDATE SET conversation_scope_hash=excluded.conversation_scope_hash,title=COALESCE(tasks.title,excluded.title),source='chatgpt_web',project_folder=COALESCE(excluded.project_folder,tasks.project_folder),allow_execute=1,status='running',stopped_at_ms=NULL,updated_at_ms=excluded.updated_at_ms")
         .bind(&task_id)
         .bind(&agent_id)
         .bind(state.device.id.as_str())
         .bind(&scope)
         .bind(title)
+        .bind(project_folder.as_deref())
         .bind(now)
         .bind(now)
         .execute(state.repository.pool())

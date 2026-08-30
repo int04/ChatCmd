@@ -50,9 +50,6 @@ pub(super) fn map_agent(row: &sqlx::sqlite::SqliteRow) -> Result<McpAgent, Stora
         enabled: row
             .try_get("enabled")
             .map_err(|error| backend("map agent state", error))?,
-        project_folder: row
-            .try_get("project_folder")
-            .map_err(|error| backend("map project folder", error))?,
         secret_last4: row
             .try_get("secret_last4")
             .map_err(|error| backend("map secret suffix", error))?,
@@ -95,6 +92,9 @@ pub(super) fn map_task(row: &sqlx::sqlite::SqliteRow) -> Result<Task, StorageErr
         source: row
             .try_get("source")
             .map_err(|error| backend("map task source", error))?,
+        project_folder: row
+            .try_get("project_folder")
+            .map_err(|error| backend("map task project folder", error))?,
         allow_execute: row
             .try_get("allow_execute")
             .map_err(|error| backend("map task execution approval", error))?,

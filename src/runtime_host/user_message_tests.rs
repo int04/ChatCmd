@@ -26,12 +26,15 @@ pub(super) async fn test_host() -> (RuntimeHost, String, TempDir) {
     let (repository, bootstrap) = SqliteRepository::open(&directory.path().join("chatcmd.db"), 2)
         .await
         .expect("open repository");
+    sqlx::query("INSERT INTO settings(key,value_json,updated_at_ms) VALUES('ui_approveNewConversations','false',0) ON CONFLICT(key) DO UPDATE SET value_json='false',updated_at_ms=0")
+        .execute(repository.pool())
+        .await
+        .expect("disable conversation approval for runtime tests");
     let created = repository
         .create_agent(NewMcpAgent {
             id: None,
             name: "User message sync test".to_owned(),
             enabled: true,
-            project_folder: None,
         })
         .await
         .expect("create agent");
@@ -98,27 +101,6 @@ pub(super) fn turn_context(
     context.turn_id = Some(turn_id.to_owned());
     context.conversation_scope_id = Some(conversation_scope.to_owned());
     context
-}
-
-#[tokio::test]
-async fn runtime_api_resolves_agent_project_folder() {
-    let (host, agent_id, directory) = test_host().await;
-    let project = directory.path().join("project-root");
-    std::fs::create_dir_all(&project).expect("create project root");
-    sqlx::query("UPDATE mcp_agents SET project_folder=? WHERE id=?")
-        .bind(project.display().to_string())
-        .bind(&agent_id)
-        .execute(host.repository.pool())
-        .await
-        .expect("set project folder");
-
-    let resolved = <RuntimeHost as chatcmd_mcp::RuntimeApi>::project_folder(&host, &agent_id)
-        .await
-        .expect("resolve project folder");
-    assert_eq!(
-        resolved.as_deref(),
-        Some(project.display().to_string().as_str())
-    );
 }
 
 #[tokio::test]
@@ -316,71 +298,6 @@ async fn first_message_seeds_task_id_and_only_first_final_can_name_chat() {
         .await
         .expect("final title");
     assert_eq!(final_title, "Sửa lỗi Git diff stat");
-}
-
-#[tokio::test]
-async fn delegated_child_keeps_user_message_sync_for_internal_calls() {
-    let (host, agent_id, _directory) = test_host().await;
-    let parent_scope = "conversation-subagent-internal-sync";
-    let parent_turn = "turn-parent-subagent-internal-sync";
-    let parent = host
-        .call_persisted(
-            "agent_user_message",
-            turn_context(
-                "parent-user",
-                &agent_id,
-                "agent_user_message",
-                parent_turn,
-                parent_scope,
-            ),
-            json!({"content":"Create one delegated child"}),
-        )
-        .await
-        .expect("sync parent user message");
-    let parent_task = parent["taskId"].as_str().expect("parent task");
-    let mut start_context =
-        OperationContext::new("subagent-start", &agent_id, "agent_subagent_start");
-    start_context.task_id = Some(parent_task.to_owned());
-    start_context.turn_id = Some(parent_turn.to_owned());
-    let registration = host
-        .call_persisted(
-            "agent_subagent_start",
-            start_context,
-            json!({"name":"Reader","request":"Read one file"}),
-        )
-        .await
-        .expect("register child");
-    assert_eq!(registration["taskId"], parent_task);
-    let child_task = registration["childTaskId"]
-        .as_str()
-        .expect("child task")
-        .to_owned();
-    let marker = registration["delegationMarker"].as_str().expect("marker");
-    let child_turn = format!(
-        "turn-{}",
-        registration["subagentId"].as_str().expect("subagent id")
-    );
-
-    let mut child_user = OperationContext::new("child-user", &agent_id, "agent_user_message");
-    child_user.task_id = Some(child_task.clone());
-    child_user.turn_id = Some(child_turn.clone());
-    host.call_persisted(
-        "agent_user_message",
-        child_user,
-        json!({"content":format!("Read one file\n\n{marker}")}),
-    )
-    .await
-    .expect("sync child user message");
-
-    let mut roots = OperationContext::new("child-roots", &agent_id, "workspace_roots");
-    roots.task_id = Some(child_task);
-    roots.turn_id = Some(child_turn);
-    host.ensure_call_identity(&mut roots, None)
-        .await
-        .expect("normalize child internal identity");
-    host.ensure_user_message_synced(&roots)
-        .await
-        .expect("child internal identity must see synchronized user message");
 }
 
 #[tokio::test]

@@ -17,9 +17,11 @@ mod user_message;
 #[cfg(test)]
 mod user_message_path_tests;
 #[cfg(test)]
+mod user_message_project_tests;
+#[cfg(test)]
 mod user_message_tests;
 
-use chatcmd_core::{AgentId, LocalDevice, McpAgentStore as _, Task};
+use chatcmd_core::{LocalDevice, Task, TaskId, TaskStore as _};
 use chatcmd_mcp::RuntimeApi;
 use chatcmd_runtime::{
     BoxFuture, DeviceDescriptor, GitService, OperationContext, ProcessService, RuntimeError,
@@ -120,12 +122,15 @@ impl RuntimeApi for RuntimeHost {
 
     fn project_folder<'a>(
         &'a self,
-        agent_id: &'a str,
+        task_id: Option<&'a str>,
     ) -> BoxFuture<'a, RuntimeResult<Option<String>>> {
         Box::pin(async move {
-            let id = AgentId::new(agent_id).map_err(|error| invalid("agentId", error))?;
-            let agent = self.repository.agent(&id).await.map_err(storage_error)?;
-            Ok(agent
+            let Some(task_id) = task_id.filter(|value| !value.trim().is_empty()) else {
+                return Ok(None);
+            };
+            let id = TaskId::new(task_id).map_err(|error| invalid("taskId", error))?;
+            let task = self.repository.task(&id).await.map_err(storage_error)?;
+            Ok(task
                 .and_then(|value| value.project_folder)
                 .filter(|value| !value.trim().is_empty()))
         })

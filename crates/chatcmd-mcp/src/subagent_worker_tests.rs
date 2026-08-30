@@ -73,7 +73,7 @@ impl crate::RuntimeApi for FakeRuntime {
 
     fn project_folder<'a>(
         &'a self,
-        _agent_id: &'a str,
+        _task_id: Option<&'a str>,
     ) -> chatcmd_runtime::BoxFuture<'a, RuntimeResult<Option<String>>> {
         let value = self.project_folder.clone();
         Box::pin(async move { Ok(value) })
@@ -431,7 +431,7 @@ async fn startup_failure_after_registration_is_reported_asynchronously() {
 
 #[tokio::test]
 #[ignore = "local Codex fallback removed; covered by no_sampling_client_never_starts_local_executor"]
-async fn no_sampling_prefers_agent_project_folder_for_shell_workdir() {
+async fn no_sampling_prefers_parent_task_project_folder_for_shell_workdir() {
     use rmcp::{ServiceExt as _, model::CallToolRequestParams};
 
     let runtime = FakeRuntime {

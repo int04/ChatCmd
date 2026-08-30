@@ -86,7 +86,7 @@ pub(super) async fn bridge_request_row(
     state: &Arc<AppState>,
     id: &str,
 ) -> Result<SqliteRow, Problem> {
-    sqlx::query("SELECT id,task_id,turn_id,agent_id,model,user_content,submitted_content,status,conversation_id,conversation_url,assistant_content,error_message,created_at_ms,updated_at_ms,completed_at_ms FROM chatgpt_bridge_requests WHERE id=?")
+    sqlx::query("SELECT id,task_id,turn_id,agent_id,model,user_content,submitted_content,project_folder,status,conversation_id,conversation_url,assistant_content,error_message,created_at_ms,updated_at_ms,completed_at_ms FROM chatgpt_bridge_requests WHERE id=?")
         .bind(id)
         .fetch_optional(state.repository.pool())
         .await
@@ -99,7 +99,7 @@ fn request_value(row: &SqliteRow) -> Value {
         "id": row.get::<String, _>("id"), "taskId": row.get::<Option<String>, _>("task_id"),
         "turnId": row.get::<String, _>("turn_id"), "agentId": row.get::<String, _>("agent_id"),
         "model": row.get::<String, _>("model"), "userContent": row.get::<String, _>("user_content"),
-        "submittedContent": row.get::<String, _>("submitted_content"), "status": row.get::<String, _>("status"),
+        "submittedContent": row.get::<String, _>("submitted_content"), "projectFolder": row.get::<Option<String>, _>("project_folder"), "status": row.get::<String, _>("status"),
         "conversationId": row.get::<Option<String>, _>("conversation_id"), "conversationUrl": row.get::<Option<String>, _>("conversation_url"),
         "assistantContent": row.get::<Option<String>, _>("assistant_content"), "errorMessage": row.get::<Option<String>, _>("error_message")
     })
@@ -280,9 +280,30 @@ pub(super) fn wrapped_message(
         Some(project_folder) => format!(
             "Sử dụng plugin @{agent_name}\n\nThư mục dự án: {project_folder}\n\nđể thực hiện yêu cầu sau: {content}"
         ),
-        None => format!(
-            "Sử dụng plugin @{agent_name}\n\nThư mục dự án: \n\nđể thực hiện yêu cầu sau: {content}"
-        ),
+        None => format!("Sử dụng plugin @{agent_name} để thực hiện yêu cầu sau:\n\n{content}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wrapped_message;
+
+    #[test]
+    fn wrapped_message_omits_empty_project_folder() {
+        let message = wrapped_message("worker", Some("  "), "Kiểm tra dự án");
+
+        assert_eq!(
+            message,
+            "Sử dụng plugin @worker để thực hiện yêu cầu sau:\n\nKiểm tra dự án"
+        );
+        assert!(!message.contains("Thư mục dự án:"));
+    }
+
+    #[test]
+    fn wrapped_message_includes_trimmed_project_folder() {
+        let message = wrapped_message("worker", Some(" D:\\DEV\\Dotty "), "Kiểm tra");
+
+        assert!(message.contains("Thư mục dự án: D:\\DEV\\Dotty"));
     }
 }
 

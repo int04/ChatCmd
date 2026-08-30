@@ -74,7 +74,6 @@ async fn secret_rotation_invalidates_old_token_and_database_stores_only_hash() {
             id: None,
             name: "Agent".to_owned(),
             enabled: true,
-            project_folder: None,
         })
         .await
         .expect("create agent");
@@ -132,7 +131,6 @@ async fn agent_update_allowlist_and_delete_are_complete() {
             id: None,
             name: "Before".to_owned(),
             enabled: true,
-            project_folder: None,
         })
         .await
         .expect("create agent");
@@ -148,7 +146,6 @@ async fn agent_update_allowlist_and_delete_are_complete() {
                 id: None,
                 name: "After".to_owned(),
                 enabled: false,
-                project_folder: Some("workspace".to_owned()),
             },
         )
         .await
@@ -264,6 +261,7 @@ async fn restart_recovery_interrupts_running_task_and_session() {
             conversation_scope_hash: None,
             title: None,
             source: None,
+            project_folder: Some("D:\\DEV\\Recovery".to_owned()),
             allow_execute: Some(true),
             status: TaskStatus::Running,
             active_session_id: Some(session.id.clone()),
@@ -284,14 +282,15 @@ async fn restart_recovery_interrupts_running_task_and_session() {
         (report.interrupted_tasks, report.interrupted_sessions),
         (1, 1)
     );
+    let stored_task = repository
+        .task(&task_id)
+        .await
+        .expect("read task")
+        .expect("task exists");
+    assert_eq!(stored_task.status, TaskStatus::Interrupted);
     assert_eq!(
-        repository
-            .task(&task_id)
-            .await
-            .expect("read task")
-            .expect("task exists")
-            .status,
-        TaskStatus::Interrupted
+        stored_task.project_folder.as_deref(),
+        Some("D:\\DEV\\Recovery")
     );
     let status: String = sqlx::query_scalar("SELECT status FROM terminal_sessions WHERE id=?")
         .bind(session.id.as_str())
@@ -318,6 +317,7 @@ async fn recent_tasks_hide_claimed_subagent_tasks() {
                 conversation_scope_hash: None,
                 title: Some(title.to_owned()),
                 source: Some("mcp".to_owned()),
+                project_folder: None,
                 allow_execute: Some(true),
                 status: TaskStatus::Running,
                 active_session_id: None,

@@ -1,11 +1,13 @@
 import { Bot, CircleAlert, CircleStop, ExternalLink, FolderOpen, LoaderCircle, MessageSquarePlus, Send, ShieldCheck, Sparkles, Unplug, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 import { api } from '../api';
 import { chatGptExtensionAvailable, chatGptExtensionStatus, closeChatGptConversationTab, dispatchChatGptRequest, focusChatGptConversationTab, openChatGptConversationTab, prepareChatGptModelTab, stopChatGptRequest } from '../chatgptBridge';
+import { Modal } from '../components';
 import { tr } from '../i18n';
+import { canonicalProjectPath } from '../tasks/workspaceProjects';
 import type { Agent } from '../types';
 import { useLoad } from '../useLoad';
 
@@ -16,10 +18,14 @@ const RETRY_DELAY_SECONDS = 10;
 
 export function NewChatGptConversation() {
   const agents = useLoad(api.agents, []);
+  const projects = useLoad(api.workspaceProjects, []);
+  const location = useLocation();
   const navigate = useNavigate();
+  const launchProjectFolder = routeProjectFolder(location.state);
   const enabledAgents = useMemo(() => (agents.data ?? []).filter((agent) => agent.enabled), [agents.data]);
   const [agentId, setAgentId] = useState('');
-  const [projectFolder, setProjectFolder] = useState('');
+  const [projectFolder, setProjectFolder] = useState(launchProjectFolder);
+  const [folderMenuOpen, setFolderMenuOpen] = useState(false);
   const [content, setContent] = useState('');
   const [folderPicking, setFolderPicking] = useState(false);
   const [modelTabOpening, setModelTabOpening] = useState(false);
@@ -28,13 +34,15 @@ export function NewChatGptConversation() {
   const [chatGptTabOpen, setChatGptTabOpen] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-
   useEffect(() => {
     if (!agentId && enabledAgents[0]) {
       setAgentId(enabledAgents[0].id);
-      setProjectFolder(enabledAgents[0].projectFolder || '');
     }
   }, [agentId, enabledAgents]);
+  useEffect(() => {
+    if (!launchProjectFolder) return;
+    setProjectFolder(launchProjectFolder);
+  }, [launchProjectFolder]);
   useEffect(() => {
     let disposed = false;
     const refresh = () => void chatGptExtensionStatus().then((status) => {
@@ -47,11 +55,12 @@ export function NewChatGptConversation() {
     return () => { disposed = true; window.clearInterval(timer); };
   }, []);
 
+  const setProjectFolderFromUser = (path: string) => {
+    setProjectFolder(path);
+  };
 
   const selectAgent = (nextAgentId: string) => {
     setAgentId(nextAgentId);
-    const nextAgent = enabledAgents.find((agent) => agent.id === nextAgentId);
-    setProjectFolder(nextAgent?.projectFolder || '');
   };
 
   const pickFolder = async () => {
@@ -59,7 +68,10 @@ export function NewChatGptConversation() {
     setFolderPicking(true); setError('');
     try {
       const result = await api.pickProjectFolder();
-      if (result.path) setProjectFolder(result.path);
+      if (result.path) {
+        setProjectFolderFromUser(result.path);
+        setFolderMenuOpen(false);
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Không thể mở trình chọn thư mục.');
     } finally { setFolderPicking(false); }
@@ -139,10 +151,10 @@ export function NewChatGptConversation() {
           <div className="chatgpt-folder-picker">
             <span>Thư mục dự án</span>
             <div className="chatgpt-folder-picker-control">
-              <button className={`chatgpt-folder-select ${projectFolder ? '' : 'empty'}`} type="button" onClick={() => void pickFolder()} disabled={busy || folderPicking} title={projectFolder || 'Chọn thư mục dự án'}>
-                {folderPicking ? <LoaderCircle className="spin" /> : <FolderOpen />}<span>{projectFolder || 'Chọn thư mục'}</span>
+              <button className={`chatgpt-folder-select ${projectFolder ? '' : 'empty'}`} type="button" onClick={() => { setFolderMenuOpen(true); void projects.reload(); }} disabled={busy} title={projectFolder || 'Chọn thư mục dự án'}>
+                <FolderOpen /><span>{projectFolder || 'Chọn thư mục'}</span>
               </button>
-              {projectFolder && <button className="chatgpt-folder-clear" type="button" onClick={() => setProjectFolder('')} disabled={busy || folderPicking} aria-label="Bỏ chọn thư mục"><X /></button>}
+              {projectFolder && <button className="chatgpt-folder-clear" type="button" onClick={() => setProjectFolderFromUser('')} disabled={busy} aria-label="Bỏ chọn thư mục"><X /></button>}
             </div>
           </div>
           <div className="chatgpt-model-picker">
@@ -162,6 +174,7 @@ export function NewChatGptConversation() {
         <div className="chatgpt-chat-composer-meta"><span>{selectedAgent ? `Gửi tới @${selectedAgent.name}` : tr('No enabled agent')}</span><span><ShieldCheck />{tr('Actual message')}: <code>{selectedPrompt(enabledAgents, agentId, projectFolder, content)}</code></span></div>
       </form>
     </section>
+    {folderMenuOpen && <Modal className="workspace-folder-modal" title="Chọn thư mục dự án" description="Chọn một dự án đã lưu hoặc mở trình chọn folder trên máy." close={() => !folderPicking && setFolderMenuOpen(false)}><div className="workspace-folder-choices"><div className="workspace-folder-project-list">{projects.loading ? <p className="workspace-folder-empty"><LoaderCircle className="spin" /> Đang tải dự án…</p> : projects.data?.length ? projects.data.map((project) => <button className={`workspace-folder-project ${canonicalProjectPath(projectFolder) === canonicalProjectPath(project.path) ? 'selected' : ''}`} type="button" onClick={() => { setProjectFolderFromUser(project.path); setFolderMenuOpen(false); }} key={project.id}><strong>{project.name}</strong><small>{project.path}</small></button>) : <p className="workspace-folder-empty">{projects.error || 'Chưa có dự án đã lưu.'}</p>}</div><button className="workspace-folder-browse" type="button" onClick={() => void pickFolder()} disabled={folderPicking}>{folderPicking ? <LoaderCircle className="spin" /> : <FolderOpen />}<span><strong>Chọn folder</strong><small>Mở trình chọn thư mục trên máy</small></span></button></div></Modal>}
     {confirmWithoutFolder && <div className="modal-backdrop chatgpt-folder-warning-backdrop">
       <div className="modal chatgpt-folder-warning" role="alertdialog" aria-modal="true" aria-labelledby="chatgpt-folder-warning-title">
         <span className="chatgpt-folder-warning-icon"><CircleAlert /></span>
@@ -209,7 +222,7 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
       if (['completed', 'stopped', 'failed'].includes(request.status)) void reloadBridge();
     }).catch(() => undefined), 1_000);
     return () => window.clearInterval(timer);
-  }, [bridge.data?.activeRequestId, bridge.reload]);
+  }, [bridge.data?.activeRequestId, reloadBridge]);
   useEffect(() => () => { if (retryTimer.current !== null) window.clearTimeout(retryTimer.current); }, []);
   useEffect(() => {
     if (retrySeconds === null || retrySeconds <= 0) return;
@@ -357,7 +370,16 @@ async function waitForDispatchState(requestId: string) {
 
 function selectedPrompt(agents: Agent[], agentId: string, projectFolder: string, content: string) {
   const name = agents.find((agent) => agent.id === agentId)?.name || 'agent';
-  return `Sử dụng plugin @${name}\n\nThư mục dự án: ${projectFolder.trim()}\n\nđể thực hiện yêu cầu sau: ${content || '…'}`;
+  const folder = projectFolder.trim();
+  return folder
+    ? `Sử dụng plugin @${name}\n\nThư mục dự án: ${folder}\n\nđể thực hiện yêu cầu sau: ${content || '…'}`
+    : `Sử dụng plugin @${name} để thực hiện yêu cầu sau:\n\n${content || '…'}`;
+}
+
+function routeProjectFolder(state: unknown) {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) return '';
+  const value = (state as Record<string, unknown>).projectFolder;
+  return typeof value === 'string' ? value.trim() : '';
 }
 
 function isSendDisabledError(value: string) { return value.includes(SEND_DISABLED_ERROR_VI) || value.includes(SEND_DISABLED_ERROR_EN); }
