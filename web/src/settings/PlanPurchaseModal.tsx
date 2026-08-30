@@ -1,5 +1,5 @@
-import { BadgePercent, CheckCircle2, ChevronLeft, LoaderCircle, PackageCheck, WalletCards } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { BadgePercent, Check, CheckCircle2, ChevronLeft, Crown, LoaderCircle, PackageCheck, Sparkles, WalletCards } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { api, ApiError, type DealCheckResult, type PlanPurchaseResult, type ServicePlan } from '../api';
 import { Modal } from '../components';
 import { billingTr, formatVnd } from './billingI18n';
@@ -41,7 +41,6 @@ export function PlanPurchaseModal({ currentPlanType, onClose, onTopUp, onPurchas
   const finalPrice = selected ? validPreview?.finalPrice ?? selected.price : 0;
   const needsDealCheck = Boolean(normalizedDeal) && !validPreview;
   const insufficient = Boolean(selected && balance < finalPrice);
-  const purchasablePlans = useMemo(() => plans.filter((plan) => plan.price > 0), [plans]);
 
   const selectPlan = (plan: ServicePlan) => {
     if (plan.price <= 0 || plan.type < currentPlanType) return;
@@ -115,18 +114,57 @@ export function PlanPurchaseModal({ currentPlanType, onClose, onTopUp, onPurchas
       </div>
     </div> : <>
       {problem && <div className="billing-error" role="alert">{problem}</div>}
-      <div className="plan-list">
-        {purchasablePlans.map((plan) => {
+      <div className="plan-list plan-selection-grid">
+        {plans.map((plan) => {
           const unavailable = plan.type < currentPlanType;
           const current = plan.type === currentPlanType;
-          return <article key={plan.id} className={`plan-card ${unavailable ? 'unavailable' : ''}`}>
-            <div className="plan-card-copy"><strong>{plan.name}</strong><span>{billingTr('{days} days', { days: plan.days })}</span>{current && <small>{billingTr('Current plan')}</small>}{unavailable && <small>{billingTr('Unavailable')}</small>}</div>
-            <div className="plan-card-price"><strong>{formatVnd(plan.price)}</strong><button type="button" className="button secondary" disabled={unavailable} onClick={() => selectPlan(plan)}>{billingTr('Select plan')}</button></div>
+          const free = plan.type === 0 || plan.price <= 0;
+          const recommended = plan.type === 1;
+          const premium = plan.type >= 2;
+          const features = planFeatures(plan.type);
+          const buttonLabel = free ? billingTr('Included plan') : current ? billingTr('Renew plan') : billingTr('Upgrade plan');
+          return <article key={plan.id} className={`plan-card plan-tier-${plan.type} ${unavailable ? 'unavailable' : ''} ${current ? 'current' : ''} ${recommended && !current ? 'recommended' : ''}`}>
+            <div className="plan-card-topline">
+              <div className="plan-card-icon">{premium ? <Crown /> : recommended ? <Sparkles /> : <PackageCheck />}</div>
+              <div className="plan-card-badges">
+                {current && <span className="plan-badge current">{billingTr('Current plan')}</span>}
+                {!current && recommended && <span className="plan-badge recommended">{billingTr('Recommended')}</span>}
+                {!current && premium && <span className="plan-badge premium">{billingTr('Most features')}</span>}
+              </div>
+            </div>
+            <div className="plan-card-copy">
+              <div className="plan-card-title-row"><strong>{plan.name}</strong><span>{free ? billingTr('Free') : formatVnd(plan.price)}</span></div>
+              <p>{planDescription(plan.type)}</p>
+            </div>
+            <div className="plan-feature-list">
+              {features.map((feature) => <div key={feature}><Check /><span>{feature}</span></div>)}
+            </div>
+            <div className="plan-card-footer">
+              <span>{free ? billingTr('Included plan') : billingTr('{days} days', { days: plan.days })}</span>
+              <button type="button" className={`button ${recommended || premium ? 'primary' : 'secondary'}`} disabled={free || unavailable} onClick={() => selectPlan(plan)}>{unavailable ? billingTr('Unavailable') : buttonLabel}</button>
+            </div>
           </article>;
         })}
       </div>
     </>}
   </Modal>;
+}
+
+function planDescription(type: number) {
+  if (type === 0) return billingTr('Free plan description');
+  if (type === 1) return billingTr('Normal plan description');
+  return billingTr('VIP plan description');
+}
+
+function planFeatures(type: number) {
+  if (type === 0) return [billingTr('Up to 5 hours of use per day')];
+  if (type === 1) return [billingTr('Unlimited usage time')];
+  return [
+    billingTr('Unlimited usage time'),
+    billingTr('Chat directly in the system'),
+    billingTr('Expanded features'),
+    billingTr('Early access to new features'),
+  ];
 }
 
 function dealErrorMessage(error: unknown) {
