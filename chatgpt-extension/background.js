@@ -135,7 +135,23 @@ async function chatGptTabStatus(conversationUrl) {
   }
   const target = conversationTarget(conversationUrl);
   const tab = await findConversationTab(target);
-  return { chatGptTabOpen: Boolean(tab?.id), conversationTabOpen: Boolean(tab?.id), tabId: tab?.id, tabUrl: tab?.url };
+  if (!tab?.id) {
+    return { chatGptTabOpen: false, conversationTabOpen: false, conversationReady: false };
+  }
+  let ready = false;
+  try {
+    const response = await sendToChatGpt(tab.id, { type: 'chatcmd-chatgpt-ready' }, { quiet: true });
+    ready = response?.ready === true;
+  } catch {
+    ready = false;
+  }
+  return {
+    chatGptTabOpen: true,
+    conversationTabOpen: true,
+    conversationReady: ready,
+    tabId: tab.id,
+    tabUrl: tab.url,
+  };
 }
 
 async function acquireNewConversationTab() {
@@ -200,15 +216,16 @@ async function releaseRequest(requestId) {
   await chrome.storage.session.remove(requestKey(requestId));
 }
 
-async function sendToChatGpt(tabId, payload) {
+async function sendToChatGpt(tabId, payload, options = {}) {
   let lastError;
   let reinjected = false;
-  await logExtension('info', 'background', `Gửi ${payload?.type || 'message'} tới tab ${tabId}.`);
+  const quiet = options.quiet === true;
+  if (!quiet) await logExtension('info', 'background', `Gửi ${payload?.type || 'message'} tới tab ${tabId}.`);
   for (let attempt = 0; attempt < 20; attempt++) {
     try {
       const response = await chrome.tabs.sendMessage(tabId, payload);
       if (response?.ok) {
-        await logExtension('info', 'background', `Tab ${tabId} phản hồi thành công ở lần ${attempt + 1}.`);
+        if (!quiet) await logExtension('info', 'background', `Tab ${tabId} phản hồi thành công ở lần ${attempt + 1}.`);
         return response;
       }
       lastError = new Error(response?.error || 'ChatGPT content script không thể hoàn tất yêu cầu.');

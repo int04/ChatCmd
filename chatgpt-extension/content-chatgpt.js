@@ -21,6 +21,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({ ok: true });
     return false;
   }
+  if (message?.type === 'chatcmd-chatgpt-ready') {
+    const composer = findComposer();
+    const generating = Boolean(activeRequest || findStopButton());
+    sendResponse({
+      ok: true,
+      ready: Boolean(composer) && !generating,
+      composerReady: Boolean(composer),
+      generating,
+    });
+    return false;
+  }
   return false;
 });
 

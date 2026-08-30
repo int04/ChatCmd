@@ -91,6 +91,7 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
   const [error, setError] = useState('');
   const [extensionReady, setExtensionReady] = useState<boolean | null>(null);
   const [chatGptTabOpen, setChatGptTabOpen] = useState<boolean | null>(null);
+  const [chatGptReady, setChatGptReady] = useState<boolean | null>(null);
   const [retrySeconds, setRetrySeconds] = useState<number | null>(null);
   const retryGeneration = useRef(0);
   const retryTimer = useRef<number | null>(null);
@@ -106,6 +107,7 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
         if (disposed) return;
         setExtensionReady(status.ready);
         setChatGptTabOpen(status.ready && status.conversationTabOpen);
+        setChatGptReady(status.ready && status.conversationTabOpen && status.conversationReady);
       });
     };
     refresh();
@@ -134,8 +136,10 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
       const status = await chatGptExtensionStatus(bridge.data.conversationUrl);
       setExtensionReady(status.ready);
       setChatGptTabOpen(status.ready && status.conversationTabOpen);
+      setChatGptReady(status.ready && status.conversationTabOpen && status.conversationReady);
       if (!status.ready) throw new Error(tr('ChatCMD ChatGPT Bridge extension is not ready. Enable or reload it, then try again.'));
       if (!status.conversationTabOpen) throw new Error(tr('This conversation’s ChatGPT tab is no longer open. Reopen the ChatGPT conversation and try again.'));
+      if (!status.conversationReady) throw new Error(tr('The ChatGPT tab is still loading the previous response. Wait until it is ready before sending another message.'));
       const request = await api.sendChatGptMessage(taskId, { model: model || bridge.data.model, content: message });
       await dispatchChatGptRequest({ requestId: request.id, submittedContent: request.submittedContent, model: request.model, conversationUrl: bridge.data.conversationUrl });
       const latest = await waitForDispatchState(request.id);
@@ -165,7 +169,7 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
   const send = async (event: FormEvent) => {
     event.preventDefault();
     const message = content.trim();
-    if (!message || busy || active || retrySeconds !== null || !bridge.data) return;
+    if (!message || busy || active || retrySeconds !== null || chatGptReady !== true || !bridge.data) return;
     const generation = retryGeneration.current;
     await sendContent(message, generation);
   };
@@ -195,11 +199,12 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
   if (extensionReady === false) return <div className="chatgpt-tab-required error" role="alert"><Unplug /><div><strong>{tr('Could not connect to ChatGPT Bridge')}</strong><span>{tr('Enable or reload the extension, then return to this conversation.')}</span></div></div>;
   if (chatGptTabOpen === false) return <div className="chatgpt-tab-required" role="alert"><CircleAlert /><div><strong>{tr('This conversation’s ChatGPT tab is closed')}</strong><span>{tr('ChatCMD must keep this exact ChatGPT tab open to send messages and track response status. Reopen the conversation and keep the tab open in your browser.')}</span><a href={bridge.data.conversationUrl} target="_blank" rel="noreferrer noopener"><ExternalLink />{tr('Open ChatGPT conversation')}</a></div></div>;
   return <form className="chatgpt-composer" onSubmit={(event) => void send(event)}>
+    {!active && chatGptReady !== true && <div className="chatgpt-retry-warning" role="status"><LoaderCircle className="spin" /><span><strong>{tr('ChatGPT tab is still loading the previous response.')}</strong> {tr('Please wait until ChatGPT is fully ready before sending another message.')}</span></div>}
     {retrySeconds !== null && <div className="chatgpt-retry-warning" role="status"><CircleAlert /><span>{tr('The ChatGPT send button is disabled.')} {retrySeconds > 0 ? tr('Will retry in {seconds} seconds.', { seconds: retrySeconds }) : tr('Retrying…')}</span><button type="button" onClick={cancelRetry}>{tr('Cancel send')}</button></div>}
     <div className="chatgpt-composer-row">
       <textarea aria-label={tr('Next message to ChatGPT')} rows={2} value={content} onChange={(event) => setContent(event.target.value)} disabled={active || busy || retrySeconds !== null} placeholder={active ? tr('ChatGPT is responding…') : retrySeconds !== null ? tr('Waiting to retry…') : tr('Continue the ChatGPT conversation…')} />
       {active ? <button type="button" className="chatgpt-stop-button" onClick={() => void stop()} disabled={busy || bridge.data.activeStatus === 'stop_requested'}><CircleStop /><span>{bridge.data.activeStatus === 'stop_requested' ? tr('Stopping…') : tr('Stop')}</span></button>
-        : <button type="submit" className="chatgpt-composer-send" disabled={busy || retrySeconds !== null || !content.trim()}><Send /><span>{tr('Send')}</span></button>}
+        : <button type="submit" className="chatgpt-composer-send" disabled={busy || retrySeconds !== null || chatGptReady !== true || !content.trim()}><Send /><span>{chatGptReady === true ? tr('Send') : tr('Waiting for ChatGPT…')}</span></button>}
     </div>
     <div className="chatgpt-composer-meta"><label>{tr('Model')} <input list="chatgpt-composer-models" value={model} onChange={(event) => setModel(event.target.value)} disabled={active || busy || retrySeconds !== null} /></label><datalist id="chatgpt-composer-models">{MODEL_SUGGESTIONS.map((value) => <option value={value} key={value} />)}</datalist><span>{tr('Via extension')} · @{bridge.data.conversationId.slice(0, 8)}…</span></div>
     {error && <p className="chatgpt-form-error" role="alert"><CircleAlert />{error}</p>}

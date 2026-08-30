@@ -11,8 +11,8 @@ type BridgeCommand =
   | { action: 'stop'; nonce: string; requestId: string; localBaseUrl: string };
 
 export type ChatGptExtensionLog = { at: string; level: 'info' | 'warn' | 'error' | string; source: string; message: string };
-type BridgeResponse = { nonce: string; ok: boolean; error?: string; model?: string; logs?: ChatGptExtensionLog[]; chatGptTabOpen?: boolean; conversationTabOpen?: boolean; tabId?: number; tabUrl?: string };
-export type ChatGptExtensionStatus = { ready: boolean; chatGptTabOpen: boolean; conversationTabOpen: boolean; tabId?: number; tabUrl?: string };
+type BridgeResponse = { nonce: string; ok: boolean; error?: string; model?: string; logs?: ChatGptExtensionLog[]; chatGptTabOpen?: boolean; conversationTabOpen?: boolean; conversationReady?: boolean; tabId?: number; tabUrl?: string };
+export type ChatGptExtensionStatus = { ready: boolean; chatGptTabOpen: boolean; conversationTabOpen: boolean; conversationReady: boolean; tabId?: number; tabUrl?: string };
 
 export async function chatGptExtensionStatus(conversationUrl?: string): Promise<ChatGptExtensionStatus> {
   try {
@@ -21,11 +21,12 @@ export async function chatGptExtensionStatus(conversationUrl?: string): Promise<
       ready: true,
       chatGptTabOpen: response.chatGptTabOpen === true,
       conversationTabOpen: response.conversationTabOpen === true || (!conversationUrl && response.chatGptTabOpen === true),
+      conversationReady: conversationUrl ? response.conversationReady === true : true,
       tabId: response.tabId,
       tabUrl: response.tabUrl,
     };
   } catch {
-    return { ready: false, chatGptTabOpen: false, conversationTabOpen: false };
+    return { ready: false, chatGptTabOpen: false, conversationTabOpen: false, conversationReady: false };
   }
 }
 
