@@ -165,15 +165,6 @@ pub(super) async fn continue_message(
         .execute(state.repository.pool())
         .await
         .map_err(db_problem)?;
-    append_user_message(
-        &state,
-        task_id,
-        &turn_id,
-        &request_id,
-        input.content.trim(),
-        &submitted,
-    )
-    .await?;
     request_json(&state, &request_id).await
 }
 
@@ -204,7 +195,6 @@ pub(super) async fn bridge_started(
     validate_conversation(&input.conversation_id, &input.conversation_url)?;
     let row = bridge_request_row(&state, request_id.trim()).await?;
     let agent_id = row.get::<String, _>("agent_id");
-    let turn_id = row.get::<String, _>("turn_id");
     let submitted = row.get::<String, _>("submitted_content");
     let user_content = row.get::<String, _>("user_content");
     let existing_task = row.get::<Option<String>, _>("task_id");
@@ -255,15 +245,6 @@ pub(super) async fn bridge_started(
         .execute(state.repository.pool())
         .await
         .map_err(db_problem)?;
-    append_user_message(
-        &state,
-        &task_id,
-        &turn_id,
-        request_id.trim(),
-        &user_content,
-        &submitted,
-    )
-    .await?;
     request_json(&state, request_id.trim()).await
 }
 
@@ -306,6 +287,11 @@ pub(super) async fn bridge_result(
         }
     };
     let turn_id = row.get::<String, _>("turn_id");
+    let submitted = row.get::<String, _>("submitted_content");
+    let user_content = row.get::<String, _>("user_content");
+    let created_at_ms = row.get::<i64, _>("created_at_ms");
+    let mcp_authoritative =
+        has_mcp_turn_for_request(&state, &task_id, &submitted, created_at_ms).await?;
     sqlx::query("UPDATE chatgpt_bridge_requests SET status=?,conversation_id=COALESCE(?,conversation_id),conversation_url=COALESCE(?,conversation_url),assistant_content=?,error_message=?,updated_at_ms=?,completed_at_ms=? WHERE id=?")
         .bind(&input.status)
         .bind(input.conversation_id.as_deref())
@@ -318,18 +304,20 @@ pub(super) async fn bridge_result(
         .execute(state.repository.pool())
         .await
         .map_err(db_problem)?;
-    let task_status = match input.status.as_str() {
-        "completed" => "completed",
-        "stopped" => "interrupted",
-        _ => "failed",
-    };
-    sqlx::query("UPDATE tasks SET status=CASE WHEN status='stopped' THEN status ELSE ? END,updated_at_ms=? WHERE id=?")
-        .bind(task_status)
-        .bind(now)
-        .bind(&task_id)
-        .execute(state.repository.pool())
-        .await
-        .map_err(db_problem)?;
+    if !mcp_authoritative {
+        let task_status = match input.status.as_str() {
+            "completed" => "completed",
+            "stopped" => "interrupted",
+            _ => "failed",
+        };
+        sqlx::query("UPDATE tasks SET status=CASE WHEN status='stopped' THEN status ELSE ? END,updated_at_ms=? WHERE id=?")
+            .bind(task_status)
+            .bind(now)
+            .bind(&task_id)
+            .execute(state.repository.pool())
+            .await
+            .map_err(db_problem)?;
+    }
     sqlx::query("UPDATE chatgpt_conversations SET active_request_id=NULL,conversation_id=COALESCE(?,conversation_id),conversation_url=COALESCE(?,conversation_url),updated_at_ms=? WHERE task_id=? AND active_request_id=?")
         .bind(input.conversation_id.as_deref())
         .bind(input.conversation_url.as_deref())
@@ -339,23 +327,34 @@ pub(super) async fn bridge_result(
         .execute(state.repository.pool())
         .await
         .map_err(db_problem)?;
-    let content = if !assistant.is_empty() {
-        assistant
-    } else if !error.is_empty() {
-        error
-    } else if input.status == "stopped" {
-        "Đã dừng phản hồi ChatGPT."
-    } else {
-        "ChatGPT bridge không trả về nội dung."
-    };
-    append_status(
-        &state,
-        &task_id,
-        &turn_id,
-        request_id.trim(),
-        &input.status,
-        content,
-    )
-    .await?;
+    if !mcp_authoritative {
+        let content = if !assistant.is_empty() {
+            assistant
+        } else if !error.is_empty() {
+            error
+        } else if input.status == "stopped" {
+            "Đã dừng phản hồi ChatGPT."
+        } else {
+            "ChatGPT bridge không trả về nội dung."
+        };
+        append_user_message(
+            &state,
+            &task_id,
+            &turn_id,
+            request_id.trim(),
+            &user_content,
+            &submitted,
+        )
+        .await?;
+        append_status(
+            &state,
+            &task_id,
+            &turn_id,
+            request_id.trim(),
+            &input.status,
+            content,
+        )
+        .await?;
+    }
     request_json(&state, request_id.trim()).await
 }

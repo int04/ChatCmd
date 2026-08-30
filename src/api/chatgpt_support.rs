@@ -54,6 +54,34 @@ pub(super) async fn request_json(state: &Arc<AppState>, id: &str) -> Result<Json
     Ok(Json(value))
 }
 
+pub(super) async fn has_mcp_turn_for_request(
+    state: &Arc<AppState>,
+    task_id: &str,
+    submitted: &str,
+    created_at_ms: i64,
+) -> Result<bool, Problem> {
+    let found = sqlx::query_scalar::<_, i64>(
+        r#"SELECT EXISTS(
+            SELECT 1
+            FROM timeline_events
+            WHERE task_id=?
+              AND actor='user'
+              AND kind='message'
+              AND json_extract(payload_json,'$.content')=?
+              AND COALESCE(json_extract(payload_json,'$.provider'),'') <> 'chatgpt_web'
+              AND created_at_ms>=?
+            LIMIT 1
+        )"#,
+    )
+    .bind(task_id)
+    .bind(submitted)
+    .bind(created_at_ms)
+    .fetch_one(state.repository.pool())
+    .await
+    .map_err(db_problem)?;
+    Ok(found != 0)
+}
+
 pub(super) async fn bridge_request_row(
     state: &Arc<AppState>,
     id: &str,

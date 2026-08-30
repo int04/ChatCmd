@@ -1,5 +1,6 @@
 import { appLocale, formatAppNumber, tr } from '../i18n';
 import type { Task, TaskDetail, TaskTurn, TimelineEvent } from '../types';
+import { collapseChatGptFallbackTurns } from './chatGptTurnPreference';
 import { formatToolOutput } from './taskToolOutput';
 
 export type ActivityKind = 'read' | 'search' | 'edit' | 'create' | 'delete' | 'copy' | 'move' | 'git' | 'command' | 'tool';
@@ -50,7 +51,7 @@ export function buildTaskTurns(events: TimelineEvent[], task: Task): TaskTurn[] 
     else if (task.status === 'failed') turn.status = 'failed';
     else turn.status = 'incomplete';
   });
-  return turns;
+  return collapseChatGptFallbackTurns(turns);
 }
 
 export function buildProcessBlocks(events: TimelineEvent[]): ProcessBlock[] {
