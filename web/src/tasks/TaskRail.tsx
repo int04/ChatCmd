@@ -125,18 +125,22 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
     const grouped = groupTasksByWorkspaceProjects(projects, [...loadedTasks].sort((a, b) => Date.parse(b.updatedAtUtc) - Date.parse(a.updatedAtUtc)));
     const expanded = new Set<string>([UNCLASSIFIED_GROUP]);
     if (grouped.projects[0]) expanded.add(grouped.projects[0].project.id);
-    for (const { project, tasks: projectTasks } of grouped.projects) if (projectTasks.some((task) => task.status === 'running')) expanded.add(project.id);
+    for (const { project, tasks: projectTasks } of grouped.projects) {
+      if (projectTasks.some((task) => task.status === 'running' || task.id === taskId)) expanded.add(project.id);
+    }
     setExpandedGroupKeys(expanded);
-  }, [loadedTasks, loading, projects]);
+  }, [loadedTasks, loading, projects, taskId]);
   useEffect(() => {
-    const runningProjectKeys = taskGroups.projects.filter(({ tasks: projectTasks }) => projectTasks.some((task) => task.status === 'running')).map(({ project }) => project.id);
-    if (!runningProjectKeys.length) return;
+    const forcedProjectKeys = taskGroups.projects
+      .filter(({ tasks: projectTasks }) => projectTasks.some((task) => task.status === 'running' || task.id === taskId))
+      .map(({ project }) => project.id);
+    if (!forcedProjectKeys.length) return;
     setExpandedGroupKeys((current) => {
       const next = new Set(current); let changed = false;
-      for (const key of runningProjectKeys) if (!next.has(key)) { next.add(key); changed = true; }
+      for (const key of forcedProjectKeys) if (!next.has(key)) { next.add(key); changed = true; }
       return changed ? next : current;
     });
-  }, [taskGroups]);
+  }, [taskGroups, taskId]);
 
   const reorderProjects = async (sourceId: string, targetId: string) => {
     if (sourceId === targetId) return;
