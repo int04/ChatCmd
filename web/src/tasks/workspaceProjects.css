@@ -22,7 +22,9 @@
 .task-project-heading small{font-size:9px;line-height:1.25;color:var(--subtle);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .task-project-group.collapsed{padding-bottom:7px}
 .task-project-conversations{display:grid;gap:3px;margin-left:18px;padding-left:8px;border-left:1px solid color-mix(in srgb,var(--border) 72%,transparent)}
-.task-project-conversations .tasks-conversation-row{border-radius:10px}
+.task-project-conversations .tasks-conversation-row{min-height:54px;margin:2px 1px;padding:7px 9px 6px;border-radius:9px}
+.task-project-conversations .tasks-conversation-copy{gap:4px}
+.task-project-conversations .tasks-conversation-status-line{font-size:9px;gap:5px}
 .task-project-empty{margin:0;padding:8px 8px 10px;color:var(--subtle);font-size:10px}
 .task-project-more-actions{min-height:31px;margin-top:5px;display:flex;align-items:center;justify-content:center;gap:4px;color:var(--subtle);font-size:10px}
 .task-project-more{min-height:31px;padding:0 8px;display:flex;align-items:center;justify-content:center;gap:6px;border:0;border-radius:8px;background:transparent;color:var(--muted);font-size:10px;font-weight:700}
