@@ -4,6 +4,7 @@ const SILENT_RECOVERY_GRACE_MS = 8_000;
 const ERROR_RECOVERY_GRACE_MS = 2_500;
 
 let activeRequest = null;
+let reconcileScheduled = false;
 
 void chrome.runtime.sendMessage({ type: 'chatcmd-return-binding-status' }, (response) => {
   if (response?.ok && response.enabled) renderReturnToChatCmd(true);
@@ -15,7 +16,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       sendResponse({ ok: false, error: 'Tab ChatGPT này đang xử lý một yêu cầu khác.' });
       return false;
     }
-    activeRequest = { id: message.requestId, stopRequested: false, recoveryCount: 0 };
+    activeRequest = { id: message.requestId, stopRequested: false, recoveryCount: 0, resultReported: false };
     void runRequest(message).finally(() => { activeRequest = null; });
     sendResponse({ ok: true });
     return false;
@@ -46,8 +47,19 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     sendResponse({ ok: true });
     return false;
   }
+  if (message?.type === 'chatcmd-chatgpt-reconcile') {
+    void reconcileActiveRequest(message.requestId)
+      .then((result) => sendResponse({ ok: true, ...result }))
+      .catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
+    return true;
+  }
   return false;
 });
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') scheduleActiveRequestReconcile();
+});
+window.addEventListener('focus', scheduleActiveRequestReconcile);
 
 async function runRequest(message) {
   let started = false;
@@ -75,18 +87,16 @@ async function runRequest(message) {
       conversationId = finalIdentity.conversationId;
       conversationUrl = finalIdentity.conversationUrl;
     }
-    await progress({
+    await reportRequestResult({
       requestId: message.requestId,
-      stage: 'result',
       status: activeRequest?.stopRequested ? 'stopped' : 'completed',
       conversationId,
       conversationUrl: conversationUrl || window.location.href,
       assistantContent: result,
     });
   } catch (error) {
-    await progress({
+    await reportRequestResult({
       requestId: message.requestId,
-      stage: 'result',
       status: activeRequest?.stopRequested ? 'stopped' : 'failed',
       conversationId,
       conversationUrl: conversationUrl || (started ? window.location.href : undefined),
@@ -94,6 +104,40 @@ async function runRequest(message) {
       errorMessage: errorMessage(error),
     });
   }
+}
+
+function scheduleActiveRequestReconcile() {
+  if (reconcileScheduled || !activeRequest?.id) return;
+  reconcileScheduled = true;
+  queueMicrotask(() => {
+    reconcileScheduled = false;
+    if (activeRequest?.id) void reconcileActiveRequest(activeRequest.id).catch(() => undefined);
+  });
+}
+
+async function reconcileActiveRequest(requestId) {
+  if (!activeRequest || activeRequest.id !== requestId) return { reconciled: false, reason: 'active_request_missing' };
+  if (activeRequest.resultReported) return { reconciled: true, reason: 'result_already_reported' };
+  const state = await requestState(requestId);
+  if (!state.hasFinalResponse) return { reconciled: false, reason: state.active ? 'response_not_final' : 'request_not_active' };
+  const assistantContent = latestMessageText('assistant');
+  const identity = currentConversationIdentity();
+  await reportRequestResult({
+    requestId,
+    status: activeRequest.stopRequested ? 'stopped' : 'completed',
+    conversationId: identity?.conversationId,
+    conversationUrl: identity?.conversationUrl || window.location.href,
+    assistantContent: assistantContent || undefined,
+  });
+  return { reconciled: true, reason: assistantContent ? 'final_response_synced' : 'final_response_without_dom_text' };
+}
+
+async function reportRequestResult(payload) {
+  if (activeRequest?.id === payload.requestId) {
+    if (activeRequest.resultReported) return;
+    activeRequest.resultReported = true;
+  }
+  await progress({ requestId: payload.requestId, stage: 'result', ...payload });
 }
 
 async function waitForComposer() {
@@ -285,6 +329,7 @@ async function waitForAssistant(previousCount, requestId) {
   let generationObserved = false;
   const startedAt = Date.now();
   while (Date.now() - startedAt < 10 * 60_000) {
+    if (activeRequest?.resultReported) return latestMessageText('assistant');
     const now = Date.now();
     const nodes = assistantNodes();
     const latest = nodes.at(-1);

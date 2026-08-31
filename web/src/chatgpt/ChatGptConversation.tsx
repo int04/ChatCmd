@@ -4,7 +4,7 @@ import type { FormEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 import { api } from '../api';
-import { chatGptExtensionAvailable, chatGptExtensionStatus, closeChatGptConversationTab, dispatchChatGptRequest, focusChatGptConversationTab, openChatGptConversationTab, prepareChatGptModelTab, stopChatGptRequest } from '../chatgptBridge';
+import { chatGptExtensionAvailable, chatGptExtensionStatus, closeChatGptConversationTab, dispatchChatGptRequest, focusChatGptConversationTab, openChatGptConversationTab, prepareChatGptModelTab, reconcileChatGptRequest, stopChatGptRequest } from '../chatgptBridge';
 import { Modal } from '../components';
 import { tr } from '../i18n';
 import { canonicalProjectPath } from '../tasks/workspaceProjects';
@@ -219,10 +219,18 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
   useEffect(() => {
     const requestId = bridge.data?.activeRequestId;
     if (!requestId) return;
-    const timer = window.setInterval(() => void api.chatGptRequest(requestId).then((request) => {
-      if (['completed', 'stopped', 'failed'].includes(request.status)) void reloadBridge();
-    }).catch(() => undefined), 1_000);
-    return () => window.clearInterval(timer);
+    let disposed = false;
+    const refresh = () => void (async () => {
+      const request = await api.chatGptRequest(requestId);
+      if (disposed) return;
+      if (request.hasFinalResponse) {
+        await reconcileChatGptRequest(requestId).catch(() => undefined);
+      }
+      if (['completed', 'stopped', 'failed'].includes(request.status)) await reloadBridge();
+    })().catch(() => undefined);
+    refresh();
+    const timer = window.setInterval(refresh, 1_000);
+    return () => { disposed = true; window.clearInterval(timer); };
   }, [bridge.data?.activeRequestId, reloadBridge]);
   useEffect(() => () => { if (retryTimer.current !== null) window.clearTimeout(retryTimer.current); }, []);
   useEffect(() => {

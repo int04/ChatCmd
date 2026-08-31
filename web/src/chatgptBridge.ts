@@ -12,7 +12,8 @@ type BridgeCommand =
   | { action: 'logs'; nonce: string }
   | { action: 'clear-logs'; nonce: string }
   | { action: 'send'; nonce: string; requestId: string; submittedContent: string; model: string; conversationUrl?: string; localBaseUrl: string }
-  | { action: 'stop'; nonce: string; requestId: string; localBaseUrl: string };
+  | { action: 'stop'; nonce: string; requestId: string; localBaseUrl: string }
+  | { action: 'reconcile'; nonce: string; requestId: string };
 
 export type ChatGptExtensionLog = { at: string; level: 'info' | 'warn' | 'error' | string; source: string; message: string };
 type BridgeResponse = { nonce: string; ok: boolean; error?: string; model?: string; logs?: ChatGptExtensionLog[]; chatGptTabOpen?: boolean; conversationTabOpen?: boolean; conversationReady?: boolean; tabId?: number; tabUrl?: string };
@@ -69,6 +70,10 @@ export async function dispatchChatGptRequest(input: { requestId: string; submitt
 
 export async function stopChatGptRequest(requestId: string) {
   await bridge({ action: 'stop', nonce: nonce(), requestId, localBaseUrl: window.location.origin }, 5_000);
+}
+
+export async function reconcileChatGptRequest(requestId: string) {
+  await bridge({ action: 'reconcile', nonce: nonce(), requestId }, 3_000);
 }
 
 function bridge(command: BridgeCommand, timeoutMs: number) {

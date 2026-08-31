@@ -13,7 +13,7 @@ const DEFAULT_MODEL: &str = "Auto";
 const MAX_MESSAGE_CHARS: usize = 100_000;
 
 pub(super) async fn request_json(state: &Arc<AppState>, id: &str) -> Result<Json<Value>, Problem> {
-    let row = bridge_request_row(state, id).await?;
+    let mut row = bridge_request_row(state, id).await?;
     let task_id = row.get::<Option<String>, _>("task_id");
     let submitted = row.get::<String, _>("submitted_content");
     let created_at_ms = row.get::<i64, _>("created_at_ms");
@@ -47,6 +47,27 @@ pub(super) async fn request_json(state: &Arc<AppState>, id: &str) -> Result<Json
     } else {
         false
     };
+    let status = row.get::<String, _>("status");
+    if has_final_response && matches!(status.as_str(), "queued" | "running" | "stop_requested") {
+        let now = now_ms();
+        sqlx::query("UPDATE chatgpt_bridge_requests SET status='completed',updated_at_ms=?,completed_at_ms=COALESCE(completed_at_ms,?) WHERE id=? AND status IN ('queued','running','stop_requested')")
+            .bind(now)
+            .bind(now)
+            .bind(id)
+            .execute(state.repository.pool())
+            .await
+            .map_err(db_problem)?;
+        if let Some(task_id) = task_id.as_deref() {
+            sqlx::query("UPDATE chatgpt_conversations SET active_request_id=NULL,updated_at_ms=? WHERE task_id=? AND active_request_id=?")
+                .bind(now)
+                .bind(task_id)
+                .bind(id)
+                .execute(state.repository.pool())
+                .await
+                .map_err(db_problem)?;
+        }
+        row = bridge_request_row(state, id).await?;
+    }
     let mut value = request_value(&row);
     if let Some(object) = value.as_object_mut() {
         object.insert("hasFinalResponse".to_owned(), json!(has_final_response));

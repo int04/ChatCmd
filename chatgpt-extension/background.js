@@ -53,6 +53,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       void stopRequest(message).then(() => sendResponse({ ok: true })).catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
       return true;
     }
+    if (message.action === 'reconcile') {
+      void reconcileRequest(message.requestId)
+        .then((result) => sendResponse({ ok: true, ...result }))
+        .catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
+      return true;
+    }
   }
   if (message.type === 'chatcmd-chatgpt-progress') {
     void handleProgress(message, sender.tab?.id).then(() => sendResponse({ ok: true })).catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
@@ -123,6 +129,22 @@ async function stopRequest(message) {
   const context = await requestContext(message.requestId);
   if (!context?.tabId) throw new Error('Không tìm thấy tab ChatGPT đang xử lý yêu cầu này.');
   await chrome.tabs.sendMessage(context.tabId, { type: 'chatcmd-chatgpt-stop', requestId: message.requestId });
+}
+
+async function reconcileRequest(requestId) {
+  if (!requestId) throw new Error('Thiếu request ID cần đồng bộ.');
+  const context = await requestContext(requestId);
+  if (!context?.tabId) return { reconciled: false, reason: 'request_context_missing' };
+  const tab = await safeTab(context.tabId);
+  if (!tab?.id) return { reconciled: false, reason: 'chatgpt_tab_missing' };
+  const response = await sendToChatGpt(tab.id, {
+    type: 'chatcmd-chatgpt-reconcile',
+    requestId,
+  }, { quiet: true });
+  return {
+    reconciled: response?.reconciled === true,
+    reason: response?.reason,
+  };
 }
 
 async function handleProgress(message, tabId) {
