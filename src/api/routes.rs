@@ -31,6 +31,7 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/mcp/tools", get(tools))
         .route("/mcp/tool-presets", get(presets))
         .route("/mcp/tunnels", get(list_tunnels).post(create_tunnel))
+        .route("/mcp/tunnels/{id}", axum::routing::delete(delete_tunnel))
         .route("/mcp/tunnels/{id}/test", post(test_tunnel))
         .route("/mcp/tunnel-connection", get(managed_tunnel_status))
         .route(

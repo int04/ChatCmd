@@ -236,25 +236,22 @@ impl TunnelClientManager {
         WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
     )> {
         let persisted = self.load_persisted().await?;
-        let server_url = persisted
+        let server_url = self.configured_server_url.trim_end_matches('/').to_owned();
+        let persisted_for_server = persisted
             .as_ref()
-            .map_or(self.configured_server_url.as_str(), |value| {
-                value.server_url.as_str()
-            })
-            .trim_end_matches('/')
-            .to_owned();
+            .filter(|value| same_tunnel_server(&value.server_url, &server_url));
         let registration = tokio::select! {
             biased;
             changed = stop.changed() => {
                 let _ = changed;
                 bail!("tunnel connection cancelled");
             }
-            result = self.register_device(&server_url, persisted.as_ref()) => result?,
+            result = self.register_device(&server_url, persisted_for_server) => result?,
         };
         let secret = registration
             .connection_secret
             .clone()
-            .or_else(|| persisted.as_ref().map(|value| value.secret.clone()))
+            .or_else(|| persisted_for_server.map(|value| value.secret.clone()))
             .filter(|value| !value.is_empty())
             .ok_or_else(|| anyhow!("tunnel server did not return a connection secret"))?;
         let connection = PersistedTunnelConnection {
@@ -691,6 +688,19 @@ impl TunnelClientManager {
     }
 }
 
+fn same_tunnel_server(left: &str, right: &str) -> bool {
+    match (Url::parse(left), Url::parse(right)) {
+        (Ok(left), Ok(right)) => {
+            left.scheme().eq_ignore_ascii_case(right.scheme())
+                && left.host_str().map(str::to_ascii_lowercase)
+                    == right.host_str().map(str::to_ascii_lowercase)
+                && left.port_or_known_default() == right.port_or_known_default()
+                && left.path().trim_end_matches('/') == right.path().trim_end_matches('/')
+        }
+        _ => left.trim_end_matches('/').eq_ignore_ascii_case(right.trim_end_matches('/')),
+    }
+}
+
 fn is_hop_by_hop_header(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().as_str(),
@@ -924,6 +934,22 @@ mod tests {
         assert_eq!(manager.status().await.state, "disconnected");
 
         server.abort();
+    }
+
+    #[test]
+    fn persisted_credentials_are_reused_only_for_the_same_tunnel_server() {
+        assert!(same_tunnel_server(
+            "https://tunnel.chatcmd.net/",
+            "https://TUNNEL.chatcmd.net",
+        ));
+        assert!(!same_tunnel_server(
+            "http://localhost:5050",
+            "https://tunnel.chatcmd.net",
+        ));
+        assert!(!same_tunnel_server(
+            "https://tunnel.chatcmd.net/dev",
+            "https://tunnel.chatcmd.net",
+        ));
     }
 
     #[test]

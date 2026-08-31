@@ -107,6 +107,7 @@ export const api = {
   setAgentEnabled: (id: string, enabled: boolean) => request<Agent>(`/api/local/mcp/agents/${item(id)}/enabled`, { method: 'PATCH', body: json({ enabled }) }),
   tunnels: () => request<Tunnel[]>('/api/local/mcp/tunnels'),
   createTunnel: (baseUrl: string) => request<Tunnel>('/api/local/mcp/tunnels', { method: 'POST', body: json({ baseUrl }) }),
+  deleteTunnel: (id: number) => request<{ deleted: boolean; id: number }>(`/api/local/mcp/tunnels/${id}`, { method: 'DELETE' }),
   testTunnel: (id: number) => request<TunnelTestResult>(`/api/local/mcp/tunnels/${id}/test`, { method: 'POST', body: '{}' }),
   managedTunnelStatus: () => request<ManagedTunnelStatus>('/api/local/mcp/tunnel-connection'),
   connectManagedTunnel: () => request<ManagedTunnelStatus>('/api/local/mcp/tunnel-connection/connect', { method: 'POST', body: '{}' }),

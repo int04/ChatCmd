@@ -104,6 +104,21 @@ pub(super) async fn create_tunnel(
     ))
 }
 
+pub(super) async fn delete_tunnel(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<i64>,
+) -> Result<Json<Value>, Problem> {
+    let result = sqlx::query("DELETE FROM tunnels WHERE id=?")
+        .bind(id)
+        .execute(state.repository.pool())
+        .await
+        .map_err(db_problem)?;
+    if result.rows_affected() == 0 {
+        return Err(not_found());
+    }
+    Ok(Json(json!({ "deleted": true, "id": id })))
+}
+
 pub(super) async fn test_tunnel(
     State(state): State<Arc<AppState>>,
     Path(id): Path<i64>,

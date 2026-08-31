@@ -30,6 +30,8 @@ export function AgentsPage() {
   const [addingTunnel, setAddingTunnel] = useState(false);
   const [testingTunnelId, setTestingTunnelId] = useState<number>();
   const [testedTunnelId, setTestedTunnelId] = useState<number>();
+  const [deleteTunnelTarget, setDeleteTunnelTarget] = useState<Tunnel>();
+  const [deletingTunnelId, setDeletingTunnelId] = useState<number>();
   const [tunnelConnectionBusy, setTunnelConnectionBusy] = useState(false);
   const [problem, setProblem] = useState('');
   const refreshManagedTunnel = managedTunnel.refresh;
@@ -93,6 +95,19 @@ export function AgentsPage() {
     tunnels.setData((current) => current ? [tunnel, ...current.filter((item) => item.id !== tunnel.id)] : [tunnel]);
     setAddingTunnel(false);
     setTestedTunnelId(tunnel.id);
+  };
+  const deleteTunnel = async () => {
+    if (!deleteTunnelTarget) return;
+    const id = deleteTunnelTarget.id;
+    setProblem('');
+    setDeletingTunnelId(id);
+    try {
+      await api.deleteTunnel(id);
+      tunnels.setData((current) => current?.filter((item) => item.id !== id));
+      if (testedTunnelId === id) setTestedTunnelId(undefined);
+      setDeleteTunnelTarget(undefined);
+    } catch (error) { setProblem(error instanceof Error ? error.message : tr('Tunnel could not be deleted')); }
+    finally { setDeletingTunnelId(undefined); }
   };
   const connectTunnel = async () => {
     setProblem('');
@@ -164,7 +179,7 @@ export function AgentsPage() {
         </div>
         <div className="custom-tunnel-heading"><div><strong>{tr('Your public addresses')}</strong><small>{tr('Use a domain, Cloudflare Tunnel, or public IP/port that you manage yourself.')}</small></div><span aria-label={tr('{count} public addresses', { count: tunnels.data?.length ?? 0 })}>{tunnels.data?.length ?? 0}</span></div>
         {tunnels.loading ? <div className="tunnel-panel-state"><LoaderCircle className="spin" />{tr('Loading public addresses')}</div> : tunnels.error ? <div className="tunnel-panel-state error"><span>{tunnels.error}</span><button className="button secondary compact" onClick={() => void tunnels.reload()}>{tr('Retry')}</button></div> : !tunnels.data?.length ? <div className="tunnel-empty"><span><Network /></span><strong>{tr('No custom addresses yet')}</strong><p>{tr('Add a public address that routes to ChatCMD on this device. It can then be used to create connection links for AI clients.')}</p><button className="button secondary" onClick={() => setAddingTunnel(true)}><Plus />{tr('Add public address')}</button></div> : <div className="tunnel-list">{tunnels.data.map((tunnel) => <article className="tunnel-row" key={tunnel.id}>
-          <span className="tunnel-icon"><Globe2 /></span><div className="tunnel-copy"><strong>{tunnel.baseUrl}</strong><small>{tr('Connection check')}: {tunnel.baseUrl}/api/ping</small></div><div className="tunnel-row-actions">{testedTunnelId === tunnel.id && <span className="tunnel-ok" title={tr('Tunnel is reachable')}><CheckCircle2 /></span>}<button className="button secondary compact" disabled={testingTunnelId === tunnel.id} onClick={() => void testTunnel(tunnel)}>{testingTunnelId === tunnel.id ? <LoaderCircle className="spin" /> : <Wifi />}{testingTunnelId === tunnel.id ? tr('Testing…') : tr('Test')}</button></div>
+          <span className="tunnel-icon"><Globe2 /></span><div className="tunnel-copy"><strong>{tunnel.baseUrl}</strong><small>{tr('Connection check')}: {tunnel.baseUrl}/api/ping</small></div><div className="tunnel-row-actions">{testedTunnelId === tunnel.id && <span className="tunnel-ok" title={tr('Tunnel is reachable')}><CheckCircle2 /></span>}<button className="button secondary compact" disabled={testingTunnelId === tunnel.id || deletingTunnelId === tunnel.id} onClick={() => void testTunnel(tunnel)}>{testingTunnelId === tunnel.id ? <LoaderCircle className="spin" /> : <Wifi />}{testingTunnelId === tunnel.id ? tr('Testing…') : tr('Test')}</button><button className="icon-button danger-icon" disabled={deletingTunnelId === tunnel.id} aria-label={tr('Delete public address {address}', { address: tunnel.baseUrl })} title={tr('Delete public address')} onClick={() => setDeleteTunnelTarget(tunnel)}>{deletingTunnelId === tunnel.id ? <LoaderCircle className="spin" /> : <Trash2 />}</button></div>
         </article>)}</div>}
       </section>
     </div>
@@ -172,6 +187,10 @@ export function AgentsPage() {
     {editor && <AgentEditor agent={editor === 'new' ? undefined : editor} tools={tools.data ?? []} presets={presets.data ?? []} close={() => setEditor(undefined)} save={save} />}
     {secret && <SecretModal result={secret} close={() => setSecret(undefined)} />}
     {addingTunnel && <AddTunnelModal close={() => setAddingTunnel(false)} added={tunnelAdded} />}
+    {deleteTunnelTarget && <Modal title={tr('Delete public address?')} description={deleteTunnelTarget.baseUrl} close={() => !deletingTunnelId && setDeleteTunnelTarget(undefined)} dangerous>
+      <div className="warning-copy">{tr('This address will be removed from the saved Tunnel list and will no longer be available when generating connection links.')}</div>
+      <div className="modal-actions"><button className="button secondary" type="button" disabled={Boolean(deletingTunnelId)} onClick={() => setDeleteTunnelTarget(undefined)}>{tr('Cancel')}</button><button className="button danger" type="button" disabled={Boolean(deletingTunnelId)} onClick={() => void deleteTunnel()}>{deletingTunnelId ? <LoaderCircle className="spin" /> : <Trash2 />}{deletingTunnelId ? tr('Deleting…') : tr('Delete public address')}</button></div>
+    </Modal>}
     {pluginAgent && <PluginLinksModal agent={pluginAgent} close={() => setPluginAgent(undefined)} onTestTunnel={testTunnel} testingTunnelId={testingTunnelId} />}
   </div>;
 }
