@@ -28,6 +28,18 @@ pub(super) async fn save_settings(
             "port must be 1..65535",
         ));
     }
+    if let Some(retention) = object.get("dataRetention").and_then(Value::as_str)
+        && !matches!(
+            retention,
+            "1h" | "5h" | "10h" | "1d" | "3d" | "5d" | "10d" | "off"
+        )
+    {
+        return Err(Problem::new(
+            StatusCode::BAD_REQUEST,
+            "Invalid data retention",
+            "dataRetention must be one of: 1h, 5h, 10h, 1d, 3d, 5d, 10d, off.",
+        ));
+    }
     if let Some(mode) = object.get("executionMode").and_then(Value::as_str) {
         let persisted = match mode {
             "approval" => "approval",
@@ -74,7 +86,7 @@ pub(super) fn mcp_endpoint(state: &AppState, token: &str) -> String {
 }
 
 pub(super) async fn settings_value(state: &Arc<AppState>) -> Result<Value, Problem> {
-    let defaults = json!({ "bindAddress": state.bind_address, "port": state.port, "mcpEndpoint": mcp_endpoint_template(state), "databasePath": state.database_path, "databaseState": "ready", "executionMode": "allowAll", "approveNewConversations": true, "terminalExecutable": default_shell(), "taskConcurrency": 4, "sessionConcurrency": 8, "theme": "dark", "language": "en", "sound": true, "newAgentSound": true, "finishedTaskSound": true });
+    let defaults = json!({ "bindAddress": state.bind_address, "port": state.port, "mcpEndpoint": mcp_endpoint_template(state), "databasePath": state.database_path, "databaseState": "ready", "executionMode": "allowAll", "approveNewConversations": true, "terminalExecutable": default_shell(), "taskConcurrency": 4, "sessionConcurrency": 8, "theme": "dark", "language": "en", "sound": true, "newAgentSound": true, "finishedTaskSound": true, "dataRetention": "1d" });
     let mut object = defaults.as_object().cloned().unwrap_or_default();
     for key in [
         "executionMode",
@@ -87,6 +99,7 @@ pub(super) async fn settings_value(state: &Arc<AppState>) -> Result<Value, Probl
         "sound",
         "newAgentSound",
         "finishedTaskSound",
+        "dataRetention",
     ] {
         if let Some(setting) = state
             .repository

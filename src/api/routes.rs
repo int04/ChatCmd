@@ -83,8 +83,8 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/diagnostics/database", get(database_diagnostics))
         .route("/diagnostics/logs", get(diagnostic_logs))
         .route(
-            "/diagnostics/conversations",
-            axum::routing::delete(delete_all_conversations),
+            "/diagnostics/user-data",
+            axum::routing::delete(delete_all_user_data),
         )
         .route("/updates/status", get(update_status))
         .route("/updates/check", post(check_update))

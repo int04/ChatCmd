@@ -42,6 +42,7 @@ use sqlx::{QueryBuilder, Row, Sqlite};
 use crate::websocket::{AppEvent, AppState};
 
 pub(crate) use routes::router;
+pub(crate) use task_delete::start_data_cleanup_scheduler;
 
 pub(crate) fn iso_now() -> String {
     iso_ms(now_ms())

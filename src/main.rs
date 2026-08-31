@@ -184,6 +184,7 @@ async fn run_server(ready: Option<std::sync::mpsc::Sender<()>>) -> Result<()> {
         backend_api,
         event_tx,
     ));
+    api::start_data_cleanup_scheduler(state.clone());
     let management = Router::new()
         .nest("/api", api::router(state.clone()))
         .route("/ws", get(ws_handler));

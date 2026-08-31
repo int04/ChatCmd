@@ -25,19 +25,32 @@ export function DataSettings() {
   </div>;
 }
 
+type DataRetention = '1h' | '5h' | '10h' | '1d' | '3d' | '5d' | '10d' | 'off';
+const DATA_RETENTION_OPTIONS: Array<{ value: DataRetention; label: string }> = [
+  { value: '1h', label: '1 giờ' }, { value: '5h', label: '5 giờ' }, { value: '10h', label: '10 giờ' },
+  { value: '1d', label: '1 ngày' }, { value: '3d', label: '3 ngày' }, { value: '5d', label: '5 ngày' },
+  { value: '10d', label: '10 ngày' }, { value: 'off', label: 'Tắt' },
+];
+
 function DatabasePanel() {
-  const [value, setValue] = useState<DatabaseDiagnostics>(); const [loading, setLoading] = useState(true); const [deleting, setDeleting] = useState(false); const [error, setError] = useState('');
-  const refresh = useCallback(async () => { setLoading(true); setError(''); try { setValue(await api.databaseDiagnostics()); } catch (reason) { setError(reason instanceof Error ? reason.message : tr('Could not load database information.')); } finally { setLoading(false); } }, []);
+  const [value, setValue] = useState<DatabaseDiagnostics>(); const [loading, setLoading] = useState(true); const [deleting, setDeleting] = useState(false); const [retention, setRetention] = useState<DataRetention>('1d'); const [savingRetention, setSavingRetention] = useState(false); const [error, setError] = useState('');
+  const refresh = useCallback(async () => { setLoading(true); setError(''); try { const [diagnostics, settings] = await Promise.all([api.databaseDiagnostics(), api.settings()]); setValue(diagnostics); setRetention(settings.dataRetention ?? '1d'); } catch (reason) { setError(reason instanceof Error ? reason.message : tr('Could not load database information.')); } finally { setLoading(false); } }, []);
   const deleteAll = useCallback(async () => {
-    if (!window.confirm('Bạn có chắc chắn muốn xóa toàn bộ đoạn trò chuyện không?')) return;
+    if (!window.confirm('Bạn có chắc chắn muốn xóa toàn bộ dữ liệu phát sinh trong quá trình sử dụng không?')) return;
     setDeleting(true); setError('');
     try {
-      await api.deleteAllConversations();
+      await api.deleteAllUserData();
       await refresh();
       window.dispatchEvent(new Event('chatcmd:conversations-cleared'));
-    } catch (reason) { setError(reason instanceof Error ? reason.message : tr('Could not delete all conversations.')); }
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Không thể xóa toàn bộ dữ liệu.'); }
     finally { setDeleting(false); }
   }, [refresh]);
+  const changeRetention = useCallback(async (next: DataRetention) => {
+    const previous = retention; setRetention(next); setSavingRetention(true); setError('');
+    try { const settings = await api.settings(); await api.saveSettings({ ...settings, dataRetention: next }); }
+    catch (reason) { setRetention(previous); setError(reason instanceof Error ? reason.message : 'Không thể lưu thời hạn tự động xóa dữ liệu.'); }
+    finally { setSavingRetention(false); }
+  }, [retention]);
   useEffect(() => { void refresh(); }, [refresh]);
   if (loading && !value) return <PanelState loading label={tr('Loading database information')} />;
   if (error && !value) return <PanelState error label={error} />;
@@ -46,7 +59,8 @@ function DatabasePanel() {
     <PanelHeader title="SQLite" subtitle={value.path} loading={loading} refresh={refresh} />
     <div className="data-metrics"><Metric label={tr('Tables')} value={formatNumber(value.tableCount)} /><Metric label={tr('Rows')} value={formatNumber(value.totalRows)} /><Metric label={tr('Database size')} value={formatBytes(value.fileSizeBytes)} /><Metric label={tr('Used pages')} value={`${formatBytes(value.usedSizeBytes)} / ${formatNumber(value.pageCount)} pages`} /></div>
     {error && <div className="data-panel-error"><AlertTriangle />{error}</div>}
-    <div className="data-danger-zone"><div><strong>{tr('Delete all conversations')}</strong><span>{tr('Deletes all conversation messages, task history, ChatGPT bridge data, approvals, artifacts, subagents, and terminal history linked to conversations.')}</span></div><button className="button danger" type="button" disabled={deleting} onClick={() => void deleteAll()}>{deleting ? <LoaderCircle className="spin" /> : <Trash2 />}{deleting ? tr('Deleting…') : tr('Delete all conversations')}</button></div>
+    <div className="data-danger-zone"><div><strong>Xóa toàn bộ dữ liệu ngay</strong><span>Xóa toàn bộ dữ liệu phát sinh trong quá trình sử dụng, giữ nguyên agent, thư mục dự án và cấu hình hệ thống.</span></div><button className="button danger" type="button" disabled={deleting} onClick={() => void deleteAll()}>{deleting ? <LoaderCircle className="spin" /> : <Trash2 />}{deleting ? tr('Deleting…') : 'Xóa toàn bộ dữ liệu ngay'}</button></div>
+    <div className="data-retention-setting"><div><strong>Tự động xóa dữ liệu sau</strong><span>Xóa dữ liệu thường xuyên giúp ứng dụng hoạt động mượt mà hơn.</span></div><select value={retention} disabled={savingRetention} onChange={(event) => void changeRetention(event.target.value as DataRetention)}>{DATA_RETENTION_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>
     <div className="data-table-wrap"><table className="data-table"><thead><tr><th>{tr('Table')}</th><th>{tr('Rows')}</th></tr></thead><tbody>{value.tables.map((table) => <tr key={table.name}><td><code>{table.name}</code></td><td>{formatNumber(table.rowCount)}</td></tr>)}</tbody></table></div>
     <div className="data-storage-note">{tr('Page size')}: {formatBytes(value.pageSizeBytes)} · {tr('Free pages')}: {formatNumber(value.freePageCount)}</div>
   </div>;
