@@ -124,27 +124,84 @@ impl McpAgentStore for SqliteRepository {
     }
 }
 
+impl SqliteRepository {
+    /// Returns a stable plugin-link token for an agent without rotating its primary MCP token.
+    pub async fn ensure_agent_plugin_token(&self, id: &AgentId) -> Result<String, StorageError> {
+        if self.agent(id).await?.is_none() {
+            return Err(StorageError::NotFound(format!("MCP agent {id}")));
+        }
+        if let Some(token) = sqlx::query_scalar::<_, String>(
+            "SELECT token_plain FROM mcp_agent_plugin_tokens WHERE agent_id=?",
+        )
+        .bind(id.as_str())
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|error| backend("read agent plugin token", error))?
+        {
+            return Ok(token);
+        }
+
+        let raw = generate_secret();
+        let digest = SecretHash::from_token(&raw);
+        let last4 = GeneratedSecret::new(raw.clone()).last4().to_owned();
+        let now = now_ms()?;
+        sqlx::query("INSERT INTO mcp_agent_plugin_tokens(agent_id,token_hash,token_plain,token_last4,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?)")
+            .bind(id.as_str())
+            .bind(digest.as_bytes().as_slice())
+            .bind(&raw)
+            .bind(last4)
+            .bind(now)
+            .bind(now)
+            .execute(&self.pool)
+            .await
+            .map_err(|error| map_sqlx_conflict("create agent plugin token", error))?;
+        Ok(raw)
+    }
+}
+
 impl PolicyLookup for SqliteRepository {
     async fn lookup_policy_by_token(
         &self,
         raw_token: &str,
     ) -> Result<Option<McpAgentPolicy>, StorageError> {
         let candidate = SecretHash::from_token(raw_token);
-        let row = sqlx::query("SELECT id,name,enabled,secret_last4,secret_hash,created_at_ms,updated_at_ms,last_used_at_ms FROM mcp_agents WHERE secret_hash=? AND enabled=1")
-            .bind(candidate.as_bytes().as_slice()).fetch_optional(&self.pool).await
+        let primary = sqlx::query("SELECT id,name,enabled,secret_last4,secret_hash,created_at_ms,updated_at_ms,last_used_at_ms FROM mcp_agents WHERE secret_hash=? AND enabled=1")
+            .bind(candidate.as_bytes().as_slice())
+            .fetch_optional(&self.pool)
+            .await
             .map_err(|error| backend("lookup MCP path token", error))?;
-        let Some(row) = row else {
-            return Ok(None);
+        let row = if let Some(row) = primary {
+            let stored = SecretHash::from_bytes(
+                row.try_get::<Vec<u8>, _>("secret_hash")
+                    .map_err(|error| backend("map secret hash", error))?
+                    .as_slice(),
+            )
+            .map_err(invalid_data)?;
+            if !stored.constant_time_eq(&candidate) {
+                return Ok(None);
+            }
+            row
+        } else {
+            let plugin = sqlx::query("SELECT a.id,a.name,a.enabled,a.secret_last4,a.secret_hash,a.created_at_ms,a.updated_at_ms,a.last_used_at_ms,p.token_hash AS plugin_token_hash FROM mcp_agents a JOIN mcp_agent_plugin_tokens p ON p.agent_id=a.id WHERE p.token_hash=? AND a.enabled=1")
+                .bind(candidate.as_bytes().as_slice())
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|error| backend("lookup MCP plugin token", error))?;
+            let Some(row) = plugin else {
+                return Ok(None);
+            };
+            let stored = SecretHash::from_bytes(
+                row.try_get::<Vec<u8>, _>("plugin_token_hash")
+                    .map_err(|error| backend("map plugin token hash", error))?
+                    .as_slice(),
+            )
+            .map_err(invalid_data)?;
+            if !stored.constant_time_eq(&candidate) {
+                return Ok(None);
+            }
+            row
         };
-        let stored = SecretHash::from_bytes(
-            row.try_get::<Vec<u8>, _>("secret_hash")
-                .map_err(|error| backend("map secret hash", error))?
-                .as_slice(),
-        )
-        .map_err(invalid_data)?;
-        if !stored.constant_time_eq(&candidate) {
-            return Ok(None);
-        }
+
         let agent = map_agent(&row)?;
         let tool_rows = sqlx::query("SELECT tools.key FROM tools JOIN agent_allowed_tools ON agent_allowed_tools.tool_id=tools.id WHERE agent_allowed_tools.agent_id=? AND tools.enabled=1 ORDER BY tools.key")
             .bind(agent.id.as_str()).fetch_all(&self.pool).await.map_err(|error| backend("read agent allowlist", error))?;

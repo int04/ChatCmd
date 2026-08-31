@@ -14,7 +14,7 @@ use crate::websocket::AppState;
 use super::{
     Problem, agents::*, auth, backend, chatgpt::*, crypto, data::*, folders::*, overview::*,
     sessions::*, settings::*, skills::*, task_controls::*, task_delete::*, task_views::*,
-    updates::*, workspaces::*,
+    tunnels::*, updates::*, workspaces::*,
 };
 
 pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
@@ -30,6 +30,13 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/mcp/agents/{id}/enabled", patch(set_enabled))
         .route("/mcp/tools", get(tools))
         .route("/mcp/tool-presets", get(presets))
+        .route("/mcp/tunnels", get(list_tunnels).post(create_tunnel))
+        .route("/mcp/tunnels/{id}/test", post(test_tunnel))
+        .route("/mcp/agents/{id}/plugin-links", get(plugin_links))
+        .route(
+            "/mcp/agents/{id}/plugin-links/{tunnel_id}",
+            post(copy_plugin_link),
+        )
         .route("/system/folder-picker", post(pick_project_folder))
         .route(
             "/workspaces/projects",
@@ -109,6 +116,7 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         ))
         .layer(middleware::from_fn(management_header));
     Router::new()
+        .route("/ping", get(ping))
         .route("/health", get(health))
         .route("/info", get(info))
         .nest("/local", local)

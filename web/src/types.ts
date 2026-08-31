@@ -18,6 +18,9 @@ export interface TimelineEvent { id: Id; type: string; occurredAt: string; taskI
 export interface Agent { id: Id; name: string; enabled: boolean; presetId?: Id; toolIds: Id[]; secretLast4?: string; updatedAtUtc?: string }
 export interface AgentInput { name: string; enabled: boolean; presetId?: Id; toolIds: Id[] }
 export interface SecretResult { agent?: Agent; endpoint: string }
+export interface Tunnel { id: number; baseUrl: string; createdAtUtc?: string; updatedAtUtc?: string }
+export interface TunnelTestResult { ok: boolean; pong: boolean; baseUrl: string }
+export interface PluginLink { tunnelId: number; baseUrl: string; maskedEndpoint: string }
 export interface Tool { id: Id; name: string; description?: string; group?: string; dangerous?: boolean }
 export interface ToolPreset { id: Id; name: string; description?: string; toolIds: Id[] }
 export interface Task { id: Id; title?: string; source?: string; projectFolder?: string | null; allowExecute?: boolean | null; approvalDeadlineUtc?: string | null; status: string; updatedAtUtc: string; createdAtUtc?: string; generation?: number; turnCount?: number; activeSessionId?: Id; outputPreview?: string; approvalPending?: boolean; finalResponseCount?: number; isSubagent?: boolean; parentTaskId?: Id; parentTurnId?: Id; agentName?: string }

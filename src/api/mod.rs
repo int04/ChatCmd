@@ -15,6 +15,7 @@ mod subagents;
 mod task_controls;
 mod task_delete;
 mod task_views;
+mod tunnels;
 mod updates;
 mod workspaces;
 
