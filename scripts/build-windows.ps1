@@ -5,29 +5,66 @@ Set-Location $root
 
 $version = Get-Date -Format 'yy.MM.dd.HHmm'
 $env:CHATCMD_BUILD_VERSION = $version
-$arch = if ([Environment]::Is64BitOperatingSystem) { 'x64' } else { 'x86' }
-$output = Join-Path $root "release/ChatCMD-$version-windows-$arch"
+$extensionSource = Join-Path $root 'chatgpt-extension'
 
-Write-Host "Building ChatCMD $version for Windows $arch"
+$targets = @(
+    @{ RustTarget = 'x86_64-pc-windows-msvc'; Label = '64' },
+    @{ RustTarget = 'i686-pc-windows-msvc'; Label = '32' }
+)
+
+Write-Host "Building ChatCMD $version for Windows 64-bit + 32-bit"
+
+if (-not (Test-Path $extensionSource)) {
+    throw "ChatGPT extension folder not found: $extensionSource"
+}
 
 Push-Location (Join-Path $root 'web')
-npm ci
-npm run build
-$sourceMaps = Get-ChildItem -Path (Join-Path $root 'web/dist') -Recurse -File -Filter '*.map'
-if ($sourceMaps) {
-    throw "Source map files were generated in web/dist: $($sourceMaps.FullName -join ', ')"
+try {
+    npm ci
+    npm run build
+    $sourceMaps = Get-ChildItem -Path (Join-Path $root 'web/dist') -Recurse -File -Filter '*.map'
+    if ($sourceMaps) {
+        throw "Source map files were generated in web/dist: $($sourceMaps.FullName -join ', ')"
+    }
 }
-Pop-Location
+finally {
+    Pop-Location
+}
 
-cargo build --release --features embedded-web
+if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
+    throw 'rustup is required to install both Windows Rust targets'
+}
 
-if (Test-Path $output) { Remove-Item $output -Recurse -Force }
-New-Item -ItemType Directory -Force -Path $output | Out-Null
-Copy-Item (Join-Path $root 'target/release/chat-cmd-client.exe') (Join-Path $output 'ChatCMD.exe')
+rustup target add x86_64-pc-windows-msvc i686-pc-windows-msvc
+if ($LASTEXITCODE -ne 0) {
+    throw 'Failed to install required Windows Rust targets'
+}
 
-$zip = "$output.zip"
-if (Test-Path $zip) { Remove-Item $zip -Force }
-Compress-Archive -Path "$output/*" -DestinationPath $zip -CompressionLevel Optimal
+foreach ($entry in $targets) {
+    $target = $entry.RustTarget
+    $label = $entry.Label
+    $output = Join-Path $root "release/${version}_${label}"
+    $binary = Join-Path $root "target/$target/release/chat-cmd-client.exe"
+    $extensionOutput = Join-Path $output 'chatgpt-extension'
 
-Write-Host "Build completed: $output"
-Write-Host "Archive: $zip"
+    Write-Host "`nBuilding Rust target $target (${label}-bit)..."
+    cargo build --release --features embedded-web --target $target
+    if ($LASTEXITCODE -ne 0) {
+        throw "Cargo build failed for target $target"
+    }
+
+    if (Test-Path $output) { Remove-Item $output -Recurse -Force }
+    New-Item -ItemType Directory -Force -Path $output | Out-Null
+
+    Copy-Item $binary (Join-Path $output 'ChatCMD.exe')
+    Copy-Item $extensionSource $extensionOutput -Recurse -Force
+
+    $zip = "$output.zip"
+    if (Test-Path $zip) { Remove-Item $zip -Force }
+    Compress-Archive -Path "$output/*" -DestinationPath $zip -CompressionLevel Optimal
+
+    Write-Host "Build completed: $output"
+    Write-Host "Archive: $zip"
+}
+
+Write-Host "`nAll Windows builds completed."

@@ -8,13 +8,19 @@ VERSION="$(date '+%y.%m.%d.%H%M')"
 export CHATCMD_BUILD_VERSION="$VERSION"
 ICON_SOURCE="$ROOT/assets/icons/logo-icon-master-1024.png"
 ICONSET="$ROOT/target/chatcmd.iconset"
+EXTENSION_SOURCE="$ROOT/chatgpt-extension"
 
 TARGETS=(
-  "aarch64-apple-darwin|apple-silicon"
+  "aarch64-apple-darwin|silicon"
   "x86_64-apple-darwin|intel"
 )
 
 printf 'Building ChatCMD %s for macOS Apple Silicon + Intel\n' "$VERSION"
+
+if [[ ! -d "$EXTENSION_SOURCE" ]]; then
+  echo "ChatGPT extension folder not found: $EXTENSION_SOURCE" >&2
+  exit 1
+fi
 
 cd "$ROOT/web"
 npm ci
@@ -52,7 +58,7 @@ create_icns() {
 package_target() {
   local target="$1"
   local label="$2"
-  local output="$ROOT/release/ChatCMD-$VERSION-macos-$label"
+  local output="$ROOT/release/${VERSION}_${label}"
   local app="$output/ChatCMD.app"
   local contents="$app/Contents"
   local macos="$contents/MacOS"
@@ -67,6 +73,8 @@ package_target() {
   mkdir -p "$macos" "$resources"
   cp "$binary" "$macos/ChatCMD"
   chmod +x "$macos/ChatCMD"
+  mkdir -p "$output/chatgpt-extension"
+  cp -R "$EXTENSION_SOURCE/." "$output/chatgpt-extension/"
   create_icns "$resources/ChatCMD.icns"
 
   cat > "$contents/Info.plist" <<EOF
