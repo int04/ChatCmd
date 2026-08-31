@@ -2,6 +2,7 @@ import { Menu, Sparkles } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { NavLink, Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth';
+import { applyAppFont, DEFAULT_APP_FONT } from './fontPreferences';
 import { useAppLanguage, tr } from './i18n';
 import { AgentsPage } from './pages/AgentsPage';
 import { AuthPage } from './pages/AuthPage';
@@ -73,7 +74,7 @@ function Shell() {
     previousPath.current = location.pathname;
     requestAnimationFrame(() => document.getElementById('main-content')?.focus({ preventScroll: true }));
   }, [location.pathname]);
-  useEffect(() => { try { const saved = JSON.parse(localStorage.getItem('chatcmd.preferences') ?? '{}') as { theme?: string }; document.documentElement.dataset.theme = saved.theme ?? 'dark'; } catch { document.documentElement.dataset.theme = 'dark'; } }, []);
+  useEffect(() => { try { const saved = JSON.parse(localStorage.getItem('chatcmd.preferences') ?? '{}') as { theme?: string; fontFamily?: string }; document.documentElement.dataset.theme = saved.theme ?? 'dark'; applyAppFont(saved.fontFamily ?? DEFAULT_APP_FONT); } catch { document.documentElement.dataset.theme = 'dark'; applyAppFont(DEFAULT_APP_FONT); } }, []);
   return <div className="shell"><a className="skip-link" href="#main-content">{tr('Skip to content')}</a><FunctionRail /><TaskRail open={open} onClose={closeRail} />{open && <button className="scrim" aria-label={tr('Close navigation')} onClick={closeRail} />}<div className="content-shell"><header className="mobile-topbar"><button className="icon-button" aria-label={tr('Open navigation')} onClick={() => setOpen(true)}><Menu /></button><strong>ChatCMD</strong><span>{tr('Local')}</span></header><main id="main-content" className={location.pathname.startsWith('/tasks') ? 'tasks-main' : undefined} tabIndex={-1}><Outlet /></main></div></div>;
 }
 

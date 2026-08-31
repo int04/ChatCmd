@@ -3,6 +3,7 @@ import { FormEvent, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { ErrorState, Loading, Modal, PageHeading, ProblemBanner, StatusBadge } from '../components';
+import { applyAppFont, GOOGLE_FONT_PRESETS, normalizeFontFamily } from '../fontPreferences';
 import { getAppLanguage, setAppLanguage, tr, translatedStatus } from '../i18n';
 import { AccountSettings } from '../settings/AccountSettings';
 import { DataSettings } from '../settings/DataSettings';
@@ -59,8 +60,9 @@ export function SettingsPage() {
       const next = await api.saveSettings(value);
       result.setData(next);
       setValue(next);
-      localStorage.setItem('chatcmd.preferences', JSON.stringify({ theme: next.theme, language: next.language, sound: next.sound, newAgentSound: next.newAgentSound, finishedTaskSound: next.finishedTaskSound }));
+      localStorage.setItem('chatcmd.preferences', JSON.stringify({ theme: next.theme, fontFamily: next.fontFamily, language: next.language, sound: next.sound, newAgentSound: next.newAgentSound, finishedTaskSound: next.finishedTaskSound }));
       document.documentElement.dataset.theme = next.theme;
+      applyAppFont(next.fontFamily);
       setAppLanguage(next.language, true);
       setSaved(true);
       window.setTimeout(() => setSaved(false), 2500);
@@ -72,6 +74,7 @@ export function SettingsPage() {
 
   const update = <K extends keyof LocalSettings>(key: K, next: LocalSettings[K]) => setValue({ ...value, [key]: next });
   const updateLanguage = (language: LocalSettings['language']) => { update('language', language); setAppLanguage(language, true); };
+  const updateFont = (fontFamily: string) => { const next = normalizeFontFamily(fontFamily); update('fontFamily', next); applyAppFont(next); };
   const activeMeta = SETTINGS_TABS.find((tab) => tab.id === activeTab) ?? SETTINGS_TABS[0];
   const ActiveIcon = activeMeta.icon;
 
@@ -120,6 +123,7 @@ export function SettingsPage() {
             <SettingsIntro icon={<MonitorCog />} title={tr('Appearance and language')} description={tr('Personalize how ChatCMD looks and which language is used in the management interface. These choices do not change Agent permissions.')} />
             <div className="settings-section-block"><div className="settings-control-grid">
               <SettingField label={tr('Theme')} hint={tr('Controls the appearance of the management UI.')} detail={tr('System follows your operating system. Light and Dark keep a fixed appearance until you change this setting again.')}><select value={value.theme} onChange={(event) => update('theme', event.target.value as LocalSettings['theme'])}><option value="system">{tr('System')}</option><option value="light">{tr('Light')}</option><option value="dark">{tr('Dark')}</option></select></SettingField>
+              <SettingField wide label={tr('Interface font')} hint={tr('Choose a Google Font or enter another family name.')} detail={tr('The selected Google Font is downloaded when ChatCMD starts. Vietnamese-friendly presets are available below, and you can type any other Google Fonts family name.')}><FontPicker value={value.fontFamily} onChange={updateFont} /></SettingField>
               <SettingField label={tr('Language')} hint={tr('Applied immediately to the current browser.')} detail={tr('Changes interface labels and descriptions. Technical output from tools, terminals, or external services may still use its original language.')}><select value={value.language} onChange={(event) => updateLanguage(event.target.value as LocalSettings['language'])}><option value="en">English</option><option value="vi">Tiếng Việt</option></select></SettingField>
             </div></div>
           </>}
@@ -152,6 +156,15 @@ function SectionHeading({ icon, title, description }: { icon?: React.ReactNode; 
 
 function SettingField({ label, hint, detail, wide, children }: { label: string; hint: string; detail: string; wide?: boolean; children: React.ReactNode }) {
   return <label className={`settings-field-card ${wide ? 'wide' : ''}`}><span className="settings-field-copy"><strong>{label}</strong><small>{hint}</small><span className="settings-field-detail"><Info />{detail}</span></span><div className="settings-field-control">{children}</div></label>;
+}
+
+function FontPicker({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  return <div className="settings-font-picker">
+    <input list="chatcmd-google-fonts" value={value} onChange={(event) => onChange(event.target.value)} placeholder="Be Vietnam Pro" aria-label={tr('Google Font family')} />
+    <datalist id="chatcmd-google-fonts">{GOOGLE_FONT_PRESETS.map((font) => <option key={font} value={font} />)}</datalist>
+    <div className="settings-font-presets" aria-label={tr('Recommended Vietnamese fonts')}>{GOOGLE_FONT_PRESETS.map((font) => <button key={font} type="button" className={`settings-font-chip ${value === font ? 'active' : ''}`} onClick={() => onChange(font)}>{font}</button>)}</div>
+    <div className="settings-font-preview"><strong>ChatCMD · {value}</strong><span>{tr('Tiếng Việt rõ ràng · The quick brown fox jumps over the lazy dog.')}</span></div>
+  </div>;
 }
 
 function ToggleSetting({ checked, onChange, label, hint, detail }: { checked: boolean; onChange: (checked: boolean) => void; label: string; hint: string; detail: string }) {
