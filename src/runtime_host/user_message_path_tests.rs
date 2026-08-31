@@ -305,6 +305,73 @@ async fn chatgpt_bridge_reuses_existing_task_when_dom_inserts_nbsp() {
 }
 
 #[tokio::test]
+async fn chatgpt_bridge_uses_explicit_task_when_identical_messages_are_active() {
+    let (host, agent_id, _directory) = test_host().await;
+    let submitted = "Sử dụng plugin @test_rust\n\nThư mục dự án: D:\\DEV\\CmdGPT\\ChatCmdClient\n\nđể thực hiện yêu cầu sau: commit";
+    let first_task = "task-chatgpt-bridge-commit-a";
+    let second_task = "task-chatgpt-bridge-commit-b";
+    let now = now_ms();
+
+    for (task_id, scope) in [
+        (first_task, "openai:commit-chat-a"),
+        (second_task, "openai:commit-chat-b"),
+    ] {
+        sqlx::query(
+            "INSERT INTO tasks(id,agent_id,device_id,conversation_scope_hash,title,source,status,active_session_id,generation,stopped_at_ms,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,'chatgpt_web','running',NULL,1,NULL,?,?)",
+        )
+        .bind(task_id)
+        .bind(&agent_id)
+        .bind(host.device.id.as_str())
+        .bind(scope)
+        .bind("Commit")
+        .bind(now)
+        .bind(now)
+        .execute(host.repository.pool())
+        .await
+        .expect("insert bridge task");
+
+        sqlx::query(
+            "INSERT INTO chatgpt_bridge_requests(id,task_id,turn_id,agent_id,model,user_content,submitted_content,status,conversation_id,conversation_url,assistant_content,error_message,created_at_ms,updated_at_ms,completed_at_ms) VALUES(?,?,?,?,?,?,?,'running',?,?,NULL,NULL,?,?,NULL)",
+        )
+        .bind(format!("request-{task_id}"))
+        .bind(task_id)
+        .bind(format!("bridge-turn-{task_id}"))
+        .bind(&agent_id)
+        .bind("Auto")
+        .bind("commit")
+        .bind(submitted)
+        .bind(format!("conversation-{task_id}"))
+        .bind(format!("https://chatgpt.com/c/conversation-{task_id}"))
+        .bind(now)
+        .bind(now)
+        .execute(host.repository.pool())
+        .await
+        .expect("insert active bridge request");
+    }
+
+    let mut context = turn_context(
+        "mcp-commit-user-message",
+        &agent_id,
+        "agent_user_message",
+        "turn-commit",
+        "openai:new-host-scope",
+    );
+    context.task_id = Some(second_task.to_owned());
+    let result = host
+        .call_persisted("agent_user_message", context, json!({"content": submitted}))
+        .await
+        .expect("reuse the explicit conversation task");
+
+    assert_eq!(result["taskId"], second_task);
+    let task_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks WHERE agent_id=?")
+        .bind(&agent_id)
+        .fetch_one(host.repository.pool())
+        .await
+        .expect("count tasks");
+    assert_eq!(task_count, 2, "must not create a third ghost task");
+}
+
+#[tokio::test]
 async fn chatgpt_bridge_claims_first_tool_call_before_user_message_sync() {
     let (host, agent_id, _directory) = test_host().await;
     let task_id = "task-chatgpt-bridge-pre-user-tool";

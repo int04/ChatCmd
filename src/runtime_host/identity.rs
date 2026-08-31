@@ -26,8 +26,12 @@ impl RuntimeHost {
             .await?;
         let chatgpt_bridge_task = if delegated_task.is_none() {
             if let Some(message) = first_user_message {
-                self.chatgpt_bridge_task_for_message(&context.agent_id, message)
-                    .await?
+                self.chatgpt_bridge_task_for_message(
+                    &context.agent_id,
+                    context.task_id.as_deref(),
+                    message,
+                )
+                .await?
             } else {
                 None
             }
@@ -295,6 +299,7 @@ impl RuntimeHost {
     async fn chatgpt_bridge_task_for_message(
         &self,
         agent_id: &str,
+        preferred_task_id: Option<&str>,
         message: &str,
     ) -> RuntimeResult<Option<String>> {
         let cutoff = now_ms().saturating_sub(5 * 60 * 1000);
@@ -316,7 +321,11 @@ impl RuntimeHost {
         .map_err(|_| {
             RuntimeError::new("storage_error", "ChatGPT bridge task binding lookup failed")
         })?;
-        Ok(unique_bridge_task_for_message(&rows, message))
+        Ok(unique_bridge_task_for_message(
+            &rows,
+            preferred_task_id,
+            message,
+        ))
     }
 
     async fn unique_recent_chatgpt_bridge_task(
@@ -371,25 +380,38 @@ impl RuntimeHost {
     }
 }
 
-fn unique_bridge_task_for_message(rows: &[(String, String)], message: &str) -> Option<String> {
+fn unique_bridge_task_for_message(
+    rows: &[(String, String)],
+    preferred_task_id: Option<&str>,
+    message: &str,
+) -> Option<String> {
     let exact = rows
         .iter()
         .filter(|(_, submitted)| submitted == message)
         .map(|(task_id, _)| task_id.as_str())
         .collect::<BTreeSet<_>>();
-    if exact.len() == 1 {
-        return exact.into_iter().next().map(str::to_owned);
-    }
     if !exact.is_empty() {
-        return None;
+        return preferred_or_unique_task(exact, preferred_task_id);
     }
     let equivalent = rows
         .iter()
         .filter(|(_, submitted)| crate::chatgpt_message::equivalent(submitted, message))
         .map(|(task_id, _)| task_id.as_str())
         .collect::<BTreeSet<_>>();
-    (equivalent.len() == 1)
-        .then(|| equivalent.into_iter().next())
+    preferred_or_unique_task(equivalent, preferred_task_id)
+}
+
+fn preferred_or_unique_task(
+    candidates: BTreeSet<&str>,
+    preferred_task_id: Option<&str>,
+) -> Option<String> {
+    if let Some(preferred) = preferred_task_id
+        && candidates.contains(preferred)
+    {
+        return Some(preferred.to_owned());
+    }
+    (candidates.len() == 1)
+        .then(|| candidates.into_iter().next())
         .flatten()
         .map(str::to_owned)
 }
@@ -490,7 +512,7 @@ mod tests {
     fn unicode_space_bridge_match_requires_one_unambiguous_task() {
         let rows = vec![("task-a".to_owned(), "Ví dụ abcd ".to_owned())];
         assert_eq!(
-            unique_bridge_task_for_message(&rows, "Ví dụ abcd\u{00a0}"),
+            unique_bridge_task_for_message(&rows, None, "Ví dụ abcd\u{00a0}"),
             Some("task-a".to_owned())
         );
 
@@ -499,7 +521,19 @@ mod tests {
             ("task-b".to_owned(), "Ví dụ abcd\u{202f}".to_owned()),
         ];
         assert_eq!(
-            unique_bridge_task_for_message(&ambiguous, "Ví dụ abcd\u{00a0}"),
+            unique_bridge_task_for_message(&ambiguous, None, "Ví dụ abcd\u{00a0}"),
+            None
+        );
+        assert_eq!(
+            unique_bridge_task_for_message(&ambiguous, Some("task-b"), "Ví dụ abcd\u{00a0}"),
+            Some("task-b".to_owned())
+        );
+        assert_eq!(
+            unique_bridge_task_for_message(
+                &ambiguous,
+                Some("task-unrelated"),
+                "Ví dụ abcd\u{00a0}"
+            ),
             None
         );
     }
