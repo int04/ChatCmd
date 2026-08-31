@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use axum::{Json, extract::State, http::StatusCode};
 use serde::Deserialize;
@@ -20,11 +20,17 @@ pub(super) struct SaveWorkspaceProject {
     path: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ReorderWorkspaceProjects {
+    project_ids: Vec<String>,
+}
+
 pub(super) async fn workspace_projects(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Value>, Problem> {
     let rows = sqlx::query(
-        "SELECT id,name,path,created_at_ms,updated_at_ms FROM workspace_projects ORDER BY updated_at_ms DESC,name COLLATE NOCASE",
+        "SELECT id,name,path,sort_order,created_at_ms,updated_at_ms FROM workspace_projects ORDER BY COALESCE(sort_order, 2147483647), updated_at_ms DESC, name COLLATE NOCASE",
     )
     .fetch_all(state.repository.pool())
     .await
@@ -60,7 +66,7 @@ pub(super) async fn save_workspace_project(
     let id = format!("project-{}", Uuid::new_v4());
     let now = now_ms();
     sqlx::query(
-        "INSERT INTO workspace_projects(id,name,path,canonical_path,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?) ON CONFLICT(canonical_path) DO UPDATE SET name=excluded.name,path=excluded.path,updated_at_ms=excluded.updated_at_ms",
+        "INSERT INTO workspace_projects(id,name,path,canonical_path,sort_order,created_at_ms,updated_at_ms) VALUES(?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM workspace_projects),?,?) ON CONFLICT(canonical_path) DO UPDATE SET name=excluded.name,path=excluded.path,updated_at_ms=excluded.updated_at_ms",
     )
     .bind(&id)
     .bind(name)
@@ -79,6 +85,42 @@ pub(super) async fn save_workspace_project(
     .await
     .map_err(db_problem)?;
     Ok(Json(workspace_project_value(&row)))
+}
+
+pub(super) async fn reorder_workspace_projects(
+    State(state): State<Arc<AppState>>,
+    Json(input): Json<ReorderWorkspaceProjects>,
+) -> Result<StatusCode, Problem> {
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM workspace_projects")
+        .fetch_one(state.repository.pool())
+        .await
+        .map_err(db_problem)?;
+    let unique_ids = input.project_ids.iter().collect::<HashSet<_>>();
+    if input.project_ids.len() as i64 != count || unique_ids.len() != input.project_ids.len() {
+        return Err(Problem::new(
+            StatusCode::BAD_REQUEST,
+            "Invalid workspace project order",
+            "projectIds must contain every workspace project exactly once",
+        ));
+    }
+    let mut transaction = state.repository.pool().begin().await.map_err(db_problem)?;
+    for (position, project_id) in input.project_ids.iter().enumerate() {
+        let result = sqlx::query("UPDATE workspace_projects SET sort_order=? WHERE id=?")
+            .bind(position as i64)
+            .bind(project_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(db_problem)?;
+        if result.rows_affected() != 1 {
+            return Err(Problem::new(
+                StatusCode::BAD_REQUEST,
+                "Invalid workspace project order",
+                "projectIds contains an unknown or duplicate project",
+            ));
+        }
+    }
+    transaction.commit().await.map_err(db_problem)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn canonical_project_path(path: &str) -> String {

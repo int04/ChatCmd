@@ -62,6 +62,7 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
             "/workspaces/projects",
             get(workspace_projects).post(save_workspace_project),
         )
+        .route("/workspaces/projects/order", axum::routing::put(reorder_workspace_projects))
         .route("/chatgpt/requests", post(create_request))
         .route("/chatgpt/requests/{id}", get(request))
         .route("/chatgpt/tasks/{task_id}", get(task_bridge))

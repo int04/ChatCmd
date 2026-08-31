@@ -1,5 +1,5 @@
-import { AlertTriangle, Bot, ChevronDown, ChevronUp, FolderOpen, LayoutDashboard, LoaderCircle, LogOut, Plus, RefreshCw, ScrollText, Search, Settings, TerminalSquare, Trash2, UserRound, Wrench, X } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEventHandler, type PointerEvent as ReactPointerEvent } from 'react';
+import { AlertTriangle, Bot, ChevronDown, ChevronUp, FolderOpen, GripVertical, LayoutDashboard, LoaderCircle, LogOut, Plus, RefreshCw, ScrollText, Search, Settings, TerminalSquare, Trash2, UserRound, Wrench, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type MouseEventHandler, type PointerEvent as ReactPointerEvent } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 
 import { api } from '../api';
@@ -78,6 +78,7 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
   const [loadedTasks, setLoadedTasks] = useState<Task[]>([]); const [nextCursor, setNextCursor] = useState<string>(); const [loading, setLoading] = useState(true); const [loadingMore, setLoadingMore] = useState(false); const [error, setError] = useState(''); const [query, setQuery] = useState(''); const [menuOpen, setMenuOpen] = useState(false); const [contextMenu, setContextMenu] = useState<{ task: Task; x: number; y: number }>(); const [deleteTarget, setDeleteTarget] = useState<Task>(); const [deleting, setDeleting] = useState(false); const [deleteError, setDeleteError] = useState('');
   const [readFinalCounts, setReadFinalCounts] = useState<Record<string, number>>(readStoredFinalCounts);
   const [projects, setProjects] = useState<WorkspaceProject[]>([]);
+  const [draggedProjectId, setDraggedProjectId] = useState<string>(); const [dragOverProjectId, setDragOverProjectId] = useState<string>();
   const [expandedGroupKeys, setExpandedGroupKeys] = useState<Set<string>>(() => new Set([UNCLASSIFIED_GROUP]));
   const [visibleGroupCounts, setVisibleGroupCounts] = useState<Record<string, number>>({});
   const [projectHasMore, setProjectHasMore] = useState<Record<string, boolean>>({});
@@ -137,6 +138,16 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
     });
   }, [taskGroups]);
 
+  const reorderProjects = async (sourceId: string, targetId: string) => {
+    if (sourceId === targetId) return;
+    const previous = [...projects];
+    const sourceIndex = previous.findIndex((project) => project.id === sourceId); const targetIndex = previous.findIndex((project) => project.id === targetId);
+    if (sourceIndex < 0 || targetIndex < 0) return;
+    const next = [...previous]; const [moved] = next.splice(sourceIndex, 1); next.splice(targetIndex, 0, moved);
+    setProjects(next); setDragOverProjectId(undefined);
+    try { await api.reorderWorkspaceProjects(next.map((project) => project.id)); }
+    catch (value) { setProjects(previous); setError(value instanceof Error ? value.message : 'Không thể lưu thứ tự dự án.'); }
+  };
   const startTask = (project?: WorkspaceProject) => navigate('/tasks/new', { state: project ? { projectFolder: project.path, projectName: project.name } : undefined });
   const openProjectModal = () => { setProjectName(''); setProjectPath(''); setProjectError(''); setProjectModalOpen(true); };
   const pickProjectFolder = async () => {
@@ -176,8 +187,11 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
       if (next.has(key)) next.delete(key); else next.add(key);
       return next;
     });
-    return <section className={`task-project-group ${expanded ? 'expanded' : 'collapsed'}`} key={key}>
-      <header className="task-project-heading"><button className="task-project-toggle" type="button" onClick={toggleExpanded} aria-expanded={expanded} aria-label={`${expanded ? 'Ẩn' : 'Hiện'} đoạn trò chuyện của ${name}`}><ChevronDown /><span><strong title={project?.path}>{name}</strong>{project && <small title={project.path}>{project.path}</small>}</span></button><button className="task-project-add" type="button" onClick={() => startTask(project)} aria-label={`Tạo đoạn trò chuyện trong ${name}`} title={`Tạo đoạn trò chuyện trong ${name}`}><Plus /></button></header>
+    const dragClass = project ? `${draggedProjectId === key ? ' dragging' : ''}${dragOverProjectId === key && draggedProjectId !== key ? ' drag-over' : ''}` : '';
+    const handleDragOver = project ? (event: ReactDragEvent<HTMLElement>) => { event.preventDefault(); if (!draggedProjectId || draggedProjectId === project.id) return; event.dataTransfer.dropEffect = 'move'; setDragOverProjectId(project.id); } : undefined;
+    const handleDrop = project ? (event: ReactDragEvent<HTMLElement>) => { event.preventDefault(); const sourceId = draggedProjectId || event.dataTransfer.getData('text/plain'); setDraggedProjectId(undefined); setDragOverProjectId(undefined); if (sourceId) void reorderProjects(sourceId, project.id); } : undefined;
+    return <section className={`task-project-group ${expanded ? 'expanded' : 'collapsed'}${dragClass}`} key={key} onDragOver={handleDragOver} onDrop={handleDrop}>
+      <header className="task-project-heading">{project && <span className="task-project-drag-handle" draggable title={`Kéo để sắp xếp ${name}`} aria-label={`Kéo để sắp xếp ${name}`} onDragStart={(event) => { setDraggedProjectId(project.id); setDragOverProjectId(undefined); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', project.id); }} onDragEnd={() => { setDraggedProjectId(undefined); setDragOverProjectId(undefined); }}><GripVertical /></span>}<button className="task-project-toggle" type="button" onClick={toggleExpanded} aria-expanded={expanded} aria-label={`${expanded ? 'Ẩn' : 'Hiện'} đoạn trò chuyện của ${name}`}><ChevronDown /><span><strong title={project?.path}>{name}</strong>{project && <small title={project.path}>{project.path}</small>}</span></button><button className="task-project-add" type="button" onClick={() => startTask(project)} aria-label={`Tạo đoạn trò chuyện trong ${name}`} title={`Tạo đoạn trò chuyện trong ${name}`}><Plus /></button></header>
       {expanded && <><div className="task-project-conversations">{visible.length ? visible.map(renderRow) : <p className="task-project-empty">Chưa có đoạn trò chuyện</p>}</div>
       {(canShowMore || visibleCount > COLLAPSED_PROJECT_TASKS) && <div className="task-project-more-actions">{canShowMore && <button className="task-project-more" type="button" disabled={Boolean(loadingProjectMore[key])} onClick={() => project ? void loadMoreProject(key, project, visible) : setVisibleGroupCounts((current) => ({ ...current, [key]: visibleCount + COLLAPSED_PROJECT_TASKS }))}>{loadingProjectMore[key] ? <LoaderCircle className="spin" /> : <ChevronDown />}Xem thêm</button>}{visibleCount > COLLAPSED_PROJECT_TASKS && <><span aria-hidden="true">|</span><button className="task-project-more" type="button" onClick={() => setVisibleGroupCounts((current) => ({ ...current, [key]: COLLAPSED_PROJECT_TASKS }))}><ChevronUp />Ẩn bớt</button></>}</div>}</>}
     </section>;
