@@ -11,6 +11,7 @@ mod desktop_tray;
 mod embedded_web;
 mod log_helper;
 mod runtime_host;
+mod tunnel_client;
 mod updater;
 mod version;
 mod websocket;
@@ -185,8 +186,13 @@ async fn run_server(ready: Option<std::sync::mpsc::Sender<()>>) -> Result<()> {
         event_tx,
     ));
     api::start_data_cleanup_scheduler(state.clone());
+    let tunnel_manager = state.tunnel.clone();
     let management = Router::new()
         .nest("/api", api::router(state.clone()))
+        .route(
+            "/ping",
+            get(|| async { axum::Json(json!({ "pong": true, "service": "ChatCMD" })) }),
+        )
         .route("/ws", get(ws_handler));
     #[cfg(feature = "embedded-web")]
     let management = management.fallback(embedded_web::serve).with_state(state);
@@ -213,6 +219,7 @@ async fn run_server(ready: Option<std::sync::mpsc::Sender<()>>) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(address)
         .await
         .with_context(|| format!("bind {address}"))?;
+    tunnel_manager.start_if_enabled().await;
     if let Some(sender) = ready {
         let _ = sender.send(());
     }

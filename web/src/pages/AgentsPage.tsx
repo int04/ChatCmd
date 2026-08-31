@@ -1,4 +1,4 @@
-import { CheckCircle2, Cloud, Copy, Globe2, KeyRound, Link2, LoaderCircle, Network, Pencil, Plus, RotateCw, Trash2, Wifi } from 'lucide-react';
+import { CheckCircle2, Cloud, Copy, Globe2, KeyRound, Link2, LoaderCircle, Network, Pencil, PlugZap, Plus, Power, RotateCw, Trash2, Wifi } from 'lucide-react';
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import { Empty, ErrorState, Loading, Modal, PageHeading, ProblemBanner, StatusBadge } from '../components';
@@ -21,6 +21,7 @@ const groupNames: Record<string, string> = {
 export function AgentsPage() {
   const agents = useLoad(api.agents, []);
   const tunnels = useLoad(api.tunnels, []);
+  const managedTunnel = useLoad(api.managedTunnelStatus, []);
   const tools = useLoad(api.tools, []);
   const presets = useLoad(api.presets, []);
   const [editor, setEditor] = useState<Agent | 'new'>();
@@ -29,7 +30,28 @@ export function AgentsPage() {
   const [addingTunnel, setAddingTunnel] = useState(false);
   const [testingTunnelId, setTestingTunnelId] = useState<number>();
   const [testedTunnelId, setTestedTunnelId] = useState<number>();
+  const [tunnelConnectionBusy, setTunnelConnectionBusy] = useState(false);
   const [problem, setProblem] = useState('');
+  const refreshManagedTunnel = managedTunnel.refresh;
+  const managedTunnelState = managedTunnel.data?.state;
+  const managedTunnelActive = managedTunnelState === 'connecting' || managedTunnelState === 'connected' || managedTunnelState === 'reconnecting';
+  const managedTunnelStateLabel = managedTunnel.loading && !managedTunnel.data
+    ? tr('Checking…')
+    : managedTunnelState === 'connecting'
+      ? tr('Connecting…')
+      : managedTunnelState === 'connected'
+        ? tr('Connected')
+        : managedTunnelState === 'reconnecting'
+          ? tr('Reconnecting…')
+          : managedTunnelState === 'disconnected'
+            ? tr('Disconnected')
+            : tr('Unavailable');
+
+  useEffect(() => {
+    if (!managedTunnelState || managedTunnelState === 'disconnected') return;
+    const timer = window.setInterval(() => { void refreshManagedTunnel(); }, 3000);
+    return () => window.clearInterval(timer);
+  }, [managedTunnelState, refreshManagedTunnel]);
 
   const updateList = (next: Agent) => agents.setData((current) => current ? [next, ...current.filter((item) => item.id !== next.id)] : [next]);
   const save = async (input: AgentInput) => {
@@ -72,6 +94,26 @@ export function AgentsPage() {
     setAddingTunnel(false);
     setTestedTunnelId(tunnel.id);
   };
+  const connectTunnel = async () => {
+    setProblem('');
+    setTunnelConnectionBusy(true);
+    managedTunnel.setData((current) => current ? { ...current, state: 'connecting', connected: false, lastError: undefined } : current);
+    try {
+      managedTunnel.setData(await api.connectManagedTunnel());
+      await tunnels.reload();
+    } catch (error) {
+      setProblem(error instanceof Error ? error.message : tr('Tunnel connection failed'));
+      await managedTunnel.reload();
+    }
+    finally { setTunnelConnectionBusy(false); }
+  };
+  const disconnectTunnel = async () => {
+    setProblem('');
+    setTunnelConnectionBusy(true);
+    try { managedTunnel.setData(await api.disconnectManagedTunnel()); }
+    catch (error) { setProblem(error instanceof Error ? error.message : tr('Tunnel disconnect failed')); }
+    finally { setTunnelConnectionBusy(false); }
+  };
 
   return <div className="agents-page">
     <PageHeading eyebrow={tr('MCP ACCESS')} title={tr('Agents & Tunnels')} body={tr('Manage local MCP agents and the public addresses that route back to this Rust server.')} actions={<button className="button primary" onClick={() => setEditor('new')}><Plus />{tr('New agent')}</button>} />
@@ -94,7 +136,21 @@ export function AgentsPage() {
       </section>
 
       <section className="tunnel-panel">
-        <header className="tunnel-panel-header"><div><span className="eyebrow">{tr('TUNNEL')}</span><h2>{tr('Public routes')}</h2><p>{tr('Domains or public IPs that forward traffic to this ChatCMD server.')}</p></div><button className="button secondary tunnel-add-button" onClick={() => setAddingTunnel(true)}><Plus />{tr('Add Tunnel')}</button></header>
+        <header className="tunnel-panel-header"><div><span className="eyebrow">{tr('TUNNEL')}</span><h2>{tr('Public routes')}</h2><p>{tr('Connect this device to ChatCMD Tunnel, or keep using your own Cloudflare/domain routes.')}</p></div><button className="button secondary tunnel-add-button" onClick={() => setAddingTunnel(true)}><Plus />{tr('Add Tunnel')}</button></header>
+        <div className={`managed-tunnel-bar ${managedTunnelState ?? 'loading'}`}>
+          <span className="managed-tunnel-icon" aria-hidden="true"><PlugZap /></span>
+          <div className="managed-tunnel-copy">
+            <div><strong>{tr('ChatCMD Tunnel')}</strong><span role="status" aria-live="polite" className={`managed-tunnel-state ${managedTunnelState ?? 'loading'}`}>{managedTunnelStateLabel}</span></div>
+            {managedTunnel.data?.publicUrl ? <code title={managedTunnel.data.publicUrl}>{managedTunnel.data.publicUrl}</code> : <p>{tr('Public route is allocated to this machine identity only — no user account binding.')}</p>}
+            {managedTunnel.data?.key && <small>{tr('Tunnel key')}: <code>{managedTunnel.data.key}</code> · {tr('Server')}: {managedTunnel.data.serverUrl}</small>}
+            {(managedTunnel.error || managedTunnel.data?.lastError) && <small className="managed-tunnel-error">{managedTunnel.error || managedTunnel.data?.lastError}</small>}
+          </div>
+          <button type="button" className={`button compact ${managedTunnelActive ? 'secondary' : 'primary'}`} disabled={managedTunnel.loading || tunnelConnectionBusy || !managedTunnel.data} aria-label={managedTunnelActive ? tr('Stop ChatCMD Tunnel') : tr('Connect ChatCMD Tunnel')} onClick={() => void (managedTunnelActive ? disconnectTunnel() : connectTunnel())}>
+            {tunnelConnectionBusy || managedTunnelState === 'connecting' ? <LoaderCircle className="spin" aria-hidden="true" /> : managedTunnelActive ? <Power aria-hidden="true" /> : <PlugZap aria-hidden="true" />}
+            {managedTunnelState === 'connecting' ? tr('Connecting…') : tunnelConnectionBusy ? tr('Stopping…') : managedTunnelActive ? tr('Ngừng kết nối') : tr('Kết nối')}
+          </button>
+        </div>
+        <div className="custom-tunnel-heading"><div><strong>{tr('Custom tunnels')}</strong><small>{tr('Cloudflare Tunnel, domain, or public IP/port configured by you.')}</small></div><span aria-label={tr('{count} custom tunnels', { count: tunnels.data?.length ?? 0 })}>{tunnels.data?.length ?? 0}</span></div>
         {tunnels.loading ? <div className="tunnel-panel-state"><LoaderCircle className="spin" />{tr('Loading tunnels')}</div> : tunnels.error ? <div className="tunnel-panel-state error"><span>{tunnels.error}</span><button className="button secondary compact" onClick={() => void tunnels.reload()}>{tr('Retry')}</button></div> : !tunnels.data?.length ? <div className="tunnel-empty"><span><Network /></span><strong>{tr('No tunnels yet')}</strong><p>{tr('Add a Cloudflare Tunnel domain or a public IP/port that resolves to this Rust server.')}</p><button className="button secondary" onClick={() => setAddingTunnel(true)}><Plus />{tr('Add your first Tunnel')}</button></div> : <div className="tunnel-list">{tunnels.data.map((tunnel) => <article className="tunnel-row" key={tunnel.id}>
           <span className="tunnel-icon"><Globe2 /></span><div className="tunnel-copy"><strong>{tunnel.baseUrl}</strong><small>{tr('Probe')}: {tunnel.baseUrl}/api/ping</small></div><div className="tunnel-row-actions">{testedTunnelId === tunnel.id && <span className="tunnel-ok" title={tr('Tunnel is reachable')}><CheckCircle2 /></span>}<button className="button secondary compact" disabled={testingTunnelId === tunnel.id} onClick={() => void testTunnel(tunnel)}>{testingTunnelId === tunnel.id ? <LoaderCircle className="spin" /> : <Wifi />}{testingTunnelId === tunnel.id ? tr('Testing…') : tr('Test')}</button></div>
         </article>)}</div>}

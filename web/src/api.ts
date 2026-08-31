@@ -1,6 +1,6 @@
 import { decodeEncryptedApiResponse, encryptedApiFetch } from './apiCrypto';
 import { tr } from './i18n';
-import type { Agent, AgentInput, AuthInfo, AuthResult, ChatGptBridge, ChatGptRequest, CommandExecutionMode, LiveTerminalOutput, LocalSettings, McpStatus, Overview, PluginLink, ProblemDetails, SecretResult, Session, SessionDetail, Skill, SkillOptionValue, Task, TaskDetail, TaskPage, Tool, ToolPreset, Tunnel, TunnelTestResult, UserSkill, WorkspaceProject } from './types';
+import type { Agent, AgentInput, AuthInfo, AuthResult, ChatGptBridge, ChatGptRequest, CommandExecutionMode, LiveTerminalOutput, LocalSettings, ManagedTunnelStatus, McpStatus, Overview, PluginLink, ProblemDetails, SecretResult, Session, SessionDetail, Skill, SkillOptionValue, Task, TaskDetail, TaskPage, Tool, ToolPreset, Tunnel, TunnelTestResult, UserSkill, WorkspaceProject } from './types';
 import type { UpdateStatus } from './updates/types';
 
 export class ApiError extends Error {
@@ -108,6 +108,9 @@ export const api = {
   tunnels: () => request<Tunnel[]>('/api/local/mcp/tunnels'),
   createTunnel: (baseUrl: string) => request<Tunnel>('/api/local/mcp/tunnels', { method: 'POST', body: json({ baseUrl }) }),
   testTunnel: (id: number) => request<TunnelTestResult>(`/api/local/mcp/tunnels/${id}/test`, { method: 'POST', body: '{}' }),
+  managedTunnelStatus: () => request<ManagedTunnelStatus>('/api/local/mcp/tunnel-connection'),
+  connectManagedTunnel: () => request<ManagedTunnelStatus>('/api/local/mcp/tunnel-connection/connect', { method: 'POST', body: '{}' }),
+  disconnectManagedTunnel: () => request<ManagedTunnelStatus>('/api/local/mcp/tunnel-connection/disconnect', { method: 'POST', body: '{}' }),
   pluginLinks: (agentId: string) => request<PluginLink[]>(`/api/local/mcp/agents/${item(agentId)}/plugin-links`),
   copyPluginLink: (agentId: string, tunnelId: number) => request<{ endpoint: string }>(`/api/local/mcp/agents/${item(agentId)}/plugin-links/${tunnelId}`, { method: 'POST', body: '{}' }),
   tools: () => request<Tool[]>('/api/local/mcp/tools'),

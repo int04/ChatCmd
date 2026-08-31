@@ -32,6 +32,15 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/mcp/tool-presets", get(presets))
         .route("/mcp/tunnels", get(list_tunnels).post(create_tunnel))
         .route("/mcp/tunnels/{id}/test", post(test_tunnel))
+        .route("/mcp/tunnel-connection", get(managed_tunnel_status))
+        .route(
+            "/mcp/tunnel-connection/connect",
+            post(connect_managed_tunnel),
+        )
+        .route(
+            "/mcp/tunnel-connection/disconnect",
+            post(disconnect_managed_tunnel),
+        )
         .route("/mcp/agents/{id}/plugin-links", get(plugin_links))
         .route(
             "/mcp/agents/{id}/plugin-links/{tunnel_id}",

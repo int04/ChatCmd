@@ -92,6 +92,7 @@ pub(crate) struct AppState {
     pub skills: chatcmd_runtime::SkillService,
     pub activities: crate::runtime_host::ActivityRegistry,
     pub backend_api: crate::backend_api::BackendApiClient,
+    pub tunnel: Arc<crate::tunnel_client::TunnelClientManager>,
     pub updater: Arc<crate::updater::UpdateManager>,
     pub auth_refresh_lock: Mutex<()>,
     events: broadcast::Sender<AppEvent>,
@@ -113,6 +114,11 @@ impl AppState {
         backend_api: crate::backend_api::BackendApiClient,
         events: broadcast::Sender<AppEvent>,
     ) -> Self {
+        let tunnel = crate::tunnel_client::TunnelClientManager::new(
+            repository.clone(),
+            device.clone(),
+            port,
+        );
         Self {
             repository,
             database_path,
@@ -124,6 +130,7 @@ impl AppState {
             skills,
             activities,
             backend_api,
+            tunnel,
             updater: crate::updater::UpdateManager::new(),
             auth_refresh_lock: Mutex::new(()),
             events,
