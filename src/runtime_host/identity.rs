@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use chatcmd_core::{
     AgentId, SessionId, SettingsStore as _, Task, TaskId, TaskSession, TaskStatus, TaskStore as _,
     TerminalSessionStatus, TurnBinding, TurnId,
@@ -296,26 +298,25 @@ impl RuntimeHost {
         message: &str,
     ) -> RuntimeResult<Option<String>> {
         let cutoff = now_ms().saturating_sub(5 * 60 * 1000);
-        sqlx::query_scalar::<_, String>(
-            r#"SELECT r.task_id
+        let rows = sqlx::query_as::<_, (String, String)>(
+            r#"SELECT r.task_id,r.submitted_content
                FROM chatgpt_bridge_requests r
                JOIN tasks t ON t.id=r.task_id
                WHERE r.task_id IS NOT NULL
                  AND t.agent_id=? AND t.source='chatgpt_web'
-                 AND r.submitted_content=?
                  AND r.status IN ('queued','running','stop_requested')
                  AND r.updated_at_ms>=?
                ORDER BY r.updated_at_ms DESC,r.id DESC
-               LIMIT 1"#,
+               LIMIT 32"#,
         )
         .bind(agent_id)
-        .bind(message)
         .bind(cutoff)
-        .fetch_optional(self.repository.pool())
+        .fetch_all(self.repository.pool())
         .await
         .map_err(|_| {
             RuntimeError::new("storage_error", "ChatGPT bridge task binding lookup failed")
-        })
+        })?;
+        Ok(unique_bridge_task_for_message(&rows, message))
     }
 
     async fn unique_recent_chatgpt_bridge_task(
@@ -370,6 +371,29 @@ impl RuntimeHost {
     }
 }
 
+fn unique_bridge_task_for_message(rows: &[(String, String)], message: &str) -> Option<String> {
+    let exact = rows
+        .iter()
+        .filter(|(_, submitted)| submitted == message)
+        .map(|(task_id, _)| task_id.as_str())
+        .collect::<BTreeSet<_>>();
+    if exact.len() == 1 {
+        return exact.into_iter().next().map(str::to_owned);
+    }
+    if !exact.is_empty() {
+        return None;
+    }
+    let equivalent = rows
+        .iter()
+        .filter(|(_, submitted)| crate::chatgpt_message::equivalent(submitted, message))
+        .map(|(task_id, _)| task_id.as_str())
+        .collect::<BTreeSet<_>>();
+    (equivalent.len() == 1)
+        .then(|| equivalent.into_iter().next())
+        .flatten()
+        .map(str::to_owned)
+}
+
 fn conversation_approval_denied() -> RuntimeError {
     RuntimeError::new(
         "conversation_approval_denied",
@@ -418,7 +442,9 @@ fn safe_id(prefix: &str, agent_id: &str, scope: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{select_task_identity, task_identity_from_first_message};
+    use super::{
+        select_task_identity, task_identity_from_first_message, unique_bridge_task_for_message,
+    };
 
     #[test]
     fn conversation_scope_overrides_stale_explicit_task() {
@@ -457,6 +483,24 @@ mod tests {
         assert_ne!(
             select_task_identity("agent", None, None, None, "r1"),
             select_task_identity("agent", None, None, None, "r2")
+        );
+    }
+
+    #[test]
+    fn unicode_space_bridge_match_requires_one_unambiguous_task() {
+        let rows = vec![("task-a".to_owned(), "Ví dụ abcd ".to_owned())];
+        assert_eq!(
+            unique_bridge_task_for_message(&rows, "Ví dụ abcd\u{00a0}"),
+            Some("task-a".to_owned())
+        );
+
+        let ambiguous = vec![
+            ("task-a".to_owned(), "Ví dụ abcd ".to_owned()),
+            ("task-b".to_owned(), "Ví dụ abcd\u{202f}".to_owned()),
+        ];
+        assert_eq!(
+            unique_bridge_task_for_message(&ambiguous, "Ví dụ abcd\u{00a0}"),
+            None
         );
     }
 }

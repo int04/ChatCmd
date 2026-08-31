@@ -5,6 +5,7 @@
 
 mod api;
 mod backend_api;
+mod chatgpt_message;
 #[cfg(all(not(debug_assertions), any(target_os = "windows", target_os = "macos")))]
 mod desktop_tray;
 #[cfg(feature = "embedded-web")]

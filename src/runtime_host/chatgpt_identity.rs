@@ -1,5 +1,5 @@
 use chatcmd_runtime::{RuntimeError, RuntimeResult};
-use sqlx::Row as _;
+use sqlx::{Row as _, sqlite::SqliteRow};
 use uuid::Uuid;
 
 use super::{RuntimeHost, now_ms};
@@ -12,43 +12,26 @@ impl RuntimeHost {
         first_user_message: Option<&str>,
     ) -> RuntimeResult<Option<String>> {
         let cutoff = now_ms().saturating_sub(90_000);
-        let rows = if let Some(message) = first_user_message {
-            sqlx::query(
-                r#"SELECT id,user_content,submitted_content,created_at_ms
-                   FROM chatgpt_bridge_requests
-                   WHERE task_id IS NULL AND agent_id=?
-                     AND submitted_content=?
-                     AND status IN ('queued','running','stop_requested')
-                     AND updated_at_ms>=?
-                   ORDER BY updated_at_ms DESC,id DESC
-                   LIMIT 2"#,
-            )
-            .bind(agent_id)
-            .bind(message)
-            .bind(cutoff)
-            .fetch_all(self.repository.pool())
-            .await
-        } else {
-            sqlx::query(
-                r#"SELECT id,user_content,submitted_content,created_at_ms
-                   FROM chatgpt_bridge_requests
-                   WHERE task_id IS NULL AND agent_id=?
-                     AND status IN ('queued','running','stop_requested')
-                     AND updated_at_ms>=?
-                   ORDER BY updated_at_ms DESC,id DESC
-                   LIMIT 2"#,
-            )
-            .bind(agent_id)
-            .bind(cutoff)
-            .fetch_all(self.repository.pool())
-            .await
-        }
+        let rows = sqlx::query(
+            r#"SELECT id,user_content,submitted_content,created_at_ms
+               FROM chatgpt_bridge_requests
+               WHERE task_id IS NULL AND agent_id=?
+                 AND status IN ('queued','running','stop_requested')
+                 AND updated_at_ms>=?
+               ORDER BY updated_at_ms DESC,id DESC
+               LIMIT 32"#,
+        )
+        .bind(agent_id)
+        .bind(cutoff)
+        .fetch_all(self.repository.pool())
+        .await
         .map_err(|_| RuntimeError::new("storage_error", "unbound ChatGPT bridge lookup failed"))?;
 
-        if rows.len() != 1 {
+        let matching_rows = matching_unbound_rows(&rows, first_user_message);
+        if matching_rows.len() != 1 {
             return Ok(None);
         }
-        let row = &rows[0];
+        let row = matching_rows[0];
         let request_id = row.get::<String, _>("id");
         let user_content = row.get::<String, _>("user_content");
         let created_at_ms = row.get::<i64, _>("created_at_ms");
@@ -91,6 +74,24 @@ impl RuntimeHost {
         })?;
         Ok(claimed)
     }
+}
+
+fn matching_unbound_rows<'a>(rows: &'a [SqliteRow], message: Option<&str>) -> Vec<&'a SqliteRow> {
+    let Some(message) = message else {
+        return rows.iter().collect();
+    };
+    let exact = rows
+        .iter()
+        .filter(|row| row.get::<String, _>("submitted_content") == message)
+        .collect::<Vec<_>>();
+    if !exact.is_empty() {
+        return exact;
+    }
+    rows.iter()
+        .filter(|row| {
+            crate::chatgpt_message::equivalent(&row.get::<String, _>("submitted_content"), message)
+        })
+        .collect()
 }
 
 fn pending_bridge_task_id(agent_id: &str, request_id: &str) -> String {
