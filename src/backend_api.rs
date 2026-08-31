@@ -20,7 +20,7 @@ use tokio::sync::RwLock;
 const PROTOCOL: u8 = 1;
 const DEBUG_BACKEND_API_URL: &str = "http://127.0.0.1:5121";
 // Đổi URL này thành backend production trước khi build bản public.
-const RELEASE_BACKEND_API_URL: &str = "https://api.chatcmd.net";
+const RELEASE_BACKEND_API_URL: &str = "https://chatcmd.toicontre.net";
 const HANDSHAKE_AAD: &[u8] = b"chatcmd/backend-api/handshake-obfuscation/v1";
 const HKDF_INFO: &[u8] = b"chatcmd/backend-api/aes-256-gcm/v1";
 const KEY_A: [u8; 32] = [
