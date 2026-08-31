@@ -559,6 +559,7 @@ const vi: Record<string, string> = {
   'Cancel send': 'Hủy gửi',
   'Next message to ChatGPT': 'Tin nhắn tiếp theo cho ChatGPT',
   'ChatGPT is responding…': 'ChatGPT đang phản hồi…',
+  'Answer completed; waiting for the ChatGPT UI before continuing.': 'Đã hoàn thành câu trả lời, đang chờ phía UI ChatGPT để có thể tiếp tục.',
   'Waiting to retry…': 'Đang chờ gửi lại…',
   'Continue the ChatGPT conversation…': 'Nhắn tiếp cho ChatGPT…',
   'Send': 'Gửi',

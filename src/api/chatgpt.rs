@@ -93,7 +93,7 @@ pub(super) async fn task_bridge(
     State(state): State<Arc<AppState>>,
     Path(task_id): Path<String>,
 ) -> Result<Json<Value>, Problem> {
-    let row = sqlx::query("SELECT c.task_id,c.conversation_id,c.conversation_url,c.model,c.active_request_id,r.status AS active_status,r.submitted_content AS active_submitted_content FROM chatgpt_conversations c LEFT JOIN chatgpt_bridge_requests r ON r.id=c.active_request_id WHERE c.task_id=?")
+    let row = sqlx::query("SELECT c.task_id,c.conversation_id,c.conversation_url,c.model,c.active_request_id,t.status AS task_status,r.status AS active_status,r.submitted_content AS active_submitted_content FROM chatgpt_conversations c JOIN tasks t ON t.id=c.task_id LEFT JOIN chatgpt_bridge_requests r ON r.id=c.active_request_id WHERE c.task_id=?")
         .bind(task_id.trim())
         .fetch_optional(state.repository.pool())
         .await
@@ -105,6 +105,7 @@ pub(super) async fn task_bridge(
         "conversationUrl": row.get::<String, _>("conversation_url"),
         "model": row.get::<String, _>("model"),
         "activeRequestId": row.get::<Option<String>, _>("active_request_id"),
+        "taskStatus": row.get::<String, _>("task_status"),
         "activeStatus": row.get::<Option<String>, _>("active_status"),
         "activeSubmittedContent": row.get::<Option<String>, _>("active_submitted_content"),
     })))
