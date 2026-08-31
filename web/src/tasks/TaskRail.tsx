@@ -78,7 +78,7 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
   const [loadedTasks, setLoadedTasks] = useState<Task[]>([]); const [nextCursor, setNextCursor] = useState<string>(); const [loading, setLoading] = useState(true); const [loadingMore, setLoadingMore] = useState(false); const [error, setError] = useState(''); const [query, setQuery] = useState(''); const [menuOpen, setMenuOpen] = useState(false); const [contextMenu, setContextMenu] = useState<{ task: Task; x: number; y: number }>(); const [deleteTarget, setDeleteTarget] = useState<Task>(); const [deleting, setDeleting] = useState(false); const [deleteError, setDeleteError] = useState('');
   const [readFinalCounts, setReadFinalCounts] = useState<Record<string, number>>(readStoredFinalCounts);
   const [projects, setProjects] = useState<WorkspaceProject[]>([]);
-  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  const [visibleGroupCounts, setVisibleGroupCounts] = useState<Record<string, number>>({});
   const [projectModalOpen, setProjectModalOpen] = useState(false); const [projectName, setProjectName] = useState(''); const [projectPath, setProjectPath] = useState(''); const [projectFolderPicking, setProjectFolderPicking] = useState(false); const [projectSaving, setProjectSaving] = useState(false); const [projectError, setProjectError] = useState('');
   const visibleTaskIds = useRef(new Set<string>()); const loadingMoreRef = useRef(false); const hadStoredReadCounts = useRef(typeof localStorage !== 'undefined' && localStorage.getItem(READ_FINAL_COUNTS_KEY) !== null);
   const railResize = useResizableWidth({ storageKey: 'chatcmd.layout.taskRailWidth.v1', cssVariable: '--task-rail-width', defaultWidth: typeof window !== 'undefined' && window.innerWidth <= 1180 ? 270 : 284, minWidth: 240, maxWidth: 480 });
@@ -134,11 +134,12 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
   };
   const renderRow = (task: Task) => <TaskRailRow task={task} selected={task.id === taskId} unread={Math.max(0, (task.finalResponseCount ?? 0) - (readFinalCounts[task.id] ?? 0))} onRenamed={(updated) => setLoadedTasks((current) => current.map((item) => item.id === updated.id ? { ...item, ...updated } : item))} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ task, x: Math.min(event.clientX, window.innerWidth - 236), y: Math.min(event.clientY, window.innerHeight - 108) }); }} key={task.id} />;
   const renderGroup = (key: string, name: string, groupTasks: Task[], project?: WorkspaceProject) => {
-    const expanded = Boolean(expandedGroups[key]); const visible = expanded ? groupTasks : groupTasks.slice(0, COLLAPSED_PROJECT_TASKS);
+    const visibleCount = visibleGroupCounts[key] ?? COLLAPSED_PROJECT_TASKS;
+    const visible = groupTasks.slice(0, visibleCount);
     return <section className="task-project-group" key={key}>
       <header className="task-project-heading"><div><strong title={project?.path}>{name}</strong>{project && <small title={project.path}>{project.path}</small>}</div><button type="button" onClick={() => startTask(project)} aria-label={`Tạo đoạn trò chuyện trong ${name}`} title={`Tạo đoạn trò chuyện trong ${name}`}><Plus /></button></header>
       <div className="task-project-conversations">{visible.length ? visible.map(renderRow) : <p className="task-project-empty">Chưa có đoạn trò chuyện</p>}</div>
-      {groupTasks.length > COLLAPSED_PROJECT_TASKS && <button className="task-project-more" type="button" onClick={() => { setExpandedGroups((current) => ({ ...current, [key]: !expanded })); if (!expanded && nextCursor) void loadMore(); }}>{expanded ? <><ChevronUp />Thu gọn</> : <><ChevronDown />Xem thêm ({groupTasks.length - COLLAPSED_PROJECT_TASKS})</>}</button>}
+      {groupTasks.length > visibleCount && <button className="task-project-more" type="button" onClick={() => setVisibleGroupCounts((current) => ({ ...current, [key]: visibleCount + COLLAPSED_PROJECT_TASKS }))}><ChevronDown />Xem thêm</button>}
     </section>;
   };
 
