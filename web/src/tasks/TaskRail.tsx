@@ -78,11 +78,12 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
   const [loadedTasks, setLoadedTasks] = useState<Task[]>([]); const [nextCursor, setNextCursor] = useState<string>(); const [loading, setLoading] = useState(true); const [loadingMore, setLoadingMore] = useState(false); const [error, setError] = useState(''); const [query, setQuery] = useState(''); const [menuOpen, setMenuOpen] = useState(false); const [contextMenu, setContextMenu] = useState<{ task: Task; x: number; y: number }>(); const [deleteTarget, setDeleteTarget] = useState<Task>(); const [deleting, setDeleting] = useState(false); const [deleteError, setDeleteError] = useState('');
   const [readFinalCounts, setReadFinalCounts] = useState<Record<string, number>>(readStoredFinalCounts);
   const [projects, setProjects] = useState<WorkspaceProject[]>([]);
+  const [expandedGroupKeys, setExpandedGroupKeys] = useState<Set<string>>(() => new Set([UNCLASSIFIED_GROUP]));
   const [visibleGroupCounts, setVisibleGroupCounts] = useState<Record<string, number>>({});
   const [projectHasMore, setProjectHasMore] = useState<Record<string, boolean>>({});
   const [loadingProjectMore, setLoadingProjectMore] = useState<Record<string, boolean>>({});
   const [projectModalOpen, setProjectModalOpen] = useState(false); const [projectName, setProjectName] = useState(''); const [projectPath, setProjectPath] = useState(''); const [projectFolderPicking, setProjectFolderPicking] = useState(false); const [projectSaving, setProjectSaving] = useState(false); const [projectError, setProjectError] = useState('');
-  const visibleTaskIds = useRef(new Set<string>()); const loadingMoreRef = useRef(false); const hadStoredReadCounts = useRef(typeof localStorage !== 'undefined' && localStorage.getItem(READ_FINAL_COUNTS_KEY) !== null);
+  const visibleTaskIds = useRef(new Set<string>()); const loadingMoreRef = useRef(false); const groupExpansionInitialized = useRef(false); const hadStoredReadCounts = useRef(typeof localStorage !== 'undefined' && localStorage.getItem(READ_FINAL_COUNTS_KEY) !== null);
   const railResize = useResizableWidth({ storageKey: 'chatcmd.layout.taskRailWidth.v1', cssVariable: '--task-rail-width', defaultWidth: typeof window !== 'undefined' && window.innerWidth <= 1180 ? 270 : 284, minWidth: 240, maxWidth: 480 });
 
   const applyFirstPage = useCallback(async () => {
@@ -117,6 +118,24 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
 
   const tasks = useMemo(() => [...loadedTasks].sort((a, b) => Date.parse(b.updatedAtUtc) - Date.parse(a.updatedAtUtc)).filter((task) => `${conversationName(task)} ${task.id} ${task.outputPreview ?? ''}`.toLowerCase().includes(query.toLowerCase())), [query, loadedTasks]);
   const taskGroups = useMemo(() => groupTasksByWorkspaceProjects(projects, tasks), [projects, tasks]);
+  useEffect(() => {
+    if (loading || groupExpansionInitialized.current) return;
+    groupExpansionInitialized.current = true;
+    const grouped = groupTasksByWorkspaceProjects(projects, [...loadedTasks].sort((a, b) => Date.parse(b.updatedAtUtc) - Date.parse(a.updatedAtUtc)));
+    const expanded = new Set<string>([UNCLASSIFIED_GROUP]);
+    if (grouped.projects[0]) expanded.add(grouped.projects[0].project.id);
+    for (const { project, tasks: projectTasks } of grouped.projects) if (projectTasks.some((task) => task.status === 'running')) expanded.add(project.id);
+    setExpandedGroupKeys(expanded);
+  }, [loadedTasks, loading, projects]);
+  useEffect(() => {
+    const runningProjectKeys = taskGroups.projects.filter(({ tasks: projectTasks }) => projectTasks.some((task) => task.status === 'running')).map(({ project }) => project.id);
+    if (!runningProjectKeys.length) return;
+    setExpandedGroupKeys((current) => {
+      const next = new Set(current); let changed = false;
+      for (const key of runningProjectKeys) if (!next.has(key)) { next.add(key); changed = true; }
+      return changed ? next : current;
+    });
+  }, [taskGroups]);
 
   const startTask = (project?: WorkspaceProject) => navigate('/tasks/new', { state: project ? { projectFolder: project.path, projectName: project.name } : undefined });
   const openProjectModal = () => { setProjectName(''); setProjectPath(''); setProjectError(''); setProjectModalOpen(true); };
@@ -147,14 +166,20 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
     finally { setLoadingProjectMore((current) => ({ ...current, [key]: false })); }
   };
   const renderGroup = (key: string, name: string, groupTasks: Task[], project?: WorkspaceProject) => {
+    const expanded = expandedGroupKeys.has(key);
     const visibleCount = visibleGroupCounts[key] ?? COLLAPSED_PROJECT_TASKS;
     const visible = groupTasks.slice(0, visibleCount);
     const canLoadProjectMore = Boolean(project && groupTasks.length >= visibleCount && projectHasMore[key] !== false);
     const canShowMore = groupTasks.length > visibleCount || canLoadProjectMore;
-    return <section className="task-project-group" key={key}>
-      <header className="task-project-heading"><div><strong title={project?.path}>{name}</strong>{project && <small title={project.path}>{project.path}</small>}</div><button type="button" onClick={() => startTask(project)} aria-label={`Tạo đoạn trò chuyện trong ${name}`} title={`Tạo đoạn trò chuyện trong ${name}`}><Plus /></button></header>
-      <div className="task-project-conversations">{visible.length ? visible.map(renderRow) : <p className="task-project-empty">Chưa có đoạn trò chuyện</p>}</div>
-      {(canShowMore || visibleCount > COLLAPSED_PROJECT_TASKS) && <div className="task-project-more-actions">{canShowMore && <button className="task-project-more" type="button" disabled={Boolean(loadingProjectMore[key])} onClick={() => project ? void loadMoreProject(key, project, visible) : setVisibleGroupCounts((current) => ({ ...current, [key]: visibleCount + COLLAPSED_PROJECT_TASKS }))}>{loadingProjectMore[key] ? <LoaderCircle className="spin" /> : <ChevronDown />}Xem thêm</button>}{visibleCount > COLLAPSED_PROJECT_TASKS && <><span aria-hidden="true">|</span><button className="task-project-more" type="button" onClick={() => setVisibleGroupCounts((current) => ({ ...current, [key]: COLLAPSED_PROJECT_TASKS }))}><ChevronUp />Ẩn bớt</button></>}</div>}
+    const toggleExpanded = () => setExpandedGroupKeys((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+    return <section className={`task-project-group ${expanded ? 'expanded' : 'collapsed'}`} key={key}>
+      <header className="task-project-heading"><button className="task-project-toggle" type="button" onClick={toggleExpanded} aria-expanded={expanded} aria-label={`${expanded ? 'Ẩn' : 'Hiện'} đoạn trò chuyện của ${name}`}><ChevronDown /><span><strong title={project?.path}>{name}</strong>{project && <small title={project.path}>{project.path}</small>}</span></button><button className="task-project-add" type="button" onClick={() => startTask(project)} aria-label={`Tạo đoạn trò chuyện trong ${name}`} title={`Tạo đoạn trò chuyện trong ${name}`}><Plus /></button></header>
+      {expanded && <><div className="task-project-conversations">{visible.length ? visible.map(renderRow) : <p className="task-project-empty">Chưa có đoạn trò chuyện</p>}</div>
+      {(canShowMore || visibleCount > COLLAPSED_PROJECT_TASKS) && <div className="task-project-more-actions">{canShowMore && <button className="task-project-more" type="button" disabled={Boolean(loadingProjectMore[key])} onClick={() => project ? void loadMoreProject(key, project, visible) : setVisibleGroupCounts((current) => ({ ...current, [key]: visibleCount + COLLAPSED_PROJECT_TASKS }))}>{loadingProjectMore[key] ? <LoaderCircle className="spin" /> : <ChevronDown />}Xem thêm</button>}{visibleCount > COLLAPSED_PROJECT_TASKS && <><span aria-hidden="true">|</span><button className="task-project-more" type="button" onClick={() => setVisibleGroupCounts((current) => ({ ...current, [key]: COLLAPSED_PROJECT_TASKS }))}><ChevronUp />Ẩn bớt</button></>}</div>}</>}
     </section>;
   };
 
