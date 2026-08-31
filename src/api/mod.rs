@@ -40,7 +40,7 @@ use chatcmd_core::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use sqlx::Row;
+use sqlx::{QueryBuilder, Row, Sqlite};
 
 use crate::websocket::{AppEvent, AppState};
 
@@ -192,17 +192,22 @@ async fn mcp_status(State(state): State<Arc<AppState>>) -> Json<Value> {
 struct TaskListQuery {
     cursor: Option<String>,
     limit: Option<u32>,
+    #[serde(rename = "projectFolder")]
+    project_folder: Option<String>,
 }
 
 async fn tasks(
     State(state): State<Arc<AppState>>,
     Query(query): Query<TaskListQuery>,
 ) -> Result<Json<Value>, Problem> {
-    let all_tasks = state
+    let mut all_tasks = state
         .repository
         .list_tasks(500)
         .await
         .map_err(storage_problem)?;
+    if let Some(project_folder) = query.project_folder.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+        all_tasks.retain(|task| task.project_folder.as_deref().is_some_and(|value| value.eq_ignore_ascii_case(project_folder)));
+    }
     let limit = query.limit.unwrap_or(10).clamp(1, 50) as usize;
     let start = query
         .cursor
@@ -299,11 +304,24 @@ async fn pending_conversation_approvals(
     Ok(Json(Value::Array(items)))
 }
 
+#[derive(Debug, Deserialize)]
+struct TaskDetailQuery {
+    cursor: Option<String>,
+    limit: Option<u32>,
+}
+
 async fn task(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
+    Query(query): Query<TaskDetailQuery>,
 ) -> Result<Json<Value>, Problem> {
-    task_detail(&state, &id).await
+    task_detail_page(
+        &state,
+        &id,
+        query.cursor.as_deref(),
+        query.limit.unwrap_or(2).clamp(1, 20) as usize,
+    )
+    .await
 }
 
 #[derive(Debug, Deserialize)]
@@ -397,76 +415,103 @@ async fn task_action(
 }
 
 async fn task_detail(state: &Arc<AppState>, id: &str) -> Result<Json<Value>, Problem> {
-    let task = state
-        .repository
-        .task(&TaskId::new(id).map_err(|_| bad_id())?)
-        .await
-        .map_err(storage_problem)?
-        .ok_or_else(not_found)?;
+    task_detail_page(state, id, None, 2).await
+}
+
+async fn task_detail_page(
+    state: &Arc<AppState>,
+    id: &str,
+    cursor: Option<&str>,
+    limit: usize,
+) -> Result<Json<Value>, Problem> {
+    let task = state.repository.task(&TaskId::new(id).map_err(|_| bad_id())?).await.map_err(storage_problem)?.ok_or_else(not_found)?;
     let (subagent_parent, subagents) = task_subagent_data(state, id).await?;
-    let execution_mode_task_id = subagent_parent
-        .as_ref()
-        .map_or(id, |parent| parent.task_id.as_str());
+    let execution_mode_task_id = subagent_parent.as_ref().map_or(id, |parent| parent.task_id.as_str());
     let mut task_value = task_value(task);
     if let (Some(parent), Some(object)) = (subagent_parent.as_ref(), task_value.as_object_mut()) {
         object.insert("isSubagent".to_owned(), Value::Bool(true));
-        object.insert(
-            "parentTaskId".to_owned(),
-            Value::String(parent.task_id.clone()),
-        );
-        object.insert(
-            "parentTurnId".to_owned(),
-            Value::String(parent.turn_id.clone()),
-        );
+        object.insert("parentTaskId".to_owned(), Value::String(parent.task_id.clone()));
+        object.insert("parentTurnId".to_owned(), Value::String(parent.turn_id.clone()));
         object.insert("agentName".to_owned(), Value::String(parent.name.clone()));
     }
-    let rows = sqlx::query("SELECT event_id,turn_id,session_id,kind,payload_json,created_at_ms FROM timeline_events WHERE task_id=? ORDER BY created_at_ms DESC,event_id DESC LIMIT 1000")
-        .bind(id).fetch_all(state.repository.pool()).await.map_err(db_problem)?;
-    let terminal_rows = sqlx::query("SELECT event_id,turn_id,session_id,kind,stream,payload,payload_encoding,created_at_ms FROM terminal_event_chunks WHERE task_id=? ORDER BY created_at_ms DESC,event_id DESC LIMIT 5000")
-        .bind(id).fetch_all(state.repository.pool()).await.map_err(db_problem)?;
-    let mut ordered_events = rows
-        .iter()
-        .map(|row| {
-            let timestamp = row.get::<i64, _>("created_at_ms");
-            let event_id = row.get::<String, _>("event_id");
-            (timestamp, event_id, timeline_row(row))
-        })
-        .collect::<Vec<_>>();
+
+    let cursor = cursor.map(parse_turn_cursor).transpose()?;
+    let fetch_limit = limit.saturating_add(1) as i64;
+    let turn_rows = if let Some((cursor_ms, cursor_turn)) = cursor.as_ref() {
+        sqlx::query("SELECT turn_id,MAX(created_at_ms) AS sort_ms FROM timeline_events WHERE task_id=? AND turn_id IS NOT NULL GROUP BY turn_id HAVING MAX(created_at_ms) < ? OR (MAX(created_at_ms)=? AND turn_id < ?) ORDER BY sort_ms DESC,turn_id DESC LIMIT ?")
+            .bind(id).bind(*cursor_ms).bind(*cursor_ms).bind(cursor_turn).bind(fetch_limit).fetch_all(state.repository.pool()).await.map_err(db_problem)?
+    } else {
+        sqlx::query("SELECT turn_id,MAX(created_at_ms) AS sort_ms FROM timeline_events WHERE task_id=? AND turn_id IS NOT NULL GROUP BY turn_id ORDER BY sort_ms DESC,turn_id DESC LIMIT ?")
+            .bind(id).bind(fetch_limit).fetch_all(state.repository.pool()).await.map_err(db_problem)?
+    };
+    let has_more = turn_rows.len() > limit;
+    let selected_turns = turn_rows.iter().take(limit).map(|row| row.get::<String, _>("turn_id")).collect::<Vec<_>>();
+    let next_cursor = if has_more {
+        turn_rows.get(limit.saturating_sub(1)).map(|row| format_turn_cursor(row.get::<i64, _>("sort_ms"), &row.get::<String, _>("turn_id")))
+    } else { None };
+
+    let rows = fetch_timeline_rows(state, id, &selected_turns).await?;
+    let terminal_rows = fetch_terminal_rows(state, id, &selected_turns).await?;
+    let mut ordered_events = rows.iter().map(|row| {
+        let timestamp = row.get::<i64, _>("created_at_ms");
+        let event_id = row.get::<String, _>("event_id");
+        (timestamp, event_id, timeline_row(row))
+    }).collect::<Vec<_>>();
     ordered_events.extend(terminal_rows.iter().map(|row| {
         let timestamp = row.get::<i64, _>("created_at_ms");
         let event_id = row.get::<String, _>("event_id");
-        let payload = row.get::<Vec<u8>, _>("payload");
-        let text = String::from_utf8_lossy(&payload).into_owned();
-        let value = json!({
+        let text = String::from_utf8_lossy(&row.get::<Vec<u8>, _>("payload")).into_owned();
+        (timestamp, event_id.clone(), json!({
             "id": event_id,
             "type": row.get::<String, _>("kind"),
             "occurredAt": iso_ms(timestamp),
             "turnId": row.get::<Option<String>, _>("turn_id"),
             "sessionId": row.get::<Option<String>, _>("session_id"),
-            "payload": {
-                "text": text,
-                "stream": row.get::<Option<String>, _>("stream"),
-                "encoding": row.get::<String, _>("payload_encoding")
-            }
-        });
-        (timestamp, event_id, value)
+            "payload": { "text": text, "stream": row.get::<Option<String>, _>("stream"), "encoding": row.get::<String, _>("payload_encoding") }
+        }))
     }));
     ordered_events.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
-    let events = ordered_events
-        .into_iter()
-        .map(|(_, _, value)| value)
-        .collect::<Vec<_>>();
+    let events = ordered_events.into_iter().map(|(_, _, value)| value).collect::<Vec<_>>();
     let subagent_approvals = pending_subagent_approvals(state, id).await?;
     let execution_mode_id = TaskId::new(execution_mode_task_id).map_err(|_| bad_id())?;
     Ok(Json(json!({
         "task": task_value,
         "turns": [],
         "events": events,
+        "nextCursor": next_cursor,
         "subagents": subagents,
         "subagentApprovals": subagent_approvals,
         "executionMode": execution_mode_name(state.repository.execution_mode(Some(&execution_mode_id)).await.map_err(storage_problem)?),
         "executionModeSourceTaskId": execution_mode_task_id
     })))
+}
+
+async fn fetch_timeline_rows(state: &Arc<AppState>, task_id: &str, turn_ids: &[String]) -> Result<Vec<sqlx::sqlite::SqliteRow>, Problem> {
+    if turn_ids.is_empty() { return Ok(Vec::new()); }
+    let mut query = QueryBuilder::<Sqlite>::new("SELECT event_id,turn_id,session_id,kind,payload_json,created_at_ms FROM timeline_events WHERE task_id=");
+    query.push_bind(task_id).push(" AND turn_id IN (");
+    let mut separated = query.separated(",");
+    for turn_id in turn_ids { separated.push_bind(turn_id); }
+    separated.push_unseparated(") ORDER BY created_at_ms ASC,event_id ASC");
+    query.build().fetch_all(state.repository.pool()).await.map_err(db_problem)
+}
+
+async fn fetch_terminal_rows(state: &Arc<AppState>, task_id: &str, turn_ids: &[String]) -> Result<Vec<sqlx::sqlite::SqliteRow>, Problem> {
+    if turn_ids.is_empty() { return Ok(Vec::new()); }
+    let mut query = QueryBuilder::<Sqlite>::new("SELECT event_id,turn_id,session_id,kind,stream,payload,payload_encoding,created_at_ms FROM terminal_event_chunks WHERE task_id=");
+    query.push_bind(task_id).push(" AND turn_id IN (");
+    let mut separated = query.separated(",");
+    for turn_id in turn_ids { separated.push_bind(turn_id); }
+    separated.push_unseparated(") ORDER BY created_at_ms ASC,event_id ASC");
+    query.build().fetch_all(state.repository.pool()).await.map_err(db_problem)
+}
+
+fn format_turn_cursor(timestamp: i64, turn_id: &str) -> String { format!("{timestamp}:{turn_id}") }
+fn parse_turn_cursor(cursor: &str) -> Result<(i64, String), Problem> {
+    let (timestamp, turn_id) = cursor.split_once(':').ok_or_else(|| Problem::new(StatusCode::BAD_REQUEST, "Invalid cursor", "task history cursor is invalid"))?;
+    let timestamp = timestamp.parse::<i64>().map_err(|_| Problem::new(StatusCode::BAD_REQUEST, "Invalid cursor", "task history cursor is invalid"))?;
+    if turn_id.trim().is_empty() { return Err(Problem::new(StatusCode::BAD_REQUEST, "Invalid cursor", "task history cursor is invalid")); }
+    Ok((timestamp, turn_id.to_owned()))
 }
 
 fn compact_preview(value: &str) -> String {

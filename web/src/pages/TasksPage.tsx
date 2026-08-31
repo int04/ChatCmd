@@ -47,35 +47,52 @@ function TasksWorkspace() {
 function TaskConversationDetail({ taskId, refreshVersion, realtime, liveEvents, onSubagentTask }: { taskId: string; refreshVersion: number; realtime: string; liveEvents: TimelineEvent[]; onSubagentTask: (taskId: string) => void }) {
   const result = useLoad(() => api.task(taskId), [taskId]);
   const refresh = result.refresh;
+  const [olderEvents, setOlderEvents] = useState<TimelineEvent[]>([]);
+  const [nextCursor, setNextCursor] = useState<string>();
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  useEffect(() => { setOlderEvents([]); setNextCursor(undefined); setLoadingOlder(false); }, [taskId]);
+  useEffect(() => { if (!olderEvents.length) setNextCursor(result.data?.nextCursor); }, [olderEvents.length, result.data?.nextCursor]);
   useEffect(() => { if (refreshVersion > 0) void refresh(); }, [refreshVersion, refresh]);
   useEffect(() => { if (result.data?.task.isSubagent) onSubagentTask(result.data.task.id); for (const subagent of result.data?.subagents ?? []) if (subagent.taskId) onSubagentTask(subagent.taskId); }, [onSubagentTask, result.data?.subagents, result.data?.task.id, result.data?.task.isSubagent]);
   const approvalPolling = result.data?.task.allowExecute === null || (result.data?.executionMode === 'approval' && (result.data.task.status === 'running' || (result.data.subagents ?? []).some((subagent) => subagent.status === 'pending' || subagent.status === 'running')));
   useEffect(() => { if (!approvalPolling) return; const timer = window.setInterval(() => void refresh(), 1500); return () => window.clearInterval(timer); }, [approvalPolling, refresh]);
+  const loadOlder = useCallback(async () => {
+    if (!nextCursor || loadingOlder) return;
+    setLoadingOlder(true);
+    try {
+      const page = await api.task(taskId, nextCursor);
+      setOlderEvents((current) => mergeUniqueEvents(page.events ?? [], current));
+      setNextCursor(page.nextCursor);
+    } finally { setLoadingOlder(false); }
+  }, [loadingOlder, nextCursor, taskId]);
   if (result.loading) return <Loading label={tr('Loading task')} />;
   if (result.error || !result.data) return <ErrorState message={result.error} retry={() => void result.reload()} />;
-  const detail = mergeLiveDetail(result.data, liveEvents);
-  return <TaskDetailContent detail={detail} realtime={realtime} onTaskChanged={result.setData} />;
+  const baseDetail = { ...result.data, events: mergeUniqueEvents(olderEvents, result.data.events ?? []) };
+  const detail = mergeLiveDetail(baseDetail, liveEvents);
+  return <TaskDetailContent detail={detail} realtime={realtime} onTaskChanged={result.setData} hasOlder={Boolean(nextCursor)} loadingOlder={loadingOlder} onLoadOlder={loadOlder} />;
 }
 
-function TaskDetailContent({ detail, realtime, onTaskChanged }: { detail: TaskDetail; realtime: string; onTaskChanged: (detail: TaskDetail) => void }) {
+function TaskDetailContent({ detail, realtime, onTaskChanged, hasOlder, loadingOlder, onLoadOlder }: { detail: TaskDetail; realtime: string; onTaskChanged: (detail: TaskDetail) => void; hasOlder: boolean; loadingOlder: boolean; onLoadOlder: () => Promise<void> }) {
   const { task, events = [] } = detail;
   const chatGpt = task.source === 'chatgpt_web';
   const turns = useMemo(() => detail.turns?.length ? detail.turns : buildTaskTurns(events, task), [detail.turns, events, task]);
   const startedAt = task.createdAtUtc ?? turns[0]?.startedAtUtc ?? task.updatedAtUtc;
   const chatRef = useRef<HTMLElement>(null);
   const nearBottomRef = useRef(true);
-  const [visibleTurnCount, setVisibleTurnCount] = useState(2);
-  const [loadingOlderTurns, setLoadingOlderTurns] = useState(false);
   const sidebarResize = useResizableWidth({ storageKey: 'chatcmd.layout.taskDetailSidebarWidth.v1', cssVariable: '--task-detail-sidebar-width', defaultWidth: typeof window !== 'undefined' && window.innerWidth <= 1180 ? 300 : 340, minWidth: 280, maxWidth: 520, direction: -1 });
-  const visibleTurns = turns.slice(Math.max(0, turns.length - visibleTurnCount));
-  useEffect(() => { setVisibleTurnCount(2); setLoadingOlderTurns(false); }, [task.id]);
   const activeTaskRef = useRef<string | null>(null);
   const lastEvent = events.at(-1); const lastTurn = turns.at(-1);
   const updateKey = `${events.length}:${lastEvent?.id ?? 'empty'}:${turns.length}:${lastTurn?.id ?? 'empty'}:${lastTurn?.status ?? 'empty'}:${lastTurn?.completedAtUtc ?? ''}`;
   useLayoutEffect(() => { const root = chatRef.current; if (!root) return; const taskChanged = activeTaskRef.current !== task.id; activeTaskRef.current = task.id; if (!taskChanged && !nearBottomRef.current) return; const frame = window.requestAnimationFrame(() => { root.scrollTop = root.scrollHeight; }); return () => window.cancelAnimationFrame(frame); }, [task.id, updateKey]);
   const updateChatScrollPosition = () => {
-    const root = chatRef.current; if (!root) return; nearBottomRef.current = root.scrollHeight - root.scrollTop - root.clientHeight < 96;
-    if (root.scrollTop <= 40 && visibleTurnCount < turns.length && !loadingOlderTurns) { const previousHeight = root.scrollHeight; setLoadingOlderTurns(true); window.setTimeout(() => { setVisibleTurnCount((count) => Math.min(turns.length, count + 2)); window.requestAnimationFrame(() => { const current = chatRef.current; if (current) current.scrollTop += current.scrollHeight - previousHeight; setLoadingOlderTurns(false); }); }, 260); }
+    const root = chatRef.current; if (!root) return;
+    nearBottomRef.current = root.scrollHeight - root.scrollTop - root.clientHeight < 96;
+    if (root.scrollTop > 40 || !hasOlder || loadingOlder) return;
+    const previousHeight = root.scrollHeight;
+    void onLoadOlder().then(() => window.requestAnimationFrame(() => {
+      const current = chatRef.current;
+      if (current) current.scrollTop += current.scrollHeight - previousHeight;
+    }));
   };
 
   return <div className="task-detail-shell">
@@ -84,9 +101,9 @@ function TaskDetailContent({ detail, realtime, onTaskChanged }: { detail: TaskDe
       <div className={`task-chat-pane${chatGpt ? ' has-chatgpt-footer' : ''}`}>
         <main ref={chatRef} className="task-chat-column" onScroll={updateChatScrollPosition}><h2 className="sr-only">{tr('Activity timeline')}</h2>
           <SubagentApprovalQueue approvals={detail.subagentApprovals ?? []} onResolved={(activityId) => onTaskChanged({ ...detail, subagentApprovals: (detail.subagentApprovals ?? []).filter((item) => item.activityId !== activityId) })} />
-          {loadingOlderTurns && <div className="task-history-skeleton" role="status" aria-label={tr('Loading older conversation')}><span /><span /><span /></div>}
+          {loadingOlder && <div className="task-history-skeleton" role="status" aria-label={tr('Loading older conversation')}><span /><span /><span /></div>}
           <section className="task-bubble-timeline turn-timeline" aria-label={tr('Conversation activity')}>
-            {turns.length ? visibleTurns.map((turn) => <TaskTurnBubble turn={turn} taskId={task.id} agentLabel={chatGpt ? 'ChatGPT' : tr('Codex Agent')} subagents={(detail.subagents ?? []).filter((agent) => agent.parentTurnId === turn.id)} key={turn.id} />) : <Empty title={tr('No activity yet')} body={tr('The Agent has not recorded any activity for this task yet.')} />}
+            {turns.length ? turns.map((turn) => <TaskTurnBubble turn={turn} taskId={task.id} agentLabel={chatGpt ? 'ChatGPT' : tr('Codex Agent')} subagents={(detail.subagents ?? []).filter((agent) => agent.parentTurnId === turn.id)} key={turn.id} />) : <Empty title={tr('No activity yet')} body={tr('The Agent has not recorded any activity for this task yet.')} />}
           </section>
         </main>
         {chatGpt && <footer className="task-chat-footer"><ChatGptTaskComposer taskId={task.id} /></footer>}
@@ -104,6 +121,12 @@ function TaskDetailContent({ detail, realtime, onTaskChanged }: { detail: TaskDe
   </div>;
 }
 
+
+function mergeUniqueEvents(first: TimelineEvent[], second: TimelineEvent[]) {
+  const merged = new Map<string, TimelineEvent>();
+  for (const event of [...first, ...second]) if (!merged.has(event.id)) merged.set(event.id, event);
+  return [...merged.values()].sort((left, right) => left.occurredAt.localeCompare(right.occurredAt) || left.id.localeCompare(right.id));
+}
 
 function subagentChildTaskId(event: TimelineEvent) { if (!event.payload || typeof event.payload !== 'object' || Array.isArray(event.payload)) return ''; const value = (event.payload as Record<string, unknown>).childTaskId; return typeof value === 'string' ? value.trim() : ''; }
 function conversationName(task: Task) { return task.title?.trim() || task.agentName?.trim() || generatedConversationName(task.id); }

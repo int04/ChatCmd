@@ -27,7 +27,7 @@ export interface ChatGptRequest { id: Id; taskId?: Id; turnId: Id; agentId: Id; 
 export interface ChatGptBridge { taskId: Id; conversationId: string; conversationUrl: string; model: string; taskStatus?: string; activeRequestId?: Id; activeStatus?: string; activeSubmittedContent?: string }
 export interface SubagentRun { id: Id; parentTurnId: Id; taskId?: Id; name: string; request: string; status: string; createdAtUtc: string; updatedAtUtc: string; completedAtUtc?: string }
 export interface SubagentApproval { activityId: Id; childTaskId: Id; subagentId: Id; agentName: string; parentTurnId: Id; childTurnId?: Id; tool?: string; input?: unknown; createdAtUtc: string }
-export interface TaskDetail { task: Task; turns?: TaskTurn[]; events?: TimelineEvent[]; subagents?: SubagentRun[]; subagentApprovals?: SubagentApproval[]; executionMode?: CommandExecutionMode; executionModeSourceTaskId?: Id }
+export interface TaskDetail { task: Task; turns?: TaskTurn[]; events?: TimelineEvent[]; nextCursor?: string; subagents?: SubagentRun[]; subagentApprovals?: SubagentApproval[]; executionMode?: CommandExecutionMode; executionModeSourceTaskId?: Id }
 export interface TaskTurn { id: Id; generation?: number; actor?: string; status?: string; startedAtUtc?: string; completedAtUtc?: string; events?: TimelineEvent[] }
 export interface Session { kind: 'mcp' | 'terminal'; id: Id; taskId?: Id; turnId?: Id; shell?: string; processId?: number; status: string; workingDirectory?: string; createdAtUtc?: string; updatedAtUtc?: string; closedAtUtc?: string; replayCursor?: string; cpuPercent?: number; memoryBytes?: number; busy?: boolean; lastSequence?: number }
 export interface SessionDetail { session: Session; events: TimelineEvent[]; nextCursor?: string; truncated?: boolean }
