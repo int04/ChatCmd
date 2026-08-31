@@ -29,6 +29,7 @@ Push-Location (Join-Path $root 'web')
 try {
     npm ci
     npm run build
+    npm run obfuscate -- dist
     $sourceMaps = Get-ChildItem -Path (Join-Path $root 'web/dist') -Recurse -File -Filter '*.map'
     if ($sourceMaps) {
         throw "Source map files were generated in web/dist: $($sourceMaps.FullName -join ', ')"
@@ -65,6 +66,14 @@ foreach ($entry in $targets) {
 
     Copy-Item $binary (Join-Path $output 'ChatCMD.exe')
     Copy-Item $extensionSource $extensionOutput -Recurse -Force
+
+    Push-Location (Join-Path $root 'web')
+    try {
+        npm run obfuscate -- $extensionOutput
+    }
+    finally {
+        Pop-Location
+    }
 
     $zip = "$output.zip"
     if (Test-Path $zip) { Remove-Item $zip -Force }

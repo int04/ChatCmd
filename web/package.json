@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "obfuscate": "node scripts/obfuscate-build.mjs",
     "preview": "vite preview",
     "lint": "eslint . --max-warnings=0",
     "test": "vitest"
@@ -38,6 +39,7 @@
     "eslint-plugin-react-hooks": "latest",
     "eslint-plugin-react-refresh": "latest",
     "globals": "latest",
+    "javascript-obfuscator": "^5.6.0",
     "jsdom": "latest",
     "vitest": "latest"
   }

@@ -29,6 +29,7 @@ fi
 cd "$ROOT/web"
 npm ci
 npm run build
+npm run obfuscate -- dist
 if find "$ROOT/web/dist" -type f -name '*.map' -print -quit | grep -q .; then
   echo "Source map files were generated in web/dist" >&2
   exit 1
@@ -79,6 +80,9 @@ package_target() {
   chmod +x "$macos/ChatCMD"
   mkdir -p "$output/chatgpt-extension"
   cp -R "$EXTENSION_SOURCE/." "$output/chatgpt-extension/"
+  cd "$ROOT/web"
+  npm run obfuscate -- "$output/chatgpt-extension"
+  cd "$ROOT"
   create_icns "$resources/ChatCMD.icns"
 
   cat > "$contents/Info.plist" <<EOF
