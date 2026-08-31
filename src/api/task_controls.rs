@@ -8,6 +8,7 @@ use chatcmd_core::{
 use chatcmd_runtime::{OperationContext, ShellSignal};
 use serde::Deserialize;
 
+use super::task_views::task_detail;
 use super::*;
 
 #[derive(Deserialize)]

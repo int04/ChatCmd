@@ -11,6 +11,8 @@ mod desktop_tray;
 mod embedded_web;
 mod log_helper;
 mod runtime_host;
+mod updater;
+mod version;
 mod websocket;
 
 use std::{

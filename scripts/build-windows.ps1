@@ -1,9 +1,16 @@
+param(
+    [string]$Version = $env:CHATCMD_BUILD_VERSION
+)
+
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
-$version = Get-Date -Format 'yy.MM.dd.HHmm'
+$version = if ([string]::IsNullOrWhiteSpace($Version)) { Get-Date -Format 'yy.MM.dd.HHmm' } else { $Version.Trim() }
+if ($version -notmatch '^[0-9A-Za-z][0-9A-Za-z._+\-]{0,79}$') {
+    throw "Invalid ChatCMD version: $version"
+}
 $env:CHATCMD_BUILD_VERSION = $version
 $extensionSource = Join-Path $root 'chatgpt-extension'
 

@@ -4,7 +4,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-VERSION="$(date '+%y.%m.%d.%H%M')"
+VERSION="${CHATCMD_BUILD_VERSION:-$(date '+%y.%m.%d.%H%M')}"
+if [[ ! "$VERSION" =~ ^[0-9A-Za-z][0-9A-Za-z._+-]{0,79}$ ]]; then
+  echo "Invalid ChatCMD version: $VERSION" >&2
+  exit 1
+fi
 export CHATCMD_BUILD_VERSION="$VERSION"
 ICON_SOURCE="$ROOT/assets/icons/logo-icon-master-1024.png"
 ICONSET="$ROOT/target/chatcmd.iconset"

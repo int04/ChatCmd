@@ -31,7 +31,7 @@ hkdf = "0.12"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 notify = "8"
 p256 = { version = "0.13", features = ["ecdh"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream", "json"] }
 rust-embed = { version = "8", optional = true, features = ["compression"] }
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
@@ -44,6 +44,7 @@ tower-http = { version = "0.6", features = ["fs", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4", "serde"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"

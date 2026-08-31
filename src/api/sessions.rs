@@ -10,7 +10,8 @@ use serde_json::{Value, json};
 use sqlx::Row as _;
 use sysinfo::{Pid, System};
 
-use super::{Problem, db_problem, iso_ms, not_found, now_ms, runtime_problem, timeline_row};
+use super::task_views::timeline_row;
+use super::{Problem, db_problem, iso_ms, not_found, now_ms, runtime_problem};
 use crate::websocket::AppState;
 
 pub(super) async fn sessions(State(state): State<Arc<AppState>>) -> Result<Json<Value>, Problem> {
