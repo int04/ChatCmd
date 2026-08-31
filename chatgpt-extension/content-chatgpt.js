@@ -548,24 +548,21 @@ function renderReturnToChatCmd(enabled) {
     boxShadow: '0 0 0 4px rgba(134,239,172,.16),0 0 16px rgba(134,239,172,.8)'
   });
 
-  const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-  if (!reducedMotion) {
-    button.animate([
-      { boxShadow: '0 18px 46px rgba(76,29,149,.42),0 0 0 0 rgba(139,92,246,.34)' },
-      { boxShadow: '0 20px 54px rgba(76,29,149,.52),0 0 0 12px rgba(139,92,246,0)' }
-    ], { duration: 1900, iterations: Infinity, easing: 'ease-out' });
-    icon.animate([
-      { transform: 'translateX(0) rotate(0deg)' },
-      { transform: 'translateX(-3px) rotate(-8deg)' },
-      { transform: 'translateX(0) rotate(0deg)' }
-    ], { duration: 1450, iterations: Infinity, easing: 'ease-in-out' });
-    dot.animate([{ opacity: .55 }, { opacity: 1 }, { opacity: .55 }], { duration: 1100, iterations: Infinity, easing: 'ease-in-out' });
-    button.animate([
-      { opacity: 0, transform: 'translateX(26px) scale(.9)' },
-      { opacity: 1, transform: 'translateX(0) scale(1.04)' },
-      { opacity: 1, transform: 'translateX(0) scale(1)' }
-    ], { duration: 520, easing: 'cubic-bezier(.16,1,.3,1)' });
-  }
+  button.animate([
+    { boxShadow: '0 18px 46px rgba(76,29,149,.42),0 0 0 0 rgba(139,92,246,.34)' },
+    { boxShadow: '0 20px 54px rgba(76,29,149,.52),0 0 0 12px rgba(139,92,246,0)' }
+  ], { duration: 1900, iterations: Infinity, easing: 'ease-out' });
+  icon.animate([
+    { transform: 'translateX(0) rotate(0deg)' },
+    { transform: 'translateX(-3px) rotate(-8deg)' },
+    { transform: 'translateX(0) rotate(0deg)' }
+  ], { duration: 1450, iterations: Infinity, easing: 'ease-in-out' });
+  dot.animate([{ opacity: .55 }, { opacity: 1 }, { opacity: .55 }], { duration: 1100, iterations: Infinity, easing: 'ease-in-out' });
+  button.animate([
+    { opacity: 0, transform: 'translateX(26px) scale(.9)' },
+    { opacity: 1, transform: 'translateX(0) scale(1.04)' },
+    { opacity: 1, transform: 'translateX(0) scale(1)' }
+  ], { duration: 520, easing: 'cubic-bezier(.16,1,.3,1)' });
 
   button.addEventListener('mouseenter', () => {
     button.style.transform = 'translateY(-4px) scale(1.035)';

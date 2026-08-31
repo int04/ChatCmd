@@ -128,7 +128,7 @@ export function AgentsPage() {
               <td><div className="agent-identity"><span className="agent-avatar"><KeyRound /></span><span><strong>{agent.name}</strong><code>{agent.id}</code></span></div></td>
               <td><StatusBadge state={agent.enabled ? 'ready' : 'stopped'} label={agent.enabled ? tr('Enabled') : tr('Disabled')} /></td>
               <td><div className="agent-tool-access"><strong>{tr('{count} selected', { count: agent.toolIds.length })}</strong>{agent.presetId && <small>{tr('Preset')}: {agent.presetId}</small>}</div></td>
-              <td><button className="button secondary compact agent-plugin-button" onClick={() => setPluginAgent(agent)}><Link2 />{tr('Lấy link Plugin')}</button></td>
+              <td><button className="button secondary compact agent-plugin-button" onClick={() => setPluginAgent(agent)}><Link2 />{tr('Get Plugin link')}</button></td>
               <td><div className="agents-table-actions"><button className="button secondary compact" onClick={() => setEditor(agent)}><Pencil />{tr('Edit')}</button><button className="button secondary compact" onClick={() => void rotate(agent)}><RotateCw />{tr('Rotate token')}</button><button className="icon-button danger-icon" aria-label={tr('Delete {name}', { name: agent.name })} onClick={() => void remove(agent)}><Trash2 /></button></div></td>
             </tr>)}</tbody>
           </table>
@@ -147,7 +147,7 @@ export function AgentsPage() {
           </div>
           <button type="button" className={`button compact ${managedTunnelActive ? 'secondary' : 'primary'}`} disabled={managedTunnel.loading || tunnelConnectionBusy || !managedTunnel.data} aria-label={managedTunnelActive ? tr('Stop ChatCMD Tunnel') : tr('Connect ChatCMD Tunnel')} onClick={() => void (managedTunnelActive ? disconnectTunnel() : connectTunnel())}>
             {tunnelConnectionBusy || managedTunnelState === 'connecting' ? <LoaderCircle className="spin" aria-hidden="true" /> : managedTunnelActive ? <Power aria-hidden="true" /> : <PlugZap aria-hidden="true" />}
-            {managedTunnelState === 'connecting' ? tr('Connecting…') : tunnelConnectionBusy ? tr('Stopping…') : managedTunnelActive ? tr('Ngừng kết nối') : tr('Kết nối')}
+            {managedTunnelState === 'connecting' ? tr('Connecting…') : tunnelConnectionBusy ? tr('Stopping…') : managedTunnelActive ? tr('Disconnect') : tr('Connect')}
           </button>
         </div>
         <div className="custom-tunnel-heading"><div><strong>{tr('Custom tunnels')}</strong><small>{tr('Cloudflare Tunnel, domain, or public IP/port configured by you.')}</small></div><span aria-label={tr('{count} custom tunnels', { count: tunnels.data?.length ?? 0 })}>{tunnels.data?.length ?? 0}</span></div>
