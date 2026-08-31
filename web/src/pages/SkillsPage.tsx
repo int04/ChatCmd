@@ -14,6 +14,8 @@ export function SkillsPage() {
   const [installOpen, setInstallOpen] = useState(false);
   const [optionsSkill, setOptionsSkill] = useState<UserSkill>();
   const [deleteSkill, setDeleteSkill] = useState<UserSkill>();
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<'all' | 'enabled' | 'disabled'>('all');
 
   const load = useCallback(async () => {
     setLoadState('loading'); setError(undefined);
@@ -22,6 +24,17 @@ export function SkillsPage() {
   }, []);
   useEffect(() => { void load(); }, [load]);
   const globalSkills = useMemo(() => skills.filter((skill) => skill.source === 'global'), [skills]);
+  const enabledCount = useMemo(() => globalSkills.filter((skill) => skill.enabled).length, [globalSkills]);
+  const configurableCount = useMemo(() => globalSkills.filter((skill) => skill.options?.length).length, [globalSkills]);
+  const visibleSkills = useMemo(() => {
+    const normalizedQuery = query.trim().toLocaleLowerCase();
+    return globalSkills.filter((skill) => {
+      if (filter === 'enabled' && !skill.enabled) return false;
+      if (filter === 'disabled' && skill.enabled) return false;
+      if (!normalizedQuery) return true;
+      return [skill.title, skill.description, skill.sourceUrl].some((value) => value?.toLocaleLowerCase().includes(normalizedQuery));
+    });
+  }, [filter, globalSkills, query]);
 
   function replaceSkill(next: UserSkill) {
     setSkills((current) => current.map((skill) => skill.id === next.id ? next : skill));
@@ -67,24 +80,40 @@ export function SkillsPage() {
     <header className="skills-heading page-heading">
       <span className="eyebrow"><Blocks /> {tr('AGENT SKILLS')}</span>
       <div className="skills-title-row"><div><h1>{tr('Your skills')}</h1><p>{tr('Manage global skills that Agents can choose while handling tasks.')}</p></div><button className="button primary skills-add" onClick={() => setInstallOpen(true)}><Plus /> {tr('Add skill')}</button></div>
+      {loadState === 'ready' && <div className="skills-stats" aria-label={tr('Skills overview')}>
+        <span><strong>{globalSkills.length}</strong>{tr('Total skills')}</span>
+        <span><strong>{enabledCount}</strong>{tr('Enabled')}</span>
+        <span><strong>{configurableCount}</strong>{tr('Configurable')}</span>
+      </div>}
     </header>
 
     {error && <div className="skills-error" role="alert"><CircleAlert /><span>{error}</span>{loadState === 'error' && <button onClick={() => void load()}><RefreshCw /> {tr('Retry')}</button>}<button className="plain-icon" aria-label={tr('Close notification')} onClick={() => setError(undefined)}><X /></button></div>}
 
-    {loadState === 'loading' ? <div className="skills-skeleton" role="status" aria-live="polite" aria-busy="true" aria-label={tr('Loading')}><span /><span /><span /></div>
-      : loadState === 'ready' && !globalSkills.length ? <section className="skills-empty"><span><Blocks /></span><h2>{tr('No global skills yet')}</h2><p>{tr('Install skills from GitHub to give Agents specialized guidance and workflows.')}</p><button className="button primary" onClick={() => setInstallOpen(true)}><GitFork /> {tr('Add from GitHub')}</button></section>
-        : <div className="skills-list" aria-label={tr('Global skills list')}>{globalSkills.map((skill) => {
-          const toggling = busy === `toggle:${skill.id}`;
-          return <article className={`skill-card ${skill.enabled ? 'enabled' : 'disabled'}`} key={skill.id}>
-            <SkillIcon url={skill.iconUrl} />
-            <div className="skill-copy"><div className="skill-title"><h2>{skill.title}</h2><span>{tr('Global')}</span></div><p>{skill.description || tr('This skill has no description yet.')}</p>{skill.sourceUrl && <a href={skill.sourceUrl} target="_blank" rel="noreferrer"><GitFork />{shortRepository(skill.sourceUrl)}<ExternalLink /></a>}</div>
-            <div className="skill-controls">
-              <label className="agent-switch"><span className="sr-only">{tr('Enable or disable skill {name}', { name: skill.title })}</span><input type="checkbox" role="switch" aria-checked={skill.enabled} checked={skill.enabled} disabled={busy !== undefined} onChange={() => void toggle(skill)} /><i>{toggling && <LoaderCircle className="spin" />}</i></label>
-              {!!skill.options?.length && <button className="plain-icon" aria-label={tr('Configure skill {name}', { name: skill.title })} disabled={busy !== undefined} onClick={() => setOptionsSkill(skill)}><Settings2 /></button>}
-              {skill.canDelete !== false && <button className="plain-icon danger-icon" aria-label={tr('Delete skill {name}', { name: skill.title })} disabled={busy !== undefined} onClick={() => setDeleteSkill(skill)}><Trash2 /></button>}
+    {loadState === 'loading' ? <div className="skills-skeleton" role="status" aria-live="polite" aria-busy="true" aria-label={tr('Loading')}><span /><span /><span /><span /></div>
+      : loadState === 'ready' && !globalSkills.length ? <section className="skills-empty"><span><Blocks /></span><h2>{tr('No global skills yet')}</h2><p>{tr('Install skills from GitHub to give Agents specialized guidance and workflows.')}</p><small>{tr('Skills can add focused instructions, repeatable workflows, and tool-specific expertise for Agents.')}</small><button className="button primary" onClick={() => setInstallOpen(true)}><GitFork /> {tr('Add from GitHub')}</button></section>
+        : <>
+          <div className="skills-toolbar">
+            <label className="skills-search"><Search /><span className="sr-only">{tr('Search skills')}</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={tr('Search skills…')} /></label>
+            <div className="skills-filters" role="group" aria-label={tr('Filter skills')}>
+              {(['all', 'enabled', 'disabled'] as const).map((value) => <button key={value} type="button" className={filter === value ? 'active' : ''} aria-pressed={filter === value} onClick={() => setFilter(value)}>{value === 'all' ? tr('All') : value === 'enabled' ? tr('Enabled') : tr('Disabled')}</button>)}
             </div>
-          </article>;
-        })}</div>}
+          </div>
+          {visibleSkills.length ? <div className="skills-list" aria-label={tr('Global skills list')}>{visibleSkills.map((skill) => {
+            const toggling = busy === `toggle:${skill.id}`;
+            return <article className={`skill-card ${skill.enabled ? 'enabled' : 'disabled'}`} key={skill.id}>
+              <header className="skill-card-header"><SkillIcon url={skill.iconUrl} /><div className="skill-copy"><div className="skill-title"><h2>{skill.title}</h2><span>{tr('Global')}</span></div><p>{skill.description || tr('This skill has no description yet.')}</p></div></header>
+              <div className="skill-status-row"><span className={`skill-state ${skill.enabled ? 'enabled' : 'disabled'}`}><i />{skill.enabled ? tr('Enabled') : tr('Disabled')}</span>{!!skill.options?.length && <span className="skill-options-count"><Settings2 />{tr('{count} options', { count: skill.options.length })}</span>}</div>
+              <footer className="skill-card-footer">
+                <div className="skill-source">{skill.sourceUrl ? <a href={skill.sourceUrl} target="_blank" rel="noreferrer"><GitFork /><span>{shortRepository(skill.sourceUrl)}</span><ExternalLink /></a> : <span><Blocks />{tr('Local skill')}</span>}</div>
+                <div className="skill-controls">
+                  {!!skill.options?.length && <button className="skill-configure" disabled={busy !== undefined} onClick={() => setOptionsSkill(skill)}><Settings2 />{tr('Configure')}</button>}
+                  {skill.canDelete !== false && <button className="plain-icon danger-icon" aria-label={tr('Delete skill {name}', { name: skill.title })} disabled={busy !== undefined} onClick={() => setDeleteSkill(skill)}><Trash2 /></button>}
+                  <label className="skill-toggle-control"><span>{skill.enabled ? tr('On') : tr('Off')}</span><span className="agent-switch"><span className="sr-only">{tr('Enable or disable skill {name}', { name: skill.title })}</span><input type="checkbox" role="switch" aria-checked={skill.enabled} checked={skill.enabled} disabled={busy !== undefined} onChange={() => void toggle(skill)} /><i>{toggling && <LoaderCircle className="spin" />}</i></span></label>
+                </div>
+              </footer>
+            </article>;
+          })}</div> : <section className="skills-no-results"><Search /><h2>{tr('No matching skills')}</h2><p>{tr('Try another search term or change the current filter.')}</p><button type="button" className="button secondary" onClick={() => { setQuery(''); setFilter('all'); }}>{tr('Clear filters')}</button></section>}
+        </>}
 
     {installOpen && <InstallSkillModal busy={busy === 'preview' ? 'preview' : busy === 'install' ? 'install' : undefined} onPreview={preview} onInstall={install} onClose={() => setInstallOpen(false)} />}
     {optionsSkill && <SkillOptionsModal skill={optionsSkill} busy={busy === `options:${optionsSkill.id}`} onSave={saveOptions} onClose={() => setOptionsSkill(undefined)} />}
