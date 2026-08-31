@@ -1,4 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('../apiCrypto', () => ({
+  encryptedApiFetch: (path: string, init: RequestInit) => {
+    const headers = new Headers(init.headers);
+    headers.set('X-ChatCmdClient', 'local-ui');
+    return fetch(path, { ...init, headers });
+  },
+  decodeEncryptedApiResponse: <T,>(_path: string, _method: string, response: Response) => response.json() as Promise<T>,
+}));
+
 import { api } from '../api';
 
 describe('local API client', () => {
@@ -43,5 +53,25 @@ describe('local API client', () => {
     expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: 'PUT' });
     expect(fetchMock.mock.calls[2]?.[1]).toMatchObject({ method: 'POST', body: JSON.stringify({ turnId: 'turn-1', reason: 'Dừng để đổi cách làm' }) });
     expect(fetchMock.mock.calls[3]?.[1]).toMatchObject({ method: 'POST' });
+  });
+
+  it('previews repositories and sends selected skill paths for installation', async () => {
+    const fetchMock = vi.fn((path: string | URL | Request, _init?: RequestInit) => {
+      const payload = String(path).endsWith('/preview')
+        ? { repositoryUrl: 'https://github.com/example/skills', skills: [], skippedInvalid: 0 }
+        : { skills: [] };
+      return Promise.resolve(new Response(JSON.stringify(payload), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await api.previewSkills('https://github.com/example/skills');
+    await api.installSkills('https://github.com/example/skills', ['skills/one', 'skills/two']);
+
+    expect(fetchMock.mock.calls.map(([path]) => String(path))).toEqual([
+      '/api/local/skills/preview',
+      '/api/local/skills/install',
+    ]);
+    expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({ method: 'POST', body: JSON.stringify({ repositoryUrl: 'https://github.com/example/skills' }) });
+    expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({ method: 'POST', body: JSON.stringify({ repositoryUrl: 'https://github.com/example/skills', skillPaths: ['skills/one', 'skills/two'] }) });
   });
 });

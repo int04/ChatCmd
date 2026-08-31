@@ -14,5 +14,8 @@ pub use policy::{
 };
 pub use services::{GitService, ProcessService};
 pub use shell::ShellRuntime;
-pub use skill_service::{ManagedSkill, SkillOption, SkillOptionChoice, SkillService};
+pub use skill_service::{
+    ManagedSkill, SkillInstallCandidate, SkillInstallPreview, SkillOption, SkillOptionChoice,
+    SkillService,
+};
 pub use types::*;

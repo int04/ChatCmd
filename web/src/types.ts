@@ -42,6 +42,9 @@ export type SkillOptionValue = string | number | boolean;
 export interface SkillOptionChoice { value: string; label: string }
 export interface UserSkillOption { key: string; label: string; description?: string | null; type: 'select' | 'boolean' | 'text' | 'number'; value: SkillOptionValue; choices?: SkillOptionChoice[] | null }
 export interface UserSkill { id: Id; title: string; description?: string | null; iconUrl?: string | null; source: 'global' | 'workspace'; sourceUrl?: string | null; enabled: boolean; canDelete?: boolean; options: UserSkillOption[] }
+export interface SkillInstallCandidate { name: string; title: string; description: string; path: string; installed: boolean }
+export interface SkillInstallPreview { repositoryUrl: string; skills: SkillInstallCandidate[]; skippedInvalid: number }
+export interface SkillInstallResult { skills: UserSkill[] }
 export interface Skill { id: Id; name: string; source?: string; enabled: boolean; description?: string; content?: string }
 export interface LocalSettings { bindAddress: string; port: number; mcpEndpoint: string; databasePath: string; databaseState?: HealthState; executionMode: CommandExecutionMode; approveNewConversations: boolean; terminalExecutable: string; taskConcurrency: number; sessionConcurrency: number; theme: 'system' | 'light' | 'dark'; language: 'en' | 'vi'; sound?: boolean; newAgentSound: boolean; finishedTaskSound: boolean; dataRetention: '1h' | '5h' | '10h' | '1d' | '3d' | '5d' | '10d' | 'off' }
 export interface ProblemDetails { type?: string; title?: string; status?: number; detail?: string; message?: string; code?: string; instance?: string; errors?: Record<string, string[]> }

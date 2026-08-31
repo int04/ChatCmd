@@ -1,8 +1,8 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Blocks, Check, CircleAlert, ExternalLink, GitFork, LoaderCircle, Plus, RefreshCw, Settings2, ShieldAlert, Trash2, X } from 'lucide-react';
+import { ArrowLeft, Blocks, Check, CircleAlert, ExternalLink, GitFork, LoaderCircle, Plus, RefreshCw, Search, Settings2, ShieldAlert, Trash2, X } from 'lucide-react';
 import { api } from '../api';
 import { tr } from '../i18n';
-import type { SkillOptionValue, UserSkill, UserSkillOption } from '../types';
+import type { SkillInstallPreview, SkillOptionValue, UserSkill, UserSkillOption } from '../types';
 
 type LoadState = 'loading' | 'ready' | 'error';
 
@@ -33,10 +33,21 @@ export function SkillsPage() {
     catch (reason) { setError(message(reason, tr('Could not change skill status.'))); }
     finally { setBusy(undefined); }
   }
-  async function install(repositoryUrl: string) {
+  async function preview(repositoryUrl: string) {
+    setBusy('preview'); setError(undefined);
+    try { return await api.previewSkills(repositoryUrl); }
+    catch (reason) { throw new Error(message(reason, tr('Could not scan skills from GitHub.')), { cause: reason }); }
+    finally { setBusy(undefined); }
+  }
+  async function install(repositoryUrl: string, skillPaths: string[]) {
     setBusy('install'); setError(undefined);
-    try { const installed = await api.installSkill(repositoryUrl); setSkills((current) => [installed, ...current.filter((skill) => skill.id !== installed.id)]); setInstallOpen(false); }
-    catch (reason) { throw new Error(message(reason, tr('Could not install skill from GitHub.')), { cause: reason }); }
+    try {
+      const { skills: installed } = await api.installSkills(repositoryUrl, skillPaths);
+      const installedIds = new Set(installed.map((skill) => skill.id));
+      setSkills((current) => [...installed, ...current.filter((skill) => !installedIds.has(skill.id))]);
+      setInstallOpen(false);
+    }
+    catch (reason) { throw new Error(message(reason, tr('Could not install skills from GitHub.')), { cause: reason }); }
     finally { setBusy(undefined); }
   }
   async function saveOptions(skill: UserSkill, options: Record<string, SkillOptionValue>) {
@@ -75,21 +86,112 @@ export function SkillsPage() {
           </article>;
         })}</div>}
 
-    {installOpen && <InstallSkillModal busy={busy === 'install'} onInstall={install} onClose={() => setInstallOpen(false)} />}
+    {installOpen && <InstallSkillModal busy={busy === 'preview' ? 'preview' : busy === 'install' ? 'install' : undefined} onPreview={preview} onInstall={install} onClose={() => setInstallOpen(false)} />}
     {optionsSkill && <SkillOptionsModal skill={optionsSkill} busy={busy === `options:${optionsSkill.id}`} onSave={saveOptions} onClose={() => setOptionsSkill(undefined)} />}
     {deleteSkill && <ConfirmDeleteModal skill={deleteSkill} busy={busy === `delete:${deleteSkill.id}`} onConfirm={() => void remove(deleteSkill)} onClose={() => setDeleteSkill(undefined)} />}
   </div>;
 }
 
-function InstallSkillModal({ busy, onInstall, onClose }: { busy: boolean; onInstall: (url: string) => Promise<void>; onClose: () => void }) {
-  const [url, setUrl] = useState(''); const [error, setError] = useState<string>();
-  const valid = /^https:\/\/github\.com\/[^/]+\/[^/]+(?:\/.*)?$/i.test(url.trim());
-  const dialogRef = useDialogFocus<HTMLFormElement>(onClose, busy);
-  async function submit(event: FormEvent) { event.preventDefault(); if (!valid || busy) return; setError(undefined); try { await onInstall(url.trim()); } catch (reason) { setError(message(reason, tr('Could not install skill from GitHub.'))); } }
-  return <div className="skill-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}><form ref={dialogRef} className="skill-modal" role="dialog" aria-modal="true" aria-labelledby="install-skill-title" onSubmit={(event) => void submit(event)}>
-    <header><span><GitFork /></span><div><h2 id="install-skill-title">{tr('Add from GitHub')}</h2><p>{tr('Paste the GitHub repository link containing a valid SKILL.md structure.')}</p></div><button type="button" className="icon-button" aria-label={tr('Close')} disabled={busy} onClick={onClose}><X /></button></header>
-    <div className="skill-modal-body"><label htmlFor="skill-repository">{tr('GitHub repository')}</label><input id="skill-repository" autoFocus type="url" inputMode="url" spellCheck={false} value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://github.com/owner/repository" aria-describedby="repository-hint" /><small id="repository-hint">{tr('ChatCMD will download and validate the skill structure before installing it globally.')}</small><div className="skill-security"><ShieldAlert /><span><strong>{tr('Only install sources you trust.')}</strong> {tr('Skills may contain instructions and scripts that Agents will execute.')}</span></div>{error && <p className="skill-form-error" role="alert">{error}</p>}</div>
-    <footer><button type="button" className="button secondary" disabled={busy} onClick={onClose}>{tr('Cancel')}</button><button className="button primary" disabled={!valid || busy}>{busy ? <LoaderCircle className="spin" /> : <Plus />} {tr('Install skill')}</button></footer>
+function InstallSkillModal({ busy, onPreview, onInstall, onClose }: {
+  busy?: 'preview' | 'install';
+  onPreview: (url: string) => Promise<SkillInstallPreview>;
+  onInstall: (url: string, paths: string[]) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [url, setUrl] = useState('');
+  const [preview, setPreview] = useState<SkillInstallPreview>();
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(() => new Set());
+  const [touched, setTouched] = useState(false);
+  const [error, setError] = useState<string>();
+  const normalizedUrl = normalizeGitHubRepositoryUrl(url);
+  const isBusy = busy !== undefined;
+  const availableSkills = preview?.skills.filter((skill) => !skill.installed) ?? [];
+  const installedCount = (preview?.skills.length ?? 0) - availableSkills.length;
+  const allSelected = availableSkills.length > 0 && availableSkills.every((skill) => selectedPaths.has(skill.path));
+  const dialogRef = useDialogFocus<HTMLFormElement>(onClose, isBusy);
+  const repositoryInputRef = useRef<HTMLInputElement>(null);
+  const selectionHeadingRef = useRef<HTMLHeadingElement>(null);
+
+  useEffect(() => {
+    if (!preview) return;
+    const frame = window.requestAnimationFrame(() => selectionHeadingRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [preview]);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (isBusy) return;
+    setError(undefined);
+    if (!preview) {
+      setTouched(true);
+      if (!normalizedUrl) return;
+      try {
+        const result = await onPreview(normalizedUrl);
+        setPreview(result);
+        setUrl(result.repositoryUrl);
+        setSelectedPaths(new Set(result.skills.filter((skill) => !skill.installed).map((skill) => skill.path)));
+      } catch (reason) {
+        setError(message(reason, tr('Could not scan skills from GitHub.')));
+      }
+      return;
+    }
+    if (!selectedPaths.size) return;
+    try { await onInstall(preview.repositoryUrl, [...selectedPaths]); }
+    catch (reason) { setError(message(reason, tr('Could not install skills from GitHub.'))); }
+  }
+
+  function changeRepository() {
+    setPreview(undefined);
+    setSelectedPaths(new Set());
+    setError(undefined);
+    setTouched(false);
+    window.requestAnimationFrame(() => repositoryInputRef.current?.focus());
+  }
+
+  function toggleAll() {
+    setSelectedPaths(allSelected ? new Set() : new Set(availableSkills.map((skill) => skill.path)));
+  }
+
+  function togglePath(path: string, selected: boolean) {
+    setSelectedPaths((current) => {
+      const next = new Set(current);
+      if (selected) next.add(path); else next.delete(path);
+      return next;
+    });
+  }
+
+  return <div className="skill-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !isBusy) onClose(); }}><form ref={dialogRef} className={`skill-modal ${preview ? 'skill-install-review' : ''}`} role="dialog" aria-modal="true" aria-labelledby="install-skill-title" onSubmit={(event) => void submit(event)}>
+    <header><span><GitFork /></span><div><h2 id="install-skill-title">{preview ? tr('Choose skills to install') : tr('Add from GitHub')}</h2><p>{preview ? tr('Review the skills found in this repository before installing them globally.') : tr('Paste a GitHub repository or skill-directory link. Repositories may contain one or many skills.')}</p></div><button type="button" className="icon-button" aria-label={tr('Close')} disabled={isBusy} onClick={onClose}><X /></button></header>
+    {!preview ? <div className="skill-modal-body">
+      <label htmlFor="skill-repository">{tr('GitHub repository')}</label>
+      <input ref={repositoryInputRef} id="skill-repository" autoFocus type="text" inputMode="url" spellCheck={false} value={url} onBlur={() => setTouched(true)} onChange={(event) => { setUrl(event.target.value); setError(undefined); }} placeholder="https://github.com/owner/repository" aria-invalid={touched && !!url && !normalizedUrl} aria-describedby={touched && url && !normalizedUrl ? 'repository-hint repository-error' : 'repository-hint'} />
+      <small id="repository-hint">{tr('ChatCMD will scan the repository and let you choose which valid skills to install.')}</small>
+      {touched && url && !normalizedUrl && <p id="repository-error" className="skill-form-error" role="alert">{tr('Enter an HTTPS github.com repository or /tree/{ref}/{path} URL.')}</p>}
+      <div className="skill-security"><ShieldAlert /><span><strong>{tr('Only install sources you trust.')}</strong> {tr('Skills may contain instructions and scripts that Agents will execute.')}</span></div>
+      {error && <p className="skill-form-error" role="alert">{error}</p>}
+    </div> : <div className="skill-modal-body skill-install-body">
+      <div className="skill-repository-summary"><GitFork /><div><strong>{shortRepository(preview.repositoryUrl)}</strong><code>{preview.repositoryUrl}</code></div><button type="button" className="button secondary" disabled={isBusy} onClick={changeRepository}>{tr('Change')}</button></div>
+      <div className="skill-selection-heading"><div><h3 ref={selectionHeadingRef} tabIndex={-1}>{tr('{count} skills found', { count: preview.skills.length })}</h3><p role="status" aria-live="polite">{tr('{selected} of {available} available selected', { selected: selectedPaths.size, available: availableSkills.length })}</p></div>{availableSkills.length > 0 && <button type="button" className="skill-selection-toggle" disabled={isBusy} onClick={toggleAll}>{allSelected ? tr('Clear all') : tr('Select all')}</button>}</div>
+      <fieldset className="skill-candidate-list" disabled={isBusy}><legend className="sr-only">{tr('Skills available to install')}</legend>{preview.skills.map((skill) => {
+        const selected = selectedPaths.has(skill.path);
+        return <label className={`skill-candidate ${skill.installed ? 'installed' : ''}`} key={skill.path}>
+          <input type="checkbox" checked={selected} disabled={skill.installed || isBusy} onChange={(event) => togglePath(skill.path, event.target.checked)} />
+          <span className="skill-candidate-check" aria-hidden="true">{selected && <Check />}</span>
+          <span className="skill-candidate-copy"><span><strong>{skill.title}</strong>{skill.installed && <em>{tr('Installed')}</em>}</span><small>{skill.description}</small><code>{skill.path}</code></span>
+        </label>;
+      })}</fieldset>
+      {installedCount > 0 && <p className="skill-install-note">{tr('{count} skills are already installed and were left unselected.', { count: installedCount })}</p>}
+      {preview.skippedInvalid > 0 && <p className="skill-install-note warning"><CircleAlert />{tr('{count} invalid skill folders were skipped.', { count: preview.skippedInvalid })}</p>}
+      <div className="skill-security"><ShieldAlert /><span><strong>{tr('Only install sources you trust.')}</strong> {tr('Skills may contain instructions and scripts that Agents will execute.')}</span></div>
+      {error && <p className="skill-form-error" role="alert">{error}</p>}
+    </div>}
+    <footer>{preview ? <>
+      <button type="button" className="button secondary" disabled={isBusy} onClick={changeRepository}><ArrowLeft /> {tr('Back')}</button>
+      <button className="button primary" disabled={!selectedPaths.size || isBusy}>{busy === 'install' ? <LoaderCircle className="spin" /> : <Plus />} {busy === 'install' ? tr('Installing…') : selectedPaths.size === 1 ? tr('Install 1 skill') : tr('Install {count} skills', { count: selectedPaths.size })}</button>
+    </> : <>
+      <button type="button" className="button secondary" disabled={isBusy} onClick={onClose}>{tr('Cancel')}</button>
+      <button className="button primary" disabled={!normalizedUrl || isBusy}>{busy === 'preview' ? <LoaderCircle className="spin" /> : <Search />} {busy === 'preview' ? tr('Scanning repository…') : tr('Find skills')}</button>
+    </>}</footer>
   </form></div>;
 }
 
@@ -138,5 +240,16 @@ function useDialogFocus<T extends HTMLElement>(onClose: () => void, busy: boolea
 }
 function focusableElements(root: HTMLElement | null) { return root ? Array.from(root.querySelectorAll<HTMLElement>('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),a[href],[tabindex]:not([tabindex="-1"])')).filter((element) => !element.hidden && element.getClientRects().length > 0) : []; }
 function safeSkillIconUrl(value?: string | null) { if (!value) return null; if (/^(data:image\/|blob:)/i.test(value)) return value; try { const url = new URL(value, location.origin); return url.origin === location.origin ? url.href : null; } catch { return null; } }
+function normalizeGitHubRepositoryUrl(value: string) {
+  const pastedUrl = value.trim().match(/https:\/\/(?:www\.)?github\.com\/[^\s\])]+/i)?.[0] ?? value.trim();
+  const candidate = pastedUrl.replace(/[,;\])]+$/, '').replace(/\/$/, '');
+  try {
+    const url = new URL(candidate);
+    if (url.protocol !== 'https:' || !['github.com', 'www.github.com'].includes(url.hostname.toLowerCase()) || url.username || url.password || url.port || url.search || url.hash) return null;
+    const parts = url.pathname.split('/').filter(Boolean);
+    if (parts.length < 2 || (parts.length > 2 && (parts.length < 4 || parts[2] !== 'tree'))) return null;
+    return `https://github.com/${parts.join('/')}`;
+  } catch { return null; }
+}
 function shortRepository(url: string) { try { const path = new URL(url).pathname.replace(/^\//, '').replace(/\.git$/, ''); return path || url; } catch { return url; } }
 function message(reason: unknown, fallback: string) { return reason instanceof Error ? reason.message : fallback; }

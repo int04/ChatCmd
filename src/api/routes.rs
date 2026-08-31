@@ -90,6 +90,7 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/sessions/{id}", get(session))
         .route("/sessions/{id}/{action}", post(session_action))
         .route("/skills", get(skills))
+        .route("/skills/preview", post(preview_skills))
         .route("/skills/install", post(install_skill))
         .route("/skills/{id}", get(skill).delete(delete_skill))
         .route("/skills/{id}/enabled", patch(set_skill_enabled))

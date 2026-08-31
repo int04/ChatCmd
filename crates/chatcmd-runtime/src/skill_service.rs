@@ -46,6 +46,24 @@ pub struct ManagedSkill {
     pub options: Vec<SkillOption>,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillInstallCandidate {
+    pub name: String,
+    pub title: String,
+    pub description: String,
+    pub path: String,
+    pub installed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillInstallPreview {
+    pub repository_url: String,
+    pub skills: Vec<SkillInstallCandidate>,
+    pub skipped_invalid: usize,
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct SkillSettings {
     #[serde(default)]
@@ -89,6 +107,16 @@ struct DiscoveredSkill {
     icon_path: Option<String>,
     options: Vec<SkillOption>,
     precedence: usize,
+}
+
+struct InstallCandidateSource {
+    candidate: SkillInstallCandidate,
+    directory: PathBuf,
+}
+
+struct InstallCandidateDiscovery {
+    skills: Vec<InstallCandidateSource>,
+    skipped_invalid: usize,
 }
 
 impl SkillService {
@@ -239,7 +267,7 @@ impl SkillService {
                         format!("Invalid value for option '{key}'."),
                     ));
                 };
-                if !definition.choices.iter().any(|choice| *choice == text) {
+                if !definition.choices.contains(&text) {
                     return Err(RuntimeError::new(
                         "invalid_skill_options",
                         format!("Invalid value for option '{key}'."),
@@ -297,94 +325,155 @@ impl SkillService {
         Ok(Some((path, content_type)))
     }
 
-    pub async fn install(&self, repository_url: &str) -> RuntimeResult<ManagedSkill> {
+    pub async fn preview_install(
+        &self,
+        repository_url: &str,
+    ) -> RuntimeResult<SkillInstallPreview> {
         let source = parse_github_url(repository_url)?;
-        let install_root = self.install_root.clone().ok_or_else(|| {
-            RuntimeError::new("skill_install_unavailable", "User home is unavailable.")
-        })?;
-        let temp_root =
-            std::env::temp_dir().join(format!("chatcmd-skill-{}", uuid::Uuid::new_v4().simple()));
-        let clone_root = temp_root.join("repo");
-        fs::create_dir_all(&temp_root).map_err(io_error)?;
-        let mut args = vec![
-            "clone".to_owned(),
-            "--depth".into(),
-            "1".into(),
-            "--single-branch".into(),
-            "--filter=blob:none".into(),
-        ];
-        if let Some(reference) = &source.reference {
-            args.extend(["--branch".into(), reference.clone()]);
-        }
-        args.extend([
-            source.clone_url.clone(),
-            clone_root.to_string_lossy().into_owned(),
-        ]);
-        let output = Command::new("git")
-            .args(&args)
-            .current_dir(&temp_root)
-            .output()
-            .await
-            .map_err(io_error)?;
-        if !output.status.success() {
-            let _ = fs::remove_dir_all(&temp_root);
-            return Err(RuntimeError::new(
-                "skill_clone_failed",
-                String::from_utf8_lossy(&output.stderr)
-                    .chars()
-                    .take(2000)
-                    .collect::<String>(),
-            ));
-        }
-        let candidate = source
+        let checkout = clone_repository(&source).await?;
+        let clone_root = checkout.path().join("repo");
+        let candidate_root = source
             .subdirectory
             .as_deref()
-            .map_or(clone_root.clone(), |path| clone_root.join(path));
-        let mut skill_files = Vec::new();
-        collect_skill_files(&candidate, &mut skill_files)?;
-        if skill_files.len() != 1 {
-            let _ = fs::remove_dir_all(&temp_root);
+            .map_or_else(|| clone_root.clone(), |path| clone_root.join(path));
+        if !candidate_root.is_dir() {
             return Err(RuntimeError::new(
                 "invalid_skill_repository",
-                "GitHub URL must identify a repository or subdirectory containing exactly one SKILL.md.",
+                "The GitHub subdirectory does not exist in the selected repository revision.",
             ));
         }
-        let source_dir = skill_files[0].parent().unwrap_or(&candidate).to_path_buf();
-        validate_install_tree(&source_dir)?;
-        let metadata =
-            parse_frontmatter(&fs::read_to_string(source_dir.join("SKILL.md")).map_err(io_error)?);
-        let name = metadata.get("name").cloned().unwrap_or_default();
-        let description = metadata.get("description").cloned().unwrap_or_default();
-        if !valid_skill_name(&name) || description.trim().is_empty() {
-            let _ = fs::remove_dir_all(&temp_root);
+        let installed_names = self
+            .discover_all()?
+            .into_iter()
+            .filter(|skill| skill.source == "global")
+            .map(|skill| skill.name.to_lowercase())
+            .collect();
+        let discovery =
+            discover_install_candidates(&candidate_root, &clone_root, &installed_names)?;
+        if discovery.skills.is_empty() {
             return Err(RuntimeError::new(
                 "invalid_skill_repository",
-                "SKILL.md frontmatter must declare a valid lowercase name and description.",
+                "No valid skills were found. Each skill directory must contain a SKILL.md with a lowercase name and description.",
             ));
         }
-        fs::create_dir_all(&install_root).map_err(io_error)?;
-        let destination = install_root.join(&name);
-        if destination.exists() {
-            let _ = fs::remove_dir_all(&temp_root);
-            return Err(RuntimeError::new(
-                "skill_conflict",
-                format!("Skill '{name}' is already installed."),
-            ));
-        }
-        copy_tree(&source_dir, &destination)?;
-        fs::write(
-            destination.join(".cmdgpt-source.json"),
-            serde_json::to_vec_pretty(&serde_json::json!({"repositoryUrl": repository_url}))
-                .unwrap_or_default(),
-        )
-        .map_err(io_error)?;
-        let _ = fs::remove_dir_all(&temp_root);
-        self.global_by_name(&name)?.map(to_managed).ok_or_else(|| {
-            RuntimeError::new(
-                "skill_install_failed",
-                "Installed skill could not be discovered.",
-            )
+        Ok(SkillInstallPreview {
+            repository_url: source.repository_url,
+            skills: discovery
+                .skills
+                .into_iter()
+                .map(|skill| skill.candidate)
+                .collect(),
+            skipped_invalid: discovery.skipped_invalid,
         })
+    }
+
+    pub async fn install(
+        &self,
+        repository_url: &str,
+        skill_paths: &[String],
+    ) -> RuntimeResult<Vec<ManagedSkill>> {
+        let source = parse_github_url(repository_url)?;
+        let install_root = self.install_root.as_ref().ok_or_else(|| {
+            RuntimeError::new("skill_install_unavailable", "User home is unavailable.")
+        })?;
+        let checkout = clone_repository(&source).await?;
+        let clone_root = checkout.path().join("repo");
+        let candidate_root = source
+            .subdirectory
+            .as_deref()
+            .map_or_else(|| clone_root.clone(), |path| clone_root.join(path));
+        if !candidate_root.is_dir() {
+            return Err(RuntimeError::new(
+                "invalid_skill_repository",
+                "The GitHub subdirectory does not exist in the selected repository revision.",
+            ));
+        }
+        let installed_names = self
+            .discover_all()?
+            .into_iter()
+            .filter(|skill| skill.source == "global")
+            .map(|skill| skill.name.to_lowercase())
+            .collect();
+        let discovery =
+            discover_install_candidates(&candidate_root, &clone_root, &installed_names)?;
+        if discovery.skills.is_empty() {
+            return Err(RuntimeError::new(
+                "invalid_skill_repository",
+                "No valid skills were found. Each skill directory must contain a SKILL.md with a lowercase name and description.",
+            ));
+        }
+        let requested_paths: Vec<&str> = if skill_paths.is_empty() {
+            if discovery.skills.len() != 1 {
+                return Err(RuntimeError::new(
+                    "skill_selection_required",
+                    "Repository contains multiple skills. Preview it and choose which skills to install.",
+                ));
+            }
+            vec![discovery.skills[0].candidate.path.as_str()]
+        } else {
+            skill_paths.iter().map(String::as_str).collect()
+        };
+        let unique_paths: HashSet<_> = requested_paths.iter().copied().collect();
+        if unique_paths.len() != requested_paths.len()
+            || requested_paths.len() > MAX_DISCOVERED_SKILLS
+        {
+            return Err(RuntimeError::new(
+                "invalid_skill_selection",
+                "Select between 1 and 200 unique skill paths.",
+            ));
+        }
+        let selected: Vec<_> = discovery
+            .skills
+            .iter()
+            .filter(|skill| unique_paths.contains(skill.candidate.path.as_str()))
+            .collect();
+        if selected.len() != requested_paths.len() {
+            return Err(RuntimeError::new(
+                "invalid_skill_selection",
+                "One or more selected skill paths are not available in this repository.",
+            ));
+        }
+        let mut selected_names = HashSet::new();
+        for skill in &selected {
+            if skill.candidate.installed || install_root.join(&skill.candidate.name).exists() {
+                return Err(RuntimeError::new(
+                    "skill_conflict",
+                    format!("Skill '{}' is already installed.", skill.candidate.name),
+                ));
+            }
+            if !selected_names.insert(skill.candidate.name.to_lowercase()) {
+                return Err(RuntimeError::new(
+                    "invalid_skill_selection",
+                    format!(
+                        "More than one selected directory declares the skill name '{}'.",
+                        skill.candidate.name
+                    ),
+                ));
+            }
+        }
+
+        let installed_destinations =
+            install_candidate_directories(install_root, &selected, &source.repository_url)?;
+
+        let mut installed = Vec::with_capacity(selected.len());
+        for skill in selected {
+            let discovered = match self.global_by_name(&skill.candidate.name) {
+                Ok(Some(discovered)) => discovered,
+                Ok(None) => {
+                    rollback_install(&installed_destinations);
+                    return Err(RuntimeError::new(
+                        "skill_install_failed",
+                        "Installed skills could not be discovered.",
+                    ));
+                }
+                Err(error) => {
+                    rollback_install(&installed_destinations);
+                    return Err(error);
+                }
+            };
+            installed.push(to_managed(discovered));
+        }
+        Ok(installed)
     }
 
     fn global_by_id(&self, id: &str) -> RuntimeResult<Option<DiscoveredSkill>> {
@@ -552,6 +641,159 @@ impl SkillService {
     }
 }
 
+async fn clone_repository(source: &GitHubSource) -> RuntimeResult<tempfile::TempDir> {
+    let checkout = tempfile::Builder::new()
+        .prefix("chatcmd-skill-")
+        .tempdir()
+        .map_err(io_error)?;
+    let clone_root = checkout.path().join("repo");
+    let mut args = vec![
+        "clone".to_owned(),
+        "--depth".into(),
+        "1".into(),
+        "--single-branch".into(),
+        "--filter=blob:none".into(),
+    ];
+    if let Some(reference) = &source.reference {
+        args.extend(["--branch".into(), reference.clone()]);
+    }
+    args.extend([
+        "--".into(),
+        source.clone_url.clone(),
+        clone_root.to_string_lossy().into_owned(),
+    ]);
+    let output = Command::new("git")
+        .args(&args)
+        .current_dir(checkout.path())
+        .output()
+        .await
+        .map_err(io_error)?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr)
+            .trim()
+            .chars()
+            .take(2_000)
+            .collect::<String>();
+        return Err(RuntimeError::new(
+            "skill_clone_failed",
+            if detail.is_empty() {
+                "Git could not clone the selected repository.".into()
+            } else {
+                detail
+            },
+        ));
+    }
+    Ok(checkout)
+}
+
+fn discover_install_candidates(
+    candidate_root: &Path,
+    clone_root: &Path,
+    installed_names: &HashSet<String>,
+) -> RuntimeResult<InstallCandidateDiscovery> {
+    let mut skill_files = Vec::new();
+    collect_skill_files(candidate_root, &mut skill_files)?;
+    skill_files.sort();
+    let mut skills = Vec::with_capacity(skill_files.len());
+    let mut skipped_invalid = 0usize;
+    for skill_file in skill_files {
+        if fs::metadata(&skill_file).map_err(io_error)?.len() > MAX_SKILL_BYTES {
+            skipped_invalid += 1;
+            continue;
+        }
+        let Some(directory) = skill_file.parent() else {
+            skipped_invalid += 1;
+            continue;
+        };
+        let metadata = parse_frontmatter(&fs::read_to_string(&skill_file).map_err(io_error)?);
+        let name = metadata.get("name").cloned().unwrap_or_default();
+        let description = metadata.get("description").cloned().unwrap_or_default();
+        if !valid_skill_name(&name) || description.trim().is_empty() {
+            skipped_invalid += 1;
+            continue;
+        }
+        if let Err(error) = validate_install_tree(directory) {
+            if matches!(
+                error.code.as_str(),
+                "invalid_skill_repository" | "skill_too_large"
+            ) {
+                skipped_invalid += 1;
+                continue;
+            }
+            return Err(error);
+        }
+        let relative = directory.strip_prefix(clone_root).map_err(|_| {
+            RuntimeError::new(
+                "invalid_skill_repository",
+                "A discovered skill is outside the cloned repository.",
+            )
+        })?;
+        let path = if relative.as_os_str().is_empty() {
+            ".".into()
+        } else {
+            relative.to_string_lossy().replace('\\', "/")
+        };
+        let title = openai_value(directory, "display_name").unwrap_or_else(|| name.clone());
+        skills.push(InstallCandidateSource {
+            candidate: SkillInstallCandidate {
+                installed: installed_names.contains(&name.to_lowercase()),
+                name,
+                title,
+                description: description.trim().to_owned(),
+                path,
+            },
+            directory: directory.to_path_buf(),
+        });
+    }
+    Ok(InstallCandidateDiscovery {
+        skills,
+        skipped_invalid,
+    })
+}
+
+fn install_candidate_directories(
+    install_root: &Path,
+    selected: &[&InstallCandidateSource],
+    repository_url: &str,
+) -> RuntimeResult<Vec<PathBuf>> {
+    fs::create_dir_all(install_root).map_err(io_error)?;
+    let staging = tempfile::Builder::new()
+        .prefix(".chatcmd-skill-install-")
+        .tempdir_in(install_root)
+        .map_err(io_error)?;
+    for skill in selected {
+        let staged_destination = staging.path().join(&skill.candidate.name);
+        copy_tree(&skill.directory, &staged_destination)?;
+        let source_metadata = serde_json::to_vec_pretty(&serde_json::json!({
+            "repositoryUrl": repository_url,
+            "skillPath": skill.candidate.path.as_str(),
+        }))
+        .map_err(|error| RuntimeError::new("skill_install_failed", error.to_string()))?;
+        fs::write(
+            staged_destination.join(".cmdgpt-source.json"),
+            source_metadata,
+        )
+        .map_err(io_error)?;
+    }
+
+    let mut installed_destinations = Vec::with_capacity(selected.len());
+    for skill in selected {
+        let destination = install_root.join(&skill.candidate.name);
+        if let Err(error) = fs::rename(staging.path().join(&skill.candidate.name), &destination) {
+            rollback_install(&installed_destinations);
+            return Err(io_error(error));
+        }
+        installed_destinations.push(destination);
+    }
+    Ok(installed_destinations)
+}
+
+fn rollback_install(destinations: &[PathBuf]) {
+    for destination in destinations.iter().rev() {
+        let _ = fs::remove_dir_all(destination);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -564,6 +806,136 @@ mod tests {
             format!("---\nname: {name}\ndescription: test skill\n---\n\n{marker}\n"),
         )
         .expect("write skill");
+    }
+
+    fn write_install_candidate(root: &Path, path: &str, name: &str, description: &str) {
+        let directory = root.join(path);
+        fs::create_dir_all(&directory).expect("create install candidate");
+        fs::write(
+            directory.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: {description}\n---\n"),
+        )
+        .expect("write install candidate");
+    }
+
+    #[test]
+    fn repository_discovery_returns_all_valid_skills_in_path_order() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let repository = temp.path().join("repository");
+        write_install_candidate(
+            &repository,
+            "skills/extension-test",
+            "extension-test",
+            "Test browser extensions",
+        );
+        write_install_candidate(
+            &repository,
+            "skills/extension-create",
+            "extension-create",
+            "Create browser extensions",
+        );
+        write_install_candidate(
+            &repository,
+            "skills/invalid",
+            "Invalid Name",
+            "Invalid skill name",
+        );
+        let installed_names = HashSet::from(["extension-test".to_owned()]);
+
+        let discovery = discover_install_candidates(&repository, &repository, &installed_names)
+            .expect("discover install candidates");
+
+        assert_eq!(discovery.skipped_invalid, 1);
+        assert_eq!(discovery.skills.len(), 2);
+        assert_eq!(
+            discovery
+                .skills
+                .iter()
+                .map(|skill| skill.candidate.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["skills/extension-create", "skills/extension-test"]
+        );
+        assert!(!discovery.skills[0].candidate.installed);
+        assert!(discovery.skills[1].candidate.installed);
+    }
+
+    #[test]
+    fn batch_install_copies_selected_skills_and_source_metadata() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let repository = temp.path().join("repository");
+        let install_root = temp.path().join("home/.agents/skills");
+        write_install_candidate(
+            &repository,
+            "skills/extension-create",
+            "extension-create",
+            "Create browser extensions",
+        );
+        write_install_candidate(
+            &repository,
+            "skills/extension-test",
+            "extension-test",
+            "Test browser extensions",
+        );
+        let discovery = discover_install_candidates(&repository, &repository, &HashSet::new())
+            .expect("discover install candidates");
+        let selected: Vec<_> = discovery.skills.iter().collect();
+
+        let installed = install_candidate_directories(
+            &install_root,
+            &selected,
+            "https://github.com/quangpl/browser-extension-skills",
+        )
+        .expect("install selected candidates");
+
+        assert_eq!(installed.len(), 2);
+        assert!(install_root.join("extension-create/SKILL.md").is_file());
+        assert!(install_root.join("extension-test/SKILL.md").is_file());
+        let source: Value = serde_json::from_slice(
+            &fs::read(
+                install_root
+                    .join("extension-create")
+                    .join(".cmdgpt-source.json"),
+            )
+            .expect("read source metadata"),
+        )
+        .expect("parse source metadata");
+        assert_eq!(
+            source.get("repositoryUrl").and_then(Value::as_str),
+            Some("https://github.com/quangpl/browser-extension-skills")
+        );
+        assert_eq!(
+            source.get("skillPath").and_then(Value::as_str),
+            Some("skills/extension-create")
+        );
+    }
+
+    #[test]
+    fn root_skill_install_excludes_git_metadata() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let repository = temp.path().join("repository");
+        let install_root = temp.path().join("home/.agents/skills");
+        write_install_candidate(
+            &repository,
+            "",
+            "root-skill",
+            "Skill stored at repository root",
+        );
+        let git_metadata = repository.join(".git/objects");
+        fs::create_dir_all(&git_metadata).expect("create git metadata");
+        fs::write(git_metadata.join("noise"), "not skill content").expect("write git metadata");
+        let discovery = discover_install_candidates(&repository, &repository, &HashSet::new())
+            .expect("discover root skill");
+        let selected: Vec<_> = discovery.skills.iter().collect();
+
+        install_candidate_directories(
+            &install_root,
+            &selected,
+            "https://github.com/example/root-skill",
+        )
+        .expect("install root skill");
+
+        assert!(install_root.join("root-skill/SKILL.md").is_file());
+        assert!(!install_root.join("root-skill/.git").exists());
     }
 
     #[tokio::test]

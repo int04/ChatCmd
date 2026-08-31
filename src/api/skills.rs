@@ -1,4 +1,5 @@
 use super::*;
+use chatcmd_runtime::{ManagedSkill, RuntimeError};
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -17,29 +18,15 @@ pub(super) struct SetSkillOptions {
 #[serde(rename_all = "camelCase")]
 pub(super) struct InstallSkill {
     repository_url: String,
+    #[serde(default)]
+    skill_paths: Vec<String>,
 }
 
 pub(super) async fn skills(State(state): State<Arc<AppState>>) -> Result<Json<Value>, Problem> {
     let values = state.skills.list_global().await.map_err(runtime_problem)?;
     let items = values
         .into_iter()
-        .map(|skill| {
-            let icon_url = skill
-                .icon_path
-                .as_ref()
-                .map(|_| format!("/api/local/skills/{}/icon", skill.id));
-            json!({
-                "id": skill.id,
-                "title": skill.title,
-                "description": skill.description,
-                "iconUrl": icon_url,
-                "source": skill.source,
-                "sourceUrl": skill.source_url,
-                "enabled": skill.enabled,
-                "canDelete": skill.can_delete,
-                "options": skill.options,
-            })
-        })
+        .map(|skill| managed_skill_value(&skill))
         .collect();
     Ok(Json(Value::Array(items)))
 }
@@ -78,7 +65,7 @@ pub(super) async fn set_skill_enabled(
                 "The requested skill is unavailable.",
             )
         })?;
-    Ok(Json(serde_json::to_value(skill).unwrap_or(Value::Null)))
+    Ok(Json(managed_skill_value(&skill)))
 }
 
 pub(super) async fn set_skill_options(
@@ -105,44 +92,86 @@ pub(super) async fn set_skill_options(
                 "The requested skill is unavailable.",
             )
         })?;
-    Ok(Json(serde_json::to_value(skill).unwrap_or(Value::Null)))
+    Ok(Json(managed_skill_value(&skill)))
+}
+
+pub(super) async fn preview_skills(
+    State(state): State<Arc<AppState>>,
+    Json(input): Json<InstallSkill>,
+) -> Result<Json<Value>, Problem> {
+    validate_repository_url(&input.repository_url)?;
+    let preview = state
+        .skills
+        .preview_install(input.repository_url.trim())
+        .await
+        .map_err(skill_install_problem)?;
+    Ok(Json(serde_json::to_value(preview).map_err(|error| {
+        Problem::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Skill preview failed",
+            error.to_string(),
+        )
+    })?))
 }
 
 pub(super) async fn install_skill(
     State(state): State<Arc<AppState>>,
     Json(input): Json<InstallSkill>,
 ) -> Result<(StatusCode, Json<Value>), Problem> {
-    if input.repository_url.len() > 2048 {
+    validate_repository_url(&input.repository_url)?;
+    let skills = state
+        .skills
+        .install(input.repository_url.trim(), &input.skill_paths)
+        .await
+        .map_err(skill_install_problem)?;
+    let values: Vec<_> = skills.iter().map(managed_skill_value).collect();
+    Ok((StatusCode::CREATED, Json(json!({ "skills": values }))))
+}
+
+fn validate_repository_url(repository_url: &str) -> Result<(), Problem> {
+    if repository_url.len() > 2048 {
         return Err(Problem::new(
             StatusCode::BAD_REQUEST,
             "Invalid repository",
             "repositoryUrl is too long.",
         ));
     }
-    let skill = state
-        .skills
-        .install(input.repository_url.trim())
-        .await
-        .map_err(|error| {
-            let status = if error.code == "skill_conflict" {
-                StatusCode::CONFLICT
-            } else {
-                StatusCode::BAD_REQUEST
-            };
-            Problem::new(
-                status,
-                if status == StatusCode::CONFLICT {
-                    "Skill already installed"
-                } else {
-                    "Skill installation failed"
-                },
-                error.message,
-            )
-        })?;
-    Ok((
-        StatusCode::CREATED,
-        Json(serde_json::to_value(skill).unwrap_or(Value::Null)),
-    ))
+    Ok(())
+}
+
+fn skill_install_problem(error: RuntimeError) -> Problem {
+    let status = if error.code == "skill_conflict" {
+        StatusCode::CONFLICT
+    } else {
+        StatusCode::BAD_REQUEST
+    };
+    Problem::new(
+        status,
+        if status == StatusCode::CONFLICT {
+            "Skill already installed"
+        } else {
+            "Skill installation failed"
+        },
+        error.message,
+    )
+}
+
+fn managed_skill_value(skill: &ManagedSkill) -> Value {
+    let icon_url = skill
+        .icon_path
+        .as_ref()
+        .map(|_| format!("/api/local/skills/{}/icon", skill.id));
+    json!({
+        "id": skill.id,
+        "title": skill.title,
+        "description": skill.description,
+        "iconUrl": icon_url,
+        "source": skill.source,
+        "sourceUrl": skill.source_url,
+        "enabled": skill.enabled,
+        "canDelete": skill.can_delete,
+        "options": skill.options,
+    })
 }
 
 pub(super) async fn delete_skill(

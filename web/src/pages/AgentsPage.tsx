@@ -73,7 +73,7 @@ export function AgentsPage() {
     catch (error) { setProblem(error instanceof Error ? error.message : tr('Rotation failed')); }
   };
   const remove = async (agent: Agent) => {
-    if (!confirm(tr('Delete local agent “{name}”?', { name: agent.name }))) return;
+    if (!confirm(tr('Delete access profile “{name}”? Existing connection links for it will stop working.', { name: agent.name }))) return;
     try {
       await api.deleteAgent(agent.id);
       agents.setData((current) => current?.filter((item) => item.id !== agent.id));
@@ -115,33 +115,45 @@ export function AgentsPage() {
     finally { setTunnelConnectionBusy(false); }
   };
 
+  const presetName = (presetId?: string) => presetId ? presets.data?.find((preset) => preset.id === presetId)?.name ?? tr('Saved permission profile') : tr('Custom permissions');
+
   return <div className="agents-page">
-    <PageHeading eyebrow={tr('MCP ACCESS')} title={tr('Agents & Tunnels')} body={tr('Manage local MCP agents and the public addresses that route back to this Rust server.')} actions={<button className="button primary" onClick={() => setEditor('new')}><Plus />{tr('New agent')}</button>} />
+    <PageHeading eyebrow={tr('MCP ACCESS')} title={tr('Agents & Tunnels')} body={tr('Create access profiles for AI clients and choose how this device can be reached from the Internet.')} actions={<button className="button primary" onClick={() => setEditor('new')}><Plus />{tr('New access profile')}</button>} />
     <ProblemBanner message={problem} clear={() => setProblem('')} />
     <div className="agents-tunnel-grid">
       <section className="agents-workspace-panel">
-        <header className="agents-panel-header"><div><span className="eyebrow">{tr('AGENTS')}</span><h2>{tr('MCP agents')}</h2><p>{tr('Each agent keeps its own permissions and plugin access link.')}</p></div><span className="agents-panel-count">{agents.data?.length ?? 0}</span></header>
-        {agents.loading ? <Loading label={tr('Loading agents')} /> : agents.error ? <ErrorState message={agents.error} retry={() => void agents.reload()} /> : !agents.data?.length ? <Empty title={tr('No MCP agents')} body={tr('Create an agent to receive MCP access.')} /> : <div className="agents-table-shell agents-table-embedded">
-          <table className="agents-table">
-            <thead><tr><th>{tr('Agent')}</th><th>{tr('Status')}</th><th>{tr('Tool access')}</th><th>{tr('Plugin')}</th><th className="agents-actions-heading">{tr('Actions')}</th></tr></thead>
-            <tbody>{agents.data.map((agent) => <tr key={agent.id}>
-              <td><div className="agent-identity"><span className="agent-avatar"><KeyRound /></span><span><strong>{agent.name}</strong><code>{agent.id}</code></span></div></td>
-              <td><StatusBadge state={agent.enabled ? 'ready' : 'stopped'} label={agent.enabled ? tr('Enabled') : tr('Disabled')} /></td>
-              <td><div className="agent-tool-access"><strong>{tr('{count} selected', { count: agent.toolIds.length })}</strong>{agent.presetId && <small>{tr('Preset')}: {agent.presetId}</small>}</div></td>
-              <td><button className="button secondary compact agent-plugin-button" onClick={() => setPluginAgent(agent)}><Link2 />{tr('Get Plugin link')}</button></td>
-              <td><div className="agents-table-actions"><button className="button secondary compact" onClick={() => setEditor(agent)}><Pencil />{tr('Edit')}</button><button className="button secondary compact" onClick={() => void rotate(agent)}><RotateCw />{tr('Rotate token')}</button><button className="icon-button danger-icon" aria-label={tr('Delete {name}', { name: agent.name })} onClick={() => void remove(agent)}><Trash2 /></button></div></td>
-            </tr>)}</tbody>
-          </table>
+        <header className="agents-panel-header"><div><span className="eyebrow">{tr('AGENTS')}</span><h2>{tr('AI access profiles')}</h2><p>{tr('Each profile represents one AI client and defines exactly which tools that client is allowed to use.')}</p></div><span className="agents-panel-count">{agents.data?.length ?? 0}</span></header>
+        {agents.loading ? <Loading label={tr('Loading agents')} /> : agents.error ? <ErrorState message={agents.error} retry={() => void agents.reload()} /> : !agents.data?.length ? <Empty title={tr('No access profiles yet')} body={tr('Create a profile to give an AI client controlled access to this device.')} /> : <div className="agent-list-grid">
+          {agents.data.map((agent) => <article className="agent-list-card" key={agent.id}>
+            <div className="agent-list-main">
+              <div className="agent-list-identity">
+                <span className="agent-avatar"><KeyRound /></span>
+                <div><div className="agent-list-title"><strong>{agent.name}</strong><StatusBadge state={agent.enabled ? 'ready' : 'stopped'} label={agent.enabled ? tr('Enabled') : tr('Disabled')} /></div><code title={agent.id}>{agent.id}</code></div>
+              </div>
+              <div className="agent-list-meta">
+                <div><span>{tr('Allowed tools')}</span><strong>{tr('{count} tools allowed', { count: agent.toolIds.length })}</strong></div>
+                <div><span>{tr('Permission mode')}</span><strong>{presetName(agent.presetId)}</strong></div>
+              </div>
+            </div>
+            <div className="agent-list-actions">
+              <button className="button primary compact agent-plugin-button" onClick={() => setPluginAgent(agent)}><Link2 />{tr('Get connection link')}</button>
+              <div className="agent-list-secondary-actions">
+                <button className="button secondary compact" onClick={() => setEditor(agent)}><Pencil />{tr('Edit')}</button>
+                <button className="button secondary compact" title={tr('Create a new access key. Existing connection links for this profile will stop working.')} onClick={() => void rotate(agent)}><RotateCw />{tr('Rotate token')}</button>
+                <button className="icon-button danger-icon" aria-label={tr('Delete {name}', { name: agent.name })} title={tr('Delete {name}', { name: agent.name })} onClick={() => void remove(agent)}><Trash2 /></button>
+              </div>
+            </div>
+          </article>)}
         </div>}
       </section>
 
       <section className="tunnel-panel">
-        <header className="tunnel-panel-header"><div><span className="eyebrow">{tr('TUNNEL')}</span><h2>{tr('Public routes')}</h2><p>{tr('Connect this device to ChatCMD Tunnel, or keep using your own Cloudflare/domain routes.')}</p></div><button className="button secondary tunnel-add-button" onClick={() => setAddingTunnel(true)}><Plus />{tr('Add Tunnel')}</button></header>
+        <header className="tunnel-panel-header"><div><span className="eyebrow">{tr('TUNNEL')}</span><h2>{tr('Public routes')}</h2><p>{tr('Connect this device to ChatCMD Tunnel, or keep using your own Cloudflare/domain routes.')}</p></div><button className="button secondary tunnel-add-button" onClick={() => setAddingTunnel(true)}><Plus />{tr('Add public address')}</button></header>
         <div className={`managed-tunnel-bar ${managedTunnelState ?? 'loading'}`}>
           <span className="managed-tunnel-icon" aria-hidden="true"><PlugZap /></span>
           <div className="managed-tunnel-copy">
             <div><strong>{tr('ChatCMD Tunnel')}</strong><span role="status" aria-live="polite" className={`managed-tunnel-state ${managedTunnelState ?? 'loading'}`}>{managedTunnelStateLabel}</span></div>
-            {managedTunnel.data?.publicUrl ? <code title={managedTunnel.data.publicUrl}>{managedTunnel.data.publicUrl}</code> : <p>{tr('Public route is allocated to this machine identity only — no user account binding.')}</p>}
+            {managedTunnel.data?.publicUrl ? <code title={managedTunnel.data.publicUrl}>{managedTunnel.data.publicUrl}</code> : <p>{tr('When connected, ChatCMD creates a public Internet address for this device so approved AI clients can reach it remotely.')}</p>}
             {managedTunnel.data?.key && <small>{tr('Tunnel key')}: <code>{managedTunnel.data.key}</code> · {tr('Server')}: {managedTunnel.data.serverUrl}</small>}
             {(managedTunnel.error || managedTunnel.data?.lastError) && <small className="managed-tunnel-error">{managedTunnel.error || managedTunnel.data?.lastError}</small>}
           </div>
@@ -150,9 +162,9 @@ export function AgentsPage() {
             {managedTunnelState === 'connecting' ? tr('Connecting…') : tunnelConnectionBusy ? tr('Stopping…') : managedTunnelActive ? tr('Disconnect') : tr('Connect')}
           </button>
         </div>
-        <div className="custom-tunnel-heading"><div><strong>{tr('Custom tunnels')}</strong><small>{tr('Cloudflare Tunnel, domain, or public IP/port configured by you.')}</small></div><span aria-label={tr('{count} custom tunnels', { count: tunnels.data?.length ?? 0 })}>{tunnels.data?.length ?? 0}</span></div>
-        {tunnels.loading ? <div className="tunnel-panel-state"><LoaderCircle className="spin" />{tr('Loading tunnels')}</div> : tunnels.error ? <div className="tunnel-panel-state error"><span>{tunnels.error}</span><button className="button secondary compact" onClick={() => void tunnels.reload()}>{tr('Retry')}</button></div> : !tunnels.data?.length ? <div className="tunnel-empty"><span><Network /></span><strong>{tr('No tunnels yet')}</strong><p>{tr('Add a Cloudflare Tunnel domain or a public IP/port that resolves to this Rust server.')}</p><button className="button secondary" onClick={() => setAddingTunnel(true)}><Plus />{tr('Add your first Tunnel')}</button></div> : <div className="tunnel-list">{tunnels.data.map((tunnel) => <article className="tunnel-row" key={tunnel.id}>
-          <span className="tunnel-icon"><Globe2 /></span><div className="tunnel-copy"><strong>{tunnel.baseUrl}</strong><small>{tr('Probe')}: {tunnel.baseUrl}/api/ping</small></div><div className="tunnel-row-actions">{testedTunnelId === tunnel.id && <span className="tunnel-ok" title={tr('Tunnel is reachable')}><CheckCircle2 /></span>}<button className="button secondary compact" disabled={testingTunnelId === tunnel.id} onClick={() => void testTunnel(tunnel)}>{testingTunnelId === tunnel.id ? <LoaderCircle className="spin" /> : <Wifi />}{testingTunnelId === tunnel.id ? tr('Testing…') : tr('Test')}</button></div>
+        <div className="custom-tunnel-heading"><div><strong>{tr('Your public addresses')}</strong><small>{tr('Use a domain, Cloudflare Tunnel, or public IP/port that you manage yourself.')}</small></div><span aria-label={tr('{count} public addresses', { count: tunnels.data?.length ?? 0 })}>{tunnels.data?.length ?? 0}</span></div>
+        {tunnels.loading ? <div className="tunnel-panel-state"><LoaderCircle className="spin" />{tr('Loading public addresses')}</div> : tunnels.error ? <div className="tunnel-panel-state error"><span>{tunnels.error}</span><button className="button secondary compact" onClick={() => void tunnels.reload()}>{tr('Retry')}</button></div> : !tunnels.data?.length ? <div className="tunnel-empty"><span><Network /></span><strong>{tr('No custom addresses yet')}</strong><p>{tr('Add a public address that routes to ChatCMD on this device. It can then be used to create connection links for AI clients.')}</p><button className="button secondary" onClick={() => setAddingTunnel(true)}><Plus />{tr('Add public address')}</button></div> : <div className="tunnel-list">{tunnels.data.map((tunnel) => <article className="tunnel-row" key={tunnel.id}>
+          <span className="tunnel-icon"><Globe2 /></span><div className="tunnel-copy"><strong>{tunnel.baseUrl}</strong><small>{tr('Connection check')}: {tunnel.baseUrl}/api/ping</small></div><div className="tunnel-row-actions">{testedTunnelId === tunnel.id && <span className="tunnel-ok" title={tr('Tunnel is reachable')}><CheckCircle2 /></span>}<button className="button secondary compact" disabled={testingTunnelId === tunnel.id} onClick={() => void testTunnel(tunnel)}>{testingTunnelId === tunnel.id ? <LoaderCircle className="spin" /> : <Wifi />}{testingTunnelId === tunnel.id ? tr('Testing…') : tr('Test')}</button></div>
         </article>)}</div>}
       </section>
     </div>
@@ -176,12 +188,12 @@ function AddTunnelModal({ close, added }: { close: () => void; added: (tunnel: T
     catch (reason) { setError(reason instanceof Error ? reason.message : tr('Tunnel could not be added')); }
     finally { setBusy(false); }
   };
-  return <Modal title={tr('Add Tunnel')} description={tr('The address is saved only after ChatCMD receives a valid ping/pong through it.')} close={close}>
+  return <Modal title={tr('Add public address')} description={tr('ChatCMD will verify that this address reaches the current device before saving it.')} close={close}>
     <form className="form-stack" onSubmit={submit}>
-      <div className="tunnel-guide"><span><Cloud /></span><div><strong>{tr('Cloudflare Tunnel or your own network')}</strong><p>{tr('You can point a Cloudflare Tunnel at this Rust server, or open/forward a router port yourself. The important part is that the entered domain/IP routes to the same ChatCMD server port.')}</p><div className="tunnel-guide-examples"><code>https://mcp.example.com</code><code>http://203.0.113.10:8080</code></div></div></div>
-      <label>{tr('Domain, IP or public URL')}<input required autoFocus maxLength={512} placeholder="https://mcp.example.com" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} /><small>{tr('If you omit the scheme, HTTPS is assumed. ChatCMD will request /api/ping before saving.')}</small></label>
+      <div className="tunnel-guide"><span><Cloud /></span><div><strong>{tr('Use an address you control')}</strong><p>{tr('The address must route to ChatCMD running on this device. You can use a Cloudflare Tunnel, your own domain, or a public IP/port exposed through your router.')}</p><div className="tunnel-guide-examples"><code>https://mcp.example.com</code><code>http://203.0.113.10:8080</code></div></div></div>
+      <label>{tr('Public address')}<input required autoFocus maxLength={512} placeholder="https://mcp.example.com" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} /><small>{tr('Enter a domain, IP:port, or full URL. If no protocol is provided, ChatCMD will try HTTPS and verify the connection before saving.')}</small></label>
       {error && <div className="tunnel-form-error">{error}</div>}
-      <div className="modal-actions"><button className="button secondary" type="button" onClick={close}>{tr('Cancel')}</button><button className="button primary" disabled={busy || !baseUrl.trim()}>{busy ? <LoaderCircle className="spin" /> : <Wifi />}{busy ? tr('Testing & saving…') : tr('Test & add')}</button></div>
+      <div className="modal-actions"><button className="button secondary" type="button" onClick={close}>{tr('Cancel')}</button><button className="button primary" disabled={busy || !baseUrl.trim()}>{busy ? <LoaderCircle className="spin" /> : <Wifi />}{busy ? tr('Testing & saving…') : tr('Verify & add')}</button></div>
     </form>
   </Modal>;
 }
@@ -208,12 +220,12 @@ function PluginLinksModal({ agent, close, onTestTunnel, testingTunnelId }: { age
     finally { setCopyingTunnelId(undefined); }
   };
   const test = async (link: PluginLink) => onTestTunnel({ id: link.tunnelId, baseUrl: link.baseUrl });
-  return <Modal title={tr('Plugin links — {name}', { name: agent.name })} description={tr('Choose a saved Tunnel. Tokens stay masked on screen and the full URL is returned only when you press Copy.')} close={close}>
+  return <Modal title={tr('Connection links — {name}', { name: agent.name })} description={tr('Choose the Internet address this AI client will use. Because the link contains an access key, the full value stays hidden until you copy it.')} close={close}>
     {error && <div className="tunnel-form-error">{error}</div>}
-    {!links ? <div className="plugin-links-state"><LoaderCircle className="spin" />{tr('Preparing plugin links…')}</div> : !links.length ? <div className="plugin-links-empty"><Network /><strong>{tr('No Tunnel available')}</strong><p>{tr('Add a Tunnel on the right side of the Agents page before generating a public plugin link.')}</p></div> : <div className="plugin-link-list">{links.map((link) => <article className="plugin-link-row" key={link.tunnelId}>
-      <span className="plugin-link-icon"><Link2 /></span><div className="plugin-link-copy"><strong>{link.baseUrl}</strong><code>{link.maskedEndpoint}</code></div><div className="plugin-link-actions"><button className="button secondary compact" disabled={testingTunnelId === link.tunnelId} onClick={() => void test(link)}>{testingTunnelId === link.tunnelId ? <LoaderCircle className="spin" /> : <Wifi />}{tr('Ping')}</button><button className="button primary compact" disabled={copyingTunnelId === link.tunnelId} onClick={() => void copy(link)}>{copyingTunnelId === link.tunnelId ? <LoaderCircle className="spin" /> : copiedTunnelId === link.tunnelId ? <CheckCircle2 /> : <Copy />}{copiedTunnelId === link.tunnelId ? tr('Copied') : tr('Copy')}</button></div>
+    {!links ? <div className="plugin-links-state"><LoaderCircle className="spin" />{tr('Preparing connection links…')}</div> : !links.length ? <div className="plugin-links-empty"><Network /><strong>{tr('No connection address available')}</strong><p>{tr('Connect ChatCMD Tunnel or add your own public address before creating a connection link.')}</p></div> : <div className="plugin-link-list">{links.map((link) => <article className="plugin-link-row" key={link.tunnelId}>
+      <span className="plugin-link-icon"><Link2 /></span><div className="plugin-link-copy"><strong>{link.baseUrl}</strong><code>{link.maskedEndpoint}</code></div><div className="plugin-link-actions"><button className="button secondary compact" disabled={testingTunnelId === link.tunnelId} onClick={() => void test(link)}>{testingTunnelId === link.tunnelId ? <LoaderCircle className="spin" /> : <Wifi />}{tr('Test connection')}</button><button className="button primary compact" disabled={copyingTunnelId === link.tunnelId} onClick={() => void copy(link)}>{copyingTunnelId === link.tunnelId ? <LoaderCircle className="spin" /> : copiedTunnelId === link.tunnelId ? <CheckCircle2 /> : <Copy />}{copiedTunnelId === link.tunnelId ? tr('Copied') : tr('Copy')}</button></div>
     </article>)}</div>}
-    <p className="plugin-link-security"><KeyRound />{tr('The full token is never rendered in this popup. Copy sends the complete domain/mcp/token URL directly to your clipboard.')}</p>
+    <p className="plugin-link-security"><KeyRound />{tr('This connection link contains a secret access key. ChatCMD keeps it hidden on screen and copies the complete value directly to your clipboard.')}</p>
     <div className="modal-actions"><button className="button secondary" onClick={close}>{tr('Close')}</button></div>
   </Modal>;
 }
@@ -231,7 +243,7 @@ function AgentEditor({ agent, tools, presets, close, save }: { agent?: Agent; to
   const toggleGroup = (groupTools: Tool[], checked: boolean) => { const groupIds = new Set(groupTools.map((tool) => tool.id)); setTools(checked ? [...value.toolIds, ...groupIds] : value.toolIds.filter((id) => !groupIds.has(id))); };
   const submit = async (event: FormEvent) => { event.preventDefault(); setBusy(true); await save(value); setBusy(false); };
   const allSelected = tools.length > 0 && tools.every((tool) => value.toolIds.includes(tool.id));
-  return <Modal title={agent ? tr('Edit {name}', { name: agent.name }) : tr('Create MCP agent')} description={tr('Permissions apply only to this local endpoint.')} close={close}>
+  return <Modal title={agent ? tr('Edit {name}', { name: agent.name }) : tr('Create access profile')} description={tr('These permissions apply only to the AI client that uses this profile.')} close={close}>
     <form className="form-stack" onSubmit={submit}>
       <label>{tr('Name')}<input required maxLength={100} value={value.name} onChange={(event) => setValue({ ...value, name: event.target.value })} /></label>
       <label>{tr('Permission preset')}<select value={value.presetId ?? ''} onChange={(event) => { const presetId = event.target.value || undefined; const preset = presets.find((item) => item.id === presetId); setValue({ ...value, presetId, toolIds: preset ? preset.toolIds : value.toolIds }); }}><option value="">{tr('Custom permissions')}</option>{presets.map((preset) => <option value={preset.id} key={preset.id}>{preset.name}</option>)}</select></label>
@@ -242,8 +254,8 @@ function AgentEditor({ agent, tools, presets, close, save }: { agent?: Agent; to
           <div className="permission-list">{groupTools.map((tool) => <label className="check-row" key={tool.id}><input type="checkbox" checked={value.toolIds.includes(tool.id)} onChange={(event) => setTools(event.target.checked ? [...value.toolIds, tool.id] : value.toolIds.filter((id) => id !== tool.id))} /><span><strong>{tool.name}{tool.dangerous && <em>{tr('Dangerous')}</em>}</strong><small>{tool.description}</small></span></label>)}</div>
         </section>; })}</div>
       </fieldset>
-      <label className="check-row"><input type="checkbox" checked={value.enabled} onChange={(event) => setValue({ ...value, enabled: event.target.checked })} /><span><strong>{tr('Enabled')}</strong><small>{tr('Allow this client to use its tokenized MCP URL.')}</small></span></label>
-      <div className="modal-actions"><button className="button secondary" type="button" onClick={close}>{tr('Cancel')}</button><button className="button primary" disabled={busy}>{busy ? tr('Saving…') : tr('Save agent')}</button></div>
+      <label className="check-row"><input type="checkbox" checked={value.enabled} onChange={(event) => setValue({ ...value, enabled: event.target.checked })} /><span><strong>{tr('Allow connections')}</strong><small>{tr('When enabled, AI clients can use connection links from this profile. Turn it off to block access without deleting the profile.')}</small></span></label>
+      <div className="modal-actions"><button className="button secondary" type="button" onClick={close}>{tr('Cancel')}</button><button className="button primary" disabled={busy}>{busy ? tr('Saving…') : tr('Save access profile')}</button></div>
     </form>
   </Modal>;
 }
@@ -251,5 +263,5 @@ function AgentEditor({ agent, tools, presets, close, save }: { agent?: Agent; to
 function SecretModal({ result, close }: { result: SecretResult; close: () => void }) {
   const [copied, setCopied] = useState(false);
   const copy = async () => { await navigator.clipboard.writeText(result.endpoint); setCopied(true); };
-  return <Modal title={tr('Save this MCP URL now')} description={tr('Use this URL directly in the MCP client. No Authorization header is required.')} close={close} dangerous><div className="secret-box"><code>{result.endpoint}</code><button className="button primary" onClick={() => void copy()}><Copy />{copied ? tr('Copied') : tr('Copy MCP URL')}</button></div><p className="warning-copy">{tr('The final path segment is the agent token and is shown only once. Keep the complete URL out of source control, screenshots, browser history, and shared logs.')}</p><div className="modal-actions"><button className="button secondary" onClick={close}>{tr('I saved the MCP URL')}</button></div></Modal>;
+  return <Modal title={tr('Save this connection link')} description={tr('Paste this link into the MCP configuration of the AI client you want to connect.')} close={close} dangerous><div className="secret-box"><code>{result.endpoint}</code><button className="button primary" onClick={() => void copy()}><Copy />{copied ? tr('Copied') : tr('Copy connection link')}</button></div><p className="warning-copy">{tr('This link contains a secret access key and is shown in full only this time. Anyone who has it can use the permissions of this access profile, so do not share it publicly or store it in source control or shared logs.')}</p><div className="modal-actions"><button className="button secondary" onClick={close}>{tr('I saved the connection link')}</button></div></Modal>;
 }
