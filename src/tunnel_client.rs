@@ -26,7 +26,7 @@ use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async, tungsten
 use tracing::{info, warn};
 
 const TUNNEL_SETTING_KEY: &str = "chatcmd_tunnel_connection";
-const DEFAULT_TUNNEL_SERVER_URL: &str = "http://127.0.0.1:5035";
+const DEFAULT_TUNNEL_SERVER_URL: &str = "https://tunnel.chatcmd.net";
 const RESPONSE_CHUNK_BYTES: usize = 32 * 1024;
 const MAX_REQUEST_BODY_BYTES: usize = 16 * 1024 * 1024;
 const MAX_REQUEST_BODY_BASE64_BYTES: usize = (MAX_REQUEST_BODY_BYTES / 3 + 1) * 4;

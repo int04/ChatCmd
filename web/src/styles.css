@@ -502,3 +502,46 @@ body{color:var(--text)}
 
 
 .settings-font-picker{display:grid;gap:10px;width:100%}.settings-font-picker input{width:100%}.settings-font-preview{padding:12px 14px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2);color:var(--text);font-family:var(--app-font-family);line-height:1.55}.settings-font-preview strong{display:block;margin-bottom:3px;font-size:15px}.settings-font-preview span{display:block;color:var(--muted);font-size:12px}.settings-font-presets{display:flex;flex-wrap:wrap;gap:6px}.settings-font-chip{appearance:none;border:1px solid var(--border);border-radius:999px;padding:6px 9px;background:var(--surface);color:var(--muted);font:inherit;font-size:11px;cursor:pointer}.settings-font-chip:hover,.settings-font-chip.active{border-color:color-mix(in srgb,var(--accent) 42%,var(--border));background:color-mix(in srgb,var(--accent) 8%,var(--surface));color:var(--text)}
+
+/* Task conversation typography scale: Settings > Display > Task page font size */
+.settings-task-font-scale{display:grid;gap:11px;width:100%}
+.settings-task-font-scale>input[type="range"]{width:100%;min-height:24px;padding:0;accent-color:var(--accent)}
+.settings-task-font-preview{padding:13px 14px;border:1px solid var(--border);border-radius:10px;background:var(--surface-2)}
+.settings-task-font-preview strong{display:block;font-size:var(--preview-title-size,13px);line-height:1.35}
+.settings-task-font-preview span{display:block;margin-top:5px;color:var(--muted);font-size:var(--preview-body-size,11px);line-height:1.55}
+
+.tasks-workspace .task-detail-topbar{min-height:calc(82px + var(--task-control-delta,0px));padding:calc(16px + var(--task-space-delta,0px)) calc(22px + var(--task-space-delta,0px));gap:calc(14px + var(--task-space-delta,0px))}
+.tasks-workspace .task-detail-topbar h1{font-size:var(--task-font-18,18px)}
+.tasks-workspace .task-detail-topbar p,.tasks-workspace .task-detail-topbar small{font-size:var(--task-font-11,11px)}
+.tasks-workspace .task-detail-body{grid-template-columns:minmax(0,1fr) calc(var(--task-detail-sidebar-width,340px) + var(--task-sidebar-delta,0px))}
+.tasks-workspace .task-chat-column{padding-top:calc(22px + var(--task-space-delta,0px));padding-bottom:calc(50px + var(--task-space-delta,0px))}
+.tasks-workspace .task-detail-sidebar{gap:calc(14px + var(--task-space-delta,0px));padding:calc(20px + var(--task-space-delta,0px)) calc(16px + var(--task-space-delta,0px))}
+.tasks-workspace .task-info-section{gap:calc(8px + var(--task-space-delta,0px));padding:calc(12px + var(--task-space-delta,0px))}
+.tasks-workspace .task-info-section>strong,.tasks-workspace .task-detail-sidebar strong{font-size:var(--task-font-12,12px)}
+.tasks-workspace .task-info-section small,.tasks-workspace .task-detail-sidebar small,.tasks-workspace .task-detail-sidebar p{font-size:var(--task-font-10,10px)}
+
+.tasks-workspace .turn-user-message,.tasks-workspace .turn-response,.tasks-workspace .turn-thinking,.tasks-workspace .turn-error,.tasks-workspace .turn-progress-message,.tasks-workspace .task-turn-thinking,.tasks-workspace .task-turn-error,.tasks-workspace .task-final-response{padding:calc(12px + var(--task-space-delta,0px));border-radius:calc(10px + var(--task-space-delta,0px))}
+.tasks-workspace .turn-user-message{margin-bottom:calc(16px + var(--task-space-delta,0px))}
+.tasks-workspace .turn-user-message header,.tasks-workspace .turn-header,.tasks-workspace .turn-end-status,.tasks-workspace .task-final-label{gap:calc(7px + var(--task-space-delta,0px))}
+.tasks-workspace .turn-user-message header strong,.tasks-workspace .turn-header strong,.tasks-workspace .turn-response-content,.tasks-workspace .task-final-content{font-size:var(--task-font-14,14px)}
+.tasks-workspace .turn-user-message header small,.tasks-workspace .turn-header small,.tasks-workspace .turn-end-status,.tasks-workspace .task-final-label,.tasks-workspace .task-turn-thinking,.tasks-workspace .task-turn-error{font-size:var(--task-font-10,10px)}
+.tasks-workspace .turn-response-content h1{font-size:var(--task-font-18,18px)}
+.tasks-workspace .turn-response-content h2{font-size:var(--task-font-17,17px)}
+.tasks-workspace .turn-response-content h3{font-size:var(--task-font-16,16px)}
+.tasks-workspace .turn-response-content h4,.tasks-workspace .turn-response-content h5,.tasks-workspace .turn-response-content h6{font-size:var(--task-font-15,15px)}
+.tasks-workspace .turn-response-content code,.tasks-workspace .agent-rich-content code,.tasks-workspace .task-progress-content{font-size:var(--task-font-12,12px)}
+
+.tasks-workspace .terminal-activity,.tasks-workspace .activity-row,.tasks-workspace .tool-activity,.tasks-workspace .subagent-row{padding:calc(9px + var(--task-space-delta,0px)) calc(10px + var(--task-space-delta,0px));gap:calc(8px + var(--task-space-delta,0px))}
+.tasks-workspace .terminal-activity,.tasks-workspace .activity-row,.tasks-workspace .tool-activity,.tasks-workspace .subagent-row,.tasks-workspace .activity-command,.tasks-workspace .activity-detail{font-size:var(--task-font-11,11px)}
+.tasks-workspace .terminal-activity svg,.tasks-workspace .activity-row svg,.tasks-workspace .tool-activity svg{width:calc(15px + var(--task-control-delta,0px));height:calc(15px + var(--task-control-delta,0px))}
+.tasks-workspace .approval-actions button,.tasks-workspace .subagent-approval-actions button{min-height:calc(32px + var(--task-control-delta,0px));padding:calc(6px + var(--task-space-delta,0px)) calc(10px + var(--task-space-delta,0px));font-size:var(--task-font-10,10px)}
+
+.tasks-workspace .task-chat-footer{padding:calc(12px + var(--task-space-delta,0px)) calc(16px + var(--task-space-delta,0px))}
+.tasks-workspace .chatgpt-composer,.tasks-workspace .task-composer{gap:calc(8px + var(--task-space-delta,0px))}
+.tasks-workspace .chatgpt-composer textarea,.tasks-workspace .task-composer textarea{min-height:calc(44px + var(--task-control-delta,0px));padding:calc(10px + var(--task-space-delta,0px)) calc(12px + var(--task-space-delta,0px));font-size:var(--task-font-13,13px)}
+.tasks-workspace .chatgpt-composer button,.tasks-workspace .task-composer button{min-height:calc(36px + var(--task-control-delta,0px));font-size:var(--task-font-11,11px)}
+
+@media(max-width:980px){
+  .tasks-workspace .task-detail-body{grid-template-columns:minmax(0,1fr)}
+  .tasks-workspace .task-detail-sidebar{padding:calc(14px + var(--task-space-delta,0px))}
+}

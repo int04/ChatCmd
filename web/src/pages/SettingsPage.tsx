@@ -3,7 +3,7 @@ import { FormEvent, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { ErrorState, Loading, Modal, PageHeading, ProblemBanner, StatusBadge } from '../components';
-import { applyAppFont, GOOGLE_FONT_PRESETS, normalizeFontFamily } from '../fontPreferences';
+import { applyAppFont, applyTaskFontScale, GOOGLE_FONT_PRESETS, normalizeFontFamily, normalizeTaskFontScale, TASK_FONT_SCALE_PRESETS } from '../fontPreferences';
 import { getAppLanguage, setAppLanguage, tr, translatedStatus } from '../i18n';
 import { AccountSettings } from '../settings/AccountSettings';
 import { DataSettings } from '../settings/DataSettings';
@@ -60,9 +60,10 @@ export function SettingsPage() {
       const next = await api.saveSettings(value);
       result.setData(next);
       setValue(next);
-      localStorage.setItem('chatcmd.preferences', JSON.stringify({ theme: next.theme, fontFamily: next.fontFamily, language: next.language, sound: next.sound, newAgentSound: next.newAgentSound, finishedTaskSound: next.finishedTaskSound }));
+      localStorage.setItem('chatcmd.preferences', JSON.stringify({ theme: next.theme, fontFamily: next.fontFamily, taskFontScale: next.taskFontScale, language: next.language, sound: next.sound, newAgentSound: next.newAgentSound, finishedTaskSound: next.finishedTaskSound }));
       document.documentElement.dataset.theme = next.theme;
       applyAppFont(next.fontFamily);
+      applyTaskFontScale(next.taskFontScale);
       setAppLanguage(next.language, true);
       setSaved(true);
       window.setTimeout(() => setSaved(false), 2500);
@@ -75,6 +76,7 @@ export function SettingsPage() {
   const update = <K extends keyof LocalSettings>(key: K, next: LocalSettings[K]) => setValue({ ...value, [key]: next });
   const updateLanguage = (language: LocalSettings['language']) => { update('language', language); setAppLanguage(language, true); };
   const updateFont = (fontFamily: string) => { const next = normalizeFontFamily(fontFamily); update('fontFamily', next); applyAppFont(next); };
+  const updateTaskFontScale = (fontScale: number) => { const next = normalizeTaskFontScale(fontScale); update('taskFontScale', next); applyTaskFontScale(next); };
   const activeMeta = SETTINGS_TABS.find((tab) => tab.id === activeTab) ?? SETTINGS_TABS[0];
   const ActiveIcon = activeMeta.icon;
 
@@ -124,6 +126,7 @@ export function SettingsPage() {
             <div className="settings-section-block"><div className="settings-control-grid">
               <SettingField label={tr('Theme')} hint={tr('Controls the appearance of the management UI.')} detail={tr('System follows your operating system. Light and Dark keep a fixed appearance until you change this setting again.')}><select value={value.theme} onChange={(event) => update('theme', event.target.value as LocalSettings['theme'])}><option value="system">{tr('System')}</option><option value="light">{tr('Light')}</option><option value="dark">{tr('Dark')}</option></select></SettingField>
               <SettingField wide label={tr('Interface font')} hint={tr('Choose a Google Font or enter another family name.')} detail={tr('The selected Google Font is downloaded when ChatCMD starts. Vietnamese-friendly presets are available below, and you can type any other Google Fonts family name.')}><FontPicker value={value.fontFamily} onChange={updateFont} /></SettingField>
+              <SettingField wide label={tr('Task page font size')} hint={tr('Adjust text size only inside task conversation pages.')} detail={tr('ChatCMD scales typography together with key spacing, controls, icons, and side panels so larger or smaller text keeps the task UI balanced.')}><div className="settings-task-font-scale"><input type="range" min="90" max="130" step="5" value={value.taskFontScale} onChange={(event) => updateTaskFontScale(Number(event.target.value))} aria-label={tr('Task page font size')} /><div className="settings-font-presets">{TASK_FONT_SCALE_PRESETS.map((scale) => <button key={scale} type="button" className={`settings-font-chip ${value.taskFontScale === scale ? 'active' : ''}`} onClick={() => updateTaskFontScale(scale)}>{scale}%</button>)}</div><div className="settings-task-font-preview" style={{ '--preview-title-size': `${13 * value.taskFontScale / 100}px`, '--preview-body-size': `${11 * value.taskFontScale / 100}px` } as React.CSSProperties}><strong>{tr('Task conversation preview')}</strong><span>{tr('Messages, status, tools, sidebar, and composer resize together.')}</span></div></div></SettingField>
               <SettingField label={tr('Language')} hint={tr('Applied immediately to the current browser.')} detail={tr('Changes interface labels and descriptions. Technical output from tools, terminals, or external services may still use its original language.')}><select value={value.language} onChange={(event) => updateLanguage(event.target.value as LocalSettings['language'])}><option value="en">English</option><option value="vi">Tiếng Việt</option></select></SettingField>
             </div></div>
           </>}
