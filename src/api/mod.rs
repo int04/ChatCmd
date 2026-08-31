@@ -4,6 +4,7 @@ mod backend;
 mod chatgpt;
 mod chatgpt_support;
 mod crypto;
+mod data;
 mod folders;
 mod overview;
 mod routes;

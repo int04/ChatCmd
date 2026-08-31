@@ -19,6 +19,8 @@ export interface GiftCodeRedeemResult {
 }
 
 export interface BillingBalance { vnd: number }
+export interface DatabaseDiagnostics { path: string; tableCount: number; totalRows: number; fileSizeBytes: number; pageCount: number; pageSizeBytes: number; freePageCount: number; usedSizeBytes: number; tables: Array<{ name: string; rowCount: number }> }
+export interface DiagnosticLogs { path: string; lineCount: number; lines: string[] }
 export interface ServicePlan { id: number; name: string; price: number; type: number; days: number }
 export interface DealCheckResult {
   valid: boolean;
@@ -140,6 +142,9 @@ export const api = {
   deleteSkill: (id: string) => request<void>(`/api/local/skills/${item(id)}`, { method: 'DELETE' }),
   settings: () => request<LocalSettings>('/api/local/settings'),
   saveSettings: (value: LocalSettings) => request<LocalSettings>('/api/local/settings', { method: 'PUT', body: json(value) }),
+  databaseDiagnostics: () => request<DatabaseDiagnostics>('/api/local/diagnostics/database'),
+  diagnosticLogs: () => request<DiagnosticLogs>('/api/local/diagnostics/logs'),
+  deleteAllConversations: () => request<void>('/api/local/diagnostics/conversations', { method: 'DELETE' }),
   updateStatus: () => request<UpdateStatus>('/api/local/updates/status'),
   checkForUpdate: () => request<UpdateStatus>('/api/local/updates/check', { method: 'POST', body: '{}' }),
   startUpdate: () => request<UpdateStatus>('/api/local/updates/start', { method: 'POST', body: '{}' }),

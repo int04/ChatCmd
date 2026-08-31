@@ -12,9 +12,9 @@ use axum::{
 use crate::websocket::AppState;
 
 use super::{
-    Problem, agents::*, auth, backend, chatgpt::*, crypto, folders::*, overview::*, sessions::*,
-    settings::*, skills::*, task_controls::*, task_delete::*, task_views::*, updates::*,
-    workspaces::*,
+    Problem, agents::*, auth, backend, chatgpt::*, crypto, data::*, folders::*, overview::*,
+    sessions::*, settings::*, skills::*, task_controls::*, task_delete::*, task_views::*,
+    updates::*, workspaces::*,
 };
 
 pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
@@ -80,6 +80,12 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/skills/{id}/options", patch(set_skill_options))
         .route("/skills/{id}/icon", get(skill_icon))
         .route("/settings", get(settings).put(save_settings))
+        .route("/diagnostics/database", get(database_diagnostics))
+        .route("/diagnostics/logs", get(diagnostic_logs))
+        .route(
+            "/diagnostics/conversations",
+            axum::routing::delete(delete_all_conversations),
+        )
         .route("/updates/status", get(update_status))
         .route("/updates/check", post(check_update))
         .route("/updates/start", post(start_update))

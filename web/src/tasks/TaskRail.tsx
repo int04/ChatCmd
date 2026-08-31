@@ -1,12 +1,10 @@
-import { AlertTriangle, Bot, ChevronDown, ChevronUp, FolderOpen, GripVertical, LayoutDashboard, LoaderCircle, LogOut, Plus, RefreshCw, ScrollText, Search, Settings, TerminalSquare, Trash2, UserRound, Wrench, X } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type MouseEventHandler, type PointerEvent as ReactPointerEvent } from 'react';
+import { AlertTriangle, Bot, ChevronDown, ChevronUp, FolderOpen, GripVertical, LayoutDashboard, LoaderCircle, LogOut, Plus, Search, Settings, TerminalSquare, Trash2, UserRound, Wrench } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type MouseEventHandler } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 
 import { api } from '../api';
 import { useAuth } from '../auth';
 import { Empty, ErrorState, Loading, Modal } from '../components';
-import { getChatGptExtensionLogs } from '../chatgptBridge';
-import type { ChatGptExtensionLog } from '../chatgptBridge';
 import { tr } from '../i18n';
 import { useRealtime } from '../realtime';
 import type { Task, TimelineEvent, WorkspaceProject } from '../types';
@@ -27,49 +25,18 @@ const menuItems = [
 ];
 
 export function FunctionRail() {
-  const [logsOpen, setLogsOpen] = useState(false);
+  const navigate = useNavigate();
   useEffect(() => {
-    const openLogs = () => setLogsOpen(true);
+    const openLogs = () => navigate('/settings?tab=data&section=extension');
     window.addEventListener('chatcmd:open-extension-logs', openLogs);
     return () => window.removeEventListener('chatcmd:open-extension-logs', openLogs);
-  }, []);
-  return <>
-    <nav className="function-rail" aria-label={tr('Application navigation')}>
-      <Link className="function-rail-brand" to="/" aria-label="ChatCMD"><img src="/icons/logo-icon-master-1024.png" alt="" /></Link>
-      <div className="function-rail-items">
-        {menuItems.map(({ to, end, label, icon: Icon }) => <NavLink to={to} end={end} key={to} aria-label={tr(label)} title={tr(label)}><Icon /><span className="sr-only">{tr(label)}</span></NavLink>)}
-        <button className={`function-rail-action ${logsOpen ? 'active' : ''}`} type="button" aria-label={tr('Extension logs')} title={tr('Extension logs')} onClick={() => setLogsOpen(true)}><ScrollText /><span className="sr-only">{tr('Extension logs')}</span></button>
-      </div>
-    </nav>
-    {logsOpen && <ExtensionLogWindow close={() => setLogsOpen(false)} />}
-  </>;
-}
-
-function ExtensionLogWindow({ close }: { close: () => void }) {
-  const [logs, setLogs] = useState<ChatGptExtensionLog[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [position, setPosition] = useState(() => { const width = Math.min(560, window.innerWidth - 24); return { x: Math.max(12, window.innerWidth - width - 20), y: Math.min(88, Math.max(12, window.innerHeight - 180)) }; });
-  const dragRef = useRef<{ pointerId: number; offsetX: number; offsetY: number } | null>(null);
-  const refresh = useCallback(async () => {
-    setLoading(true); setError('');
-    try { setLogs((await getChatGptExtensionLogs()).slice(-150).reverse()); }
-    catch (value) { setError(value instanceof Error ? value.message : tr('Could not read extension logs.')); }
-    finally { setLoading(false); }
-  }, []);
-  useEffect(() => { void refresh(); }, [refresh]);
-  const move = (event: ReactPointerEvent<HTMLElement>) => {
-    const drag = dragRef.current; if (!drag || drag.pointerId !== event.pointerId) return;
-    const width = Math.min(560, window.innerWidth - 24); const height = Math.min(620, window.innerHeight - 24);
-    setPosition({ x: Math.min(Math.max(12, event.clientX - drag.offsetX), Math.max(12, window.innerWidth - width - 12)), y: Math.min(Math.max(12, event.clientY - drag.offsetY), Math.max(12, window.innerHeight - height - 12)) });
-  };
-  return <section className="extension-log-window" style={{ left: position.x, top: position.y }} role="dialog" aria-label={tr('Extension logs')}>
-    <header className="extension-log-window-titlebar" onPointerDown={(event) => { if ((event.target as HTMLElement).closest('button')) return; dragRef.current = { pointerId: event.pointerId, offsetX: event.clientX - position.x, offsetY: event.clientY - position.y }; event.currentTarget.setPointerCapture(event.pointerId); }} onPointerMove={move} onPointerUp={(event) => { if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null; if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); }} onPointerCancel={(event) => { if (dragRef.current?.pointerId === event.pointerId) dragRef.current = null; }}>
-      <div><ScrollText /><span><strong>{tr('Extension logs')}</strong><small>ChatCMD ChatGPT Bridge</small></span></div>
-      <div className="extension-log-window-actions"><button type="button" aria-label={tr('Reload')} title={tr('Reload')} onClick={() => void refresh()} disabled={loading}><RefreshCw className={loading ? 'spin' : ''} /></button><button type="button" aria-label={tr('Close')} title={tr('Close')} onClick={close}><X /></button></div>
-    </header>
-    <div className="extension-log-window-body">{error ? <p className="extension-log-window-error"><AlertTriangle />{error}</p> : loading && !logs.length ? <div className="extension-log-window-loading"><LoaderCircle className="spin" />{tr('Loading')}</div> : !logs.length ? <p className="extension-log-window-empty">{tr('No extension logs yet.')}</p> : logs.map((log, index) => <div className={`extension-log-window-row ${log.level}`} key={`${log.at}-${index}`}><time>{new Date(log.at).toLocaleTimeString()}</time><strong>{log.source}</strong><span>{log.message}</span></div>)}</div>
-  </section>;
+  }, [navigate]);
+  return <nav className="function-rail" aria-label={tr('Application navigation')}>
+    <Link className="function-rail-brand" to="/" aria-label="ChatCMD"><img src="/icons/logo-icon-master-1024.png" alt="" /></Link>
+    <div className="function-rail-items">
+      {menuItems.map(({ to, end, label, icon: Icon }) => <NavLink to={to} end={end} key={to} aria-label={tr(label)} title={tr(label)}><Icon /><span className="sr-only">{tr(label)}</span></NavLink>)}
+    </div>
+  </nav>;
 }
 
 export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -102,6 +69,11 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
   }, [nextCursor]);
 
   useEffect(() => { void applyFirstPage(); }, [applyFirstPage]);
+  useEffect(() => {
+    const cleared = () => { setLoadedTasks([]); setNextCursor(undefined); setReadFinalCounts({}); void applyFirstPage(); };
+    window.addEventListener('chatcmd:conversations-cleared', cleared);
+    return () => window.removeEventListener('chatcmd:conversations-cleared', cleared);
+  }, [applyFirstPage]);
   useEffect(() => { visibleTaskIds.current = new Set(loadedTasks.map((task) => task.id)); }, [loadedTasks]);
   useEffect(() => { if (loading || hadStoredReadCounts.current) return; hadStoredReadCounts.current = true; setReadFinalCounts(Object.fromEntries(loadedTasks.map((task) => [task.id, task.finalResponseCount ?? 0]))); }, [loadedTasks, loading]);
   const handleRealtime = useCallback((event: TimelineEvent) => { if (event.type === 'system.connected') { void refreshHead(); return; } if (!event.taskId) return; if (visibleTaskIds.current.has(event.taskId)) setLoadedTasks((current) => upsertTaskEvent(current, event) ?? current); else void refreshHead(); }, [refreshHead]);

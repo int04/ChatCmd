@@ -105,6 +105,84 @@ async fn delete_task_data(
     Ok(())
 }
 
+pub(super) async fn delete_all_conversations(
+    State(state): State<Arc<AppState>>,
+) -> Result<StatusCode, Problem> {
+    // Pending tasks (especially abandoned subagents) have no active runtime and must not
+    // prevent a user from clearing conversation history. Only work that is actually
+    // running is unsafe to delete while the runtime may still be writing to it.
+    let active_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks WHERE status='running'")
+        .fetch_one(state.repository.pool())
+        .await
+        .map_err(db_problem)?;
+    if active_count > 0 {
+        return Err(Problem::new(
+            StatusCode::CONFLICT,
+            "Conversation is still active",
+            "Không thể xóa toàn bộ đoạn trò chuyện khi vẫn còn công việc đang chạy. Hãy dừng hoặc chờ các công việc hiện tại kết thúc trước.",
+        ));
+    }
+
+    let mut transaction = state.repository.pool().begin().await.map_err(db_problem)?;
+
+    // ChatGPT bridge rows are conversation/message data even if a failed request never received a task_id.
+    sqlx::query("DELETE FROM chatgpt_conversations")
+        .execute(&mut *transaction)
+        .await
+        .map_err(db_problem)?;
+    sqlx::query("DELETE FROM chatgpt_bridge_requests")
+        .execute(&mut *transaction)
+        .await
+        .map_err(db_problem)?;
+
+    // Delete all task-scoped message/history records before the task rows they reference.
+    for table in [
+        "approvals",
+        "artifact_registry",
+        "task_execution_modes",
+        "turn_bindings",
+        "timeline_events",
+        "task_sessions",
+        "subagent_runs",
+    ] {
+        let statement = format!("DELETE FROM {table}");
+        sqlx::query(&statement)
+            .execute(&mut *transaction)
+            .await
+            .map_err(db_problem)?;
+    }
+
+    // Terminal history created for conversations is also part of the conversation trace.
+    sqlx::query(
+        "DELETE FROM terminal_event_chunks WHERE task_id IS NOT NULL OR session_id IN (SELECT id FROM terminal_sessions WHERE task_id IS NOT NULL)",
+    )
+    .execute(&mut *transaction)
+    .await
+    .map_err(db_problem)?;
+    sqlx::query("DELETE FROM terminal_sessions WHERE task_id IS NOT NULL")
+        .execute(&mut *transaction)
+        .await
+        .map_err(db_problem)?;
+
+    sqlx::query("DELETE FROM tasks")
+        .execute(&mut *transaction)
+        .await
+        .map_err(db_problem)?;
+
+    transaction.commit().await.map_err(db_problem)?;
+
+    // SQLite keeps pages released by DELETE in the database freelist, so the
+    // physical .db file does not shrink by itself. Clearing every conversation
+    // is an explicit maintenance operation, therefore compact the database here
+    // so "Database size" reflects the data that is actually left on disk.
+    sqlx::query("VACUUM")
+        .execute(state.repository.pool())
+        .await
+        .map_err(db_problem)?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 fn active_task_problem() -> Problem {
     Problem::new(
         StatusCode::CONFLICT,
