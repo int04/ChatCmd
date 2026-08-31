@@ -409,6 +409,7 @@ async function waitForAssistant(previousCount, requestId) {
 
 function findThreadError() {
   const latestUser = [...document.querySelectorAll('[data-message-author-role="user"]')].filter(isVisible).at(-1);
+  const latestAssistant = assistantNodes().at(-1);
   const candidates = [...document.querySelectorAll([
     'button[data-testid="regenerate-thread-error-button"]',
     '[class*="text-token-text-error"]',
@@ -416,8 +417,11 @@ function findThreadError() {
     '[class*="border-token-surface-error"]',
   ].join(','))].filter(isVisible);
   return candidates.reverse().find((element) => {
-    if (!latestUser) return true;
-    return Boolean(latestUser.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING);
+    const afterLatestUser = !latestUser || Boolean(latestUser.compareDocumentPosition(element) & Node.DOCUMENT_POSITION_FOLLOWING);
+    if (!afterLatestUser) return false;
+    if (!latestAssistant) return true;
+    const assistantAfterError = Boolean(element.compareDocumentPosition(latestAssistant) & Node.DOCUMENT_POSITION_FOLLOWING);
+    return !assistantAfterError;
   }) || null;
 }
 
