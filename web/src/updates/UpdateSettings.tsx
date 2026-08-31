@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle2, Download, PackageOpen, RefreshCw, RotateCcw, ShieldCheck } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Cpu, Download, FileText, Laptop, PackageOpen, RefreshCw, RotateCcw, ShieldCheck, Sparkles } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
 import { Modal } from '../components';
@@ -27,8 +27,7 @@ export function UpdateSettings() {
   const check = useCallback(async () => {
     setError('');
     try {
-      const next = await api.checkForUpdate();
-      setStatus(next);
+      setStatus(await api.checkForUpdate());
     } catch (reason) {
       setError(errorMessage(reason));
     }
@@ -80,30 +79,65 @@ export function UpdateSettings() {
   if (!status) return <div className="update-loading"><span className="spinner" />{copy.checking}</div>;
 
   const busy = isActiveUpdatePhase(status.phase);
-  return <div className="update-settings">
-    <div className="settings-intro update-intro">
-      <span><ShieldCheck /></span>
-      <div><strong>{copy.introTitle}</strong><p>{copy.introDescription}</p></div>
-    </div>
+  const latestVersion = status.latestVersion ?? '—';
+  const hasUpdate = status.updateAvailable;
+
+  return <div className="update-settings update-settings-pro">
+    <section className={`update-settings-hero ${hasUpdate ? 'has-update' : ''}`}>
+      <div className="update-settings-hero-icon" aria-hidden="true"><Sparkles /></div>
+      <div className="update-settings-hero-copy">
+        <span className={`update-settings-status-pill ${hasUpdate ? 'available' : 'current'}`}>
+          <i />{hasUpdate ? copy.popupBadge : copy.upToDate}
+        </span>
+        <h2>{hasUpdate ? `ChatCMD ${latestVersion}` : copy.introTitle}</h2>
+        <p>{hasUpdate ? copy.popupDescription : copy.introDescription}</p>
+      </div>
+      <div className="update-settings-hero-action">
+        <button type="button" className="button secondary" disabled={busy || restarting} onClick={() => void check()}>
+          <RefreshCw className={status.phase === 'checking' ? 'spin' : ''} />
+          {status.phase === 'checking' ? copy.checking : copy.check}
+        </button>
+      </div>
+    </section>
 
     {error && <div className="update-error"><AlertTriangle /><span>{error}</span></div>}
 
-    <section className="update-version-grid">
-      <VersionCard label={copy.currentVersion} version={status.currentVersion} />
-      <VersionCard label={copy.latestVersion} version={status.latestVersion ?? '—'} highlighted={status.updateAvailable} />
-      <div className="update-version-card"><small>{copy.platform}</small><strong>{platformLabel(status.platform)} · {architectureLabel(status.architecture)}</strong></div>
-    </section>
+    <div className="update-settings-main-grid">
+      <div className="update-settings-left">
+        <section className="update-settings-version-panel">
+          <header className="update-settings-section-heading">
+            <div><Laptop /><span><small>{copy.currentVersion}</small><strong>{status.currentVersion}</strong></span></div>
+            {hasUpdate && <span className="update-settings-version-arrow">→</span>}
+            <div className={hasUpdate ? 'is-latest' : ''}><PackageOpen /><span><small>{copy.latestVersion}</small><strong>{latestVersion}</strong></span></div>
+          </header>
 
-    {status.note && <section className="update-release-note"><small>{copy.releaseNotes}</small><p>{status.note}</p></section>}
+          <div className="update-settings-device-row">
+            <div><Cpu /><span><small>{copy.platform}</small><strong>{platformLabel(status.platform)} · {architectureLabel(status.architecture)}</strong></span></div>
+            <div><ShieldCheck /><span><small>Updater</small><strong>{status.downloadAvailable || !hasUpdate ? 'Ready' : 'Unavailable'}</strong></span></div>
+          </div>
+        </section>
 
-    <UpdateState status={status} />
+        <UpdateState status={status} />
 
-    <div className="update-actions">
-      <button type="button" className="button secondary" disabled={busy || restarting} onClick={() => void check()}>
-        <RefreshCw className={status.phase === 'checking' ? 'spin' : ''} />{status.phase === 'checking' ? copy.checking : copy.check}
-      </button>
-      {status.updateAvailable && status.downloadAvailable && !busy && status.phase !== 'readyToRestart' && <button type="button" className="button primary" onClick={() => setConfirming(true)}><Download />{copy.update}</button>}
-      {status.phase === 'readyToRestart' && <button type="button" className="button primary" disabled={restarting} onClick={() => void restart()}><RotateCcw className={restarting ? 'spin' : ''} />{restarting ? copy.restarting : copy.restart}</button>}
+        <div className="update-settings-primary-actions">
+          {status.updateAvailable && status.downloadAvailable && !busy && status.phase !== 'readyToRestart' &&
+            <button type="button" className="button primary update-settings-cta" onClick={() => setConfirming(true)}><Download />{copy.update}</button>}
+          {status.phase === 'readyToRestart' &&
+            <button type="button" className="button primary update-settings-cta" disabled={restarting} onClick={() => void restart()}>
+              <RotateCcw className={restarting ? 'spin' : ''} />{restarting ? copy.restarting : copy.restart}
+            </button>}
+        </div>
+      </div>
+
+      <section className="update-settings-note-panel">
+        <header>
+          <span><FileText /></span>
+          <div><small>{copy.releaseNotes}</small><strong>{hasUpdate ? `ChatCMD ${latestVersion}` : copy.currentVersion}</strong></div>
+        </header>
+        <div className="update-settings-note-scroll" tabIndex={0}>
+          {status.note ? <p>{status.note}</p> : <div className="update-settings-note-empty"><FileText /><span>—</span></div>}
+        </div>
+      </section>
     </div>
 
     {confirming && <Modal title={copy.confirmTitle} description={copy.confirmDescription} close={() => setConfirming(false)} dangerous>
@@ -140,10 +174,6 @@ function UpdateProgress({ status }: { status: UpdateStatus }) {
       <UpdateStep label={copy.restartStep} state="pending" icon={<RotateCcw />} />
     </div>
   </section>;
-}
-
-function VersionCard({ label, version, highlighted = false }: { label: string; version: string; highlighted?: boolean }) {
-  return <div className={`update-version-card ${highlighted ? 'highlighted' : ''}`}><small>{label}</small><strong>{version}</strong></div>;
 }
 
 function StateMessage({ icon, title, body, danger = false }: { icon: React.ReactNode; title: string; body?: string; danger?: boolean }) {
