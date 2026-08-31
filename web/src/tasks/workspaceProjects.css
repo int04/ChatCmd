@@ -12,7 +12,9 @@
 .task-project-conversations{display:grid;gap:3px}
 .task-project-conversations .tasks-conversation-row{border-radius:10px}
 .task-project-empty{margin:0;padding:8px 8px 10px;color:var(--subtle);font-size:10px}
-.task-project-more,.task-rail-load-retry{width:100%;min-height:31px;margin-top:5px;display:flex;align-items:center;justify-content:center;gap:6px;border:0;border-radius:8px;background:transparent;color:var(--muted);font-size:10px;font-weight:700}
+.task-project-more-actions{min-height:31px;margin-top:5px;display:flex;align-items:center;justify-content:center;gap:4px;color:var(--subtle);font-size:10px}
+.task-project-more{min-height:31px;padding:0 8px;display:flex;align-items:center;justify-content:center;gap:6px;border:0;border-radius:8px;background:transparent;color:var(--muted);font-size:10px;font-weight:700}
+.task-rail-load-retry{width:100%;min-height:31px;margin-top:5px;display:flex;align-items:center;justify-content:center;gap:6px;border:0;border-radius:8px;background:transparent;color:var(--muted);font-size:10px;font-weight:700}
 .task-project-more:hover,.task-rail-load-retry:hover{background:var(--surface-2);color:var(--text)}
 .task-project-more svg{width:14px;height:14px}
 .workspace-project-modal,.workspace-folder-modal{width:min(570px,100%)}

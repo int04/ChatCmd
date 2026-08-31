@@ -139,7 +139,7 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
     return <section className="task-project-group" key={key}>
       <header className="task-project-heading"><div><strong title={project?.path}>{name}</strong>{project && <small title={project.path}>{project.path}</small>}</div><button type="button" onClick={() => startTask(project)} aria-label={`Tạo đoạn trò chuyện trong ${name}`} title={`Tạo đoạn trò chuyện trong ${name}`}><Plus /></button></header>
       <div className="task-project-conversations">{visible.length ? visible.map(renderRow) : <p className="task-project-empty">Chưa có đoạn trò chuyện</p>}</div>
-      {groupTasks.length > visibleCount && <button className="task-project-more" type="button" onClick={() => setVisibleGroupCounts((current) => ({ ...current, [key]: visibleCount + COLLAPSED_PROJECT_TASKS }))}><ChevronDown />Xem thêm</button>}
+      {groupTasks.length > COLLAPSED_PROJECT_TASKS && <div className="task-project-more-actions">{groupTasks.length > visibleCount && <button className="task-project-more" type="button" onClick={() => setVisibleGroupCounts((current) => ({ ...current, [key]: visibleCount + COLLAPSED_PROJECT_TASKS }))}><ChevronDown />Xem thêm</button>}{visibleCount > COLLAPSED_PROJECT_TASKS && <><span aria-hidden="true">|</span><button className="task-project-more" type="button" onClick={() => setVisibleGroupCounts((current) => ({ ...current, [key]: COLLAPSED_PROJECT_TASKS }))}><ChevronUp />Ẩn bớt</button></>}</div>}
     </section>;
   };
 
