@@ -19,6 +19,7 @@ export interface GiftCodeRedeemResult {
 }
 
 export interface BillingBalance { vnd: number }
+export interface ElevationStatus { supported: boolean; elevated: boolean }
 export interface PaymentCreateResult {
   success: true;
   data: {
@@ -130,6 +131,8 @@ export const api = {
   tools: () => request<Tool[]>('/api/local/mcp/tools'),
   presets: () => request<ToolPreset[]>('/api/local/mcp/tool-presets'),
   pickProjectFolder: () => request<{ path: string | null }>('/api/local/system/folder-picker', { method: 'POST', body: '{}' }),
+  elevationStatus: () => request<ElevationStatus>('/api/local/system/elevation'),
+  restartElevated: () => request<ElevationStatus>('/api/local/system/elevation/restart', { method: 'POST', body: '{}' }),
   workspaceProjects: () => request<WorkspaceProject[]>('/api/local/workspaces/projects'),
   saveWorkspaceProject: (input: { name: string; path: string }) => request<WorkspaceProject>('/api/local/workspaces/projects', { method: 'POST', body: json(input) }),
   reorderWorkspaceProjects: (projectIds: string[]) => request<void>('/api/local/workspaces/projects/order', { method: 'PUT', body: json({ projectIds }) }),

@@ -51,11 +51,13 @@ use websocket::{AppEvent, AppState, ws_handler};
 #[cfg(debug_assertions)]
 #[tokio::main]
 async fn main() -> Result<()> {
+    apply_elevated_restart_delay();
     run_server(None).await
 }
 
 #[cfg(all(not(debug_assertions), any(target_os = "windows", target_os = "macos")))]
 fn main() -> Result<()> {
+    apply_elevated_restart_delay();
     let port = configured_port()?;
     let management_url = format!("http://127.0.0.1:{port}");
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
@@ -80,7 +82,23 @@ fn main() -> Result<()> {
 ))]
 #[tokio::main]
 async fn main() -> Result<()> {
+    apply_elevated_restart_delay();
     run_server(None).await
+}
+
+fn apply_elevated_restart_delay() {
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg != "--elevated-restart-delay-ms" {
+            continue;
+        }
+        if let Some(value) = args.next()
+            && let Ok(delay_ms) = value.parse::<u64>()
+        {
+            std::thread::sleep(std::time::Duration::from_millis(delay_ms.min(5_000)));
+        }
+        break;
+    }
 }
 
 async fn run_server(ready: Option<std::sync::mpsc::Sender<()>>) -> Result<()> {

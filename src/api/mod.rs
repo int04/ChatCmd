@@ -16,6 +16,7 @@ mod sessions;
 mod settings;
 mod skills;
 mod subagents;
+mod system;
 mod task_controls;
 mod task_delete;
 mod task_views;

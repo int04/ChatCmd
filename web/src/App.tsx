@@ -1,6 +1,7 @@
-import { Menu, Sparkles } from 'lucide-react';
+import { Menu, ShieldAlert, Sparkles } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { NavLink, Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom';
+import { api } from './api';
 import { AuthProvider, useAuth } from './auth';
 import { applyAppFont, applyTaskFontScale, DEFAULT_APP_FONT, DEFAULT_TASK_FONT_SCALE } from './fontPreferences';
 import { useAppLanguage, tr } from './i18n';
@@ -32,7 +33,35 @@ function ProtectedApp() {
   const location = useLocation();
   if (loading) return <main className="auth-screen"><div className="auth-loading"><span className="spinner" />Đang kiểm tra đăng nhập…</div></main>;
   if (!user) return <Navigate replace to="/login" state={{ from: `${location.pathname}${location.search}` }} />;
-  return <RealtimeProvider><GlobalDocumentTitleBridge /><SoundNotificationsBridge /><GlobalConversationApprovalQueue /><GlobalUpdatePrompt /><Routes><Route element={<Shell />}><Route index element={<DashboardPage />} /><Route path="tasks/:taskId?" element={<TasksPage />} /><Route path="sessions" element={<SessionsPage />} /><Route path="sessions/terminal/:sessionId" element={<LiveTerminalPage />} /><Route path="sessions/:sessionId" element={<SessionDetailPage />} /><Route path="agents" element={<AgentsPage />} /><Route path="skills" element={<SkillsPage />} /><Route path="settings" element={<SettingsPage />} />{legacyPaths.map((path) => <Route key={path} path={path} element={<Navigate replace to="/" />} />)}<Route path="*" element={<NotFound />} /></Route></Routes></RealtimeProvider>;
+  return <RealtimeProvider><GlobalDocumentTitleBridge /><SoundNotificationsBridge /><GlobalConversationApprovalQueue /><GlobalUpdatePrompt /><AdminElevationPrompt /><Routes><Route element={<Shell />}><Route index element={<DashboardPage />} /><Route path="tasks/:taskId?" element={<TasksPage />} /><Route path="sessions" element={<SessionsPage />} /><Route path="sessions/terminal/:sessionId" element={<LiveTerminalPage />} /><Route path="sessions/:sessionId" element={<SessionDetailPage />} /><Route path="agents" element={<AgentsPage />} /><Route path="skills" element={<SkillsPage />} /><Route path="settings" element={<SettingsPage />} />{legacyPaths.map((path) => <Route key={path} path={path} element={<Navigate replace to="/" />} />)}<Route path="*" element={<NotFound />} /></Route></Routes></RealtimeProvider>;
+}
+
+function AdminElevationPrompt() {
+  const [visible, setVisible] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let active = true;
+    void api.elevationStatus()
+      .then((status) => { if (active) setVisible(status.supported && !status.elevated); })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, []);
+
+  if (!visible) return null;
+  const restart = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      await api.restartElevated();
+    } catch (reason) {
+      setBusy(false);
+      setError(reason instanceof Error ? reason.message : tr('Unable to restart ChatCMD as administrator.'));
+    }
+  };
+
+  return <div className="admin-elevation-banner" role="status"><ShieldAlert /><div><strong>{tr('Run ChatCMD as administrator')}</strong><span>{tr('Administrator access is recommended so local tools can run with full system permissions.')}</span>{error && <span className="admin-elevation-error">{error}</span>}</div><button className="button primary" type="button" disabled={busy} onClick={() => void restart()}>{busy ? tr('Restarting…') : tr('Run as administrator')}</button></div>;
 }
 
 function GlobalDocumentTitleBridge() {

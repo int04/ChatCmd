@@ -697,7 +697,9 @@ fn same_tunnel_server(left: &str, right: &str) -> bool {
                 && left.port_or_known_default() == right.port_or_known_default()
                 && left.path().trim_end_matches('/') == right.path().trim_end_matches('/')
         }
-        _ => left.trim_end_matches('/').eq_ignore_ascii_case(right.trim_end_matches('/')),
+        _ => left
+            .trim_end_matches('/')
+            .eq_ignore_ascii_case(right.trim_end_matches('/')),
     }
 }
 

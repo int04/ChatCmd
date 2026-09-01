@@ -13,8 +13,8 @@ use crate::websocket::AppState;
 
 use super::{
     Problem, agents::*, auth, backend, chatgpt::*, chatgpt_completion::*, crypto, data::*,
-    folders::*, overview::*, payment::*, sessions::*, settings::*, skills::*, task_controls::*,
-    task_delete::*, task_views::*, tunnels::*, updates::*, workspaces::*,
+    folders::*, overview::*, payment::*, sessions::*, settings::*, skills::*, system::*,
+    task_controls::*, task_delete::*, task_views::*, tunnels::*, updates::*, workspaces::*,
 };
 
 pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
@@ -48,6 +48,8 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
             post(copy_plugin_link),
         )
         .route("/system/folder-picker", post(pick_project_folder))
+        .route("/system/elevation", get(elevation_status))
+        .route("/system/elevation/restart", post(restart_elevated))
         .route(
             "/workspaces/projects",
             get(workspace_projects).post(save_workspace_project),
