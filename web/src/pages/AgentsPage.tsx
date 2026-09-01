@@ -132,57 +132,55 @@ export function AgentsPage() {
 
   const presetName = (presetId?: string) => presetId ? presets.data?.find((preset) => preset.id === presetId)?.name ?? tr('Saved permission profile') : tr('Custom permissions');
 
-  return <div className="agents-page">
-    <PageHeading eyebrow={tr('MCP ACCESS')} title={tr('Agents & Tunnels')} body={tr('Create access profiles for AI clients and choose how this device can be reached from the Internet.')} actions={<button className="button primary" onClick={() => setEditor('new')}><Plus />{tr('New access profile')}</button>} />
+  return <div className="agents-page agents-simple-page agents-clean-page">
+    <PageHeading eyebrow={tr('AI ACCESS')} title={tr('Plugin list')} body={tr('Connect this device once, then choose which AI clients are allowed to use it.')} actions={<button className="button primary" onClick={() => setEditor('new')}><Plus />{tr('Create new Plugin connection')}</button>} />
     <ProblemBanner message={problem} clear={() => setProblem('')} />
-    <div className="agents-tunnel-grid">
-      <section className="agents-workspace-panel">
-        <header className="agents-panel-header"><div><span className="eyebrow">{tr('AGENTS')}</span><h2>{tr('AI access profiles')}</h2><p>{tr('Each profile represents one AI client and defines exactly which tools that client is allowed to use.')}</p></div><span className="agents-panel-count">{agents.data?.length ?? 0}</span></header>
-        {agents.loading ? <Loading label={tr('Loading agents')} /> : agents.error ? <ErrorState message={agents.error} retry={() => void agents.reload()} /> : !agents.data?.length ? <Empty title={tr('No access profiles yet')} body={tr('Create a profile to give an AI client controlled access to this device.')} /> : <div className="agent-list-grid">
-          {agents.data.map((agent) => <article className="agent-list-card" key={agent.id}>
-            <div className="agent-list-main">
-              <div className="agent-list-identity">
-                <span className="agent-avatar"><KeyRound /></span>
-                <div><div className="agent-list-title"><strong>{agent.name}</strong><StatusBadge state={agent.enabled ? 'ready' : 'stopped'} label={agent.enabled ? tr('Enabled') : tr('Disabled')} /></div><code title={agent.id}>{agent.id}</code></div>
-              </div>
-              <div className="agent-list-meta">
-                <div><span>{tr('Allowed tools')}</span><strong>{tr('{count} tools allowed', { count: agent.toolIds.length })}</strong></div>
-                <div><span>{tr('Permission mode')}</span><strong>{presetName(agent.presetId)}</strong></div>
-              </div>
-            </div>
-            <div className="agent-list-actions">
-              <button className="button primary compact agent-plugin-button" onClick={() => setPluginAgent(agent)}><Link2 />{tr('Get connection link')}</button>
-              <div className="agent-list-secondary-actions">
-                <button className="button secondary compact" onClick={() => setEditor(agent)}><Pencil />{tr('Edit')}</button>
-                <button className="button secondary compact" title={tr('Create a new access key. Existing connection links for this profile will stop working.')} onClick={() => void rotate(agent)}><RotateCw />{tr('Rotate token')}</button>
-                <button className="icon-button danger-icon" aria-label={tr('Delete {name}', { name: agent.name })} title={tr('Delete {name}', { name: agent.name })} onClick={() => void remove(agent)}><Trash2 /></button>
-              </div>
-            </div>
-          </article>)}
-        </div>}
-      </section>
 
-      <section className="tunnel-panel">
-        <header className="tunnel-panel-header"><div><span className="eyebrow">{tr('TUNNEL')}</span><h2>{tr('Public routes')}</h2><p>{tr('Connect this device to ChatCMD Tunnel, or keep using your own Cloudflare/domain routes.')}</p></div><button className="button secondary tunnel-add-button" onClick={() => setAddingTunnel(true)}><Plus />{tr('Add public address')}</button></header>
-        <div className={`managed-tunnel-bar ${managedTunnelState ?? 'loading'}`}>
-          <span className="managed-tunnel-icon" aria-hidden="true"><PlugZap /></span>
-          <div className="managed-tunnel-copy">
-            <div><strong>{tr('ChatCMD Tunnel')}</strong><span role="status" aria-live="polite" className={`managed-tunnel-state ${managedTunnelState ?? 'loading'}`}>{managedTunnelStateLabel}</span></div>
-            {managedTunnel.data?.publicUrl ? <code title={managedTunnel.data.publicUrl}>{managedTunnel.data.publicUrl}</code> : <p>{tr('When connected, ChatCMD creates a public Internet address for this device so approved AI clients can reach it remotely.')}</p>}
-            {managedTunnel.data?.key && <small>{tr('Tunnel key')}: <code>{managedTunnel.data.key}</code> · {tr('Server')}: {managedTunnel.data.serverUrl}</small>}
-            {(managedTunnel.error || managedTunnel.data?.lastError) && <small className="managed-tunnel-error">{managedTunnel.error || managedTunnel.data?.lastError}</small>}
-          </div>
-          <button type="button" className={`button compact ${managedTunnelActive ? 'secondary' : 'primary'}`} disabled={managedTunnel.loading || tunnelConnectionBusy || !managedTunnel.data} aria-label={managedTunnelActive ? tr('Stop ChatCMD Tunnel') : tr('Connect ChatCMD Tunnel')} onClick={() => void (managedTunnelActive ? disconnectTunnel() : connectTunnel())}>
-            {tunnelConnectionBusy || managedTunnelState === 'connecting' ? <LoaderCircle className="spin" aria-hidden="true" /> : managedTunnelActive ? <Power aria-hidden="true" /> : <PlugZap aria-hidden="true" />}
-            {managedTunnelState === 'connecting' ? tr('Connecting…') : tunnelConnectionBusy ? tr('Stopping…') : managedTunnelActive ? tr('Disconnect') : tr('Connect')}
-          </button>
+    <section className="agents-clean-connect">
+      <div className="agents-clean-connect-main">
+        <span className={`agents-clean-status-icon ${managedTunnelState ?? 'loading'}`}><PlugZap /></span>
+        <div className="agents-clean-connect-copy">
+          <div className="agents-clean-connect-title"><h2>{tr('ChatCMD Tunnel')}</h2><span role="status" className={`managed-tunnel-state ${managedTunnelState ?? 'loading'}`}>{managedTunnelStateLabel}</span></div>
+          <p>{tr('Use ChatCMD free Tunnel to quickly connect to AI services without any setup.')}</p>
+          {managedTunnel.data?.publicUrl && <code title={managedTunnel.data.publicUrl}>{managedTunnel.data.publicUrl}</code>}
+          {(managedTunnel.error || managedTunnel.data?.lastError) && <small className="managed-tunnel-error">{managedTunnel.error || managedTunnel.data?.lastError}</small>}
         </div>
-        <div className="custom-tunnel-heading"><div><strong>{tr('Your public addresses')}</strong><small>{tr('Use a domain, Cloudflare Tunnel, or public IP/port that you manage yourself.')}</small></div><span aria-label={tr('{count} public addresses', { count: tunnels.data?.length ?? 0 })}>{tunnels.data?.length ?? 0}</span></div>
-        {tunnels.loading ? <div className="tunnel-panel-state"><LoaderCircle className="spin" />{tr('Loading public addresses')}</div> : tunnels.error ? <div className="tunnel-panel-state error"><span>{tunnels.error}</span><button className="button secondary compact" onClick={() => void tunnels.reload()}>{tr('Retry')}</button></div> : !tunnels.data?.length ? <div className="tunnel-empty"><span><Network /></span><strong>{tr('No custom addresses yet')}</strong><p>{tr('Add a public address that routes to ChatCMD on this device. It can then be used to create connection links for AI clients.')}</p><button className="button secondary" onClick={() => setAddingTunnel(true)}><Plus />{tr('Add public address')}</button></div> : <div className="tunnel-list">{tunnels.data.map((tunnel) => <article className="tunnel-row" key={tunnel.id}>
-          <span className="tunnel-icon"><Globe2 /></span><div className="tunnel-copy"><strong>{tunnel.baseUrl}</strong><small>{tr('Connection check')}: {tunnel.baseUrl}/api/ping</small></div><div className="tunnel-row-actions">{testedTunnelId === tunnel.id && <span className="tunnel-ok" title={tr('Tunnel is reachable')}><CheckCircle2 /></span>}<button className="button secondary compact" disabled={testingTunnelId === tunnel.id || deletingTunnelId === tunnel.id} onClick={() => void testTunnel(tunnel)}>{testingTunnelId === tunnel.id ? <LoaderCircle className="spin" /> : <Wifi />}{testingTunnelId === tunnel.id ? tr('Testing…') : tr('Test')}</button><button className="icon-button danger-icon" disabled={deletingTunnelId === tunnel.id} aria-label={tr('Delete public address {address}', { address: tunnel.baseUrl })} title={tr('Delete public address')} onClick={() => setDeleteTunnelTarget(tunnel)}>{deletingTunnelId === tunnel.id ? <LoaderCircle className="spin" /> : <Trash2 />}</button></div>
+      </div>
+      <button type="button" className={`button ${managedTunnelActive ? 'secondary' : 'primary'}`} disabled={managedTunnel.loading || tunnelConnectionBusy || !managedTunnel.data} onClick={() => void (managedTunnelActive ? disconnectTunnel() : connectTunnel())}>
+        {tunnelConnectionBusy || managedTunnelState === 'connecting' ? <LoaderCircle className="spin" /> : managedTunnelActive ? <Power /> : <PlugZap />}
+        {managedTunnelState === 'connecting' ? tr('Connecting…') : tunnelConnectionBusy ? tr('Stopping…') : managedTunnelActive ? tr('Turn off') : tr('Turn on')}
+      </button>
+    </section>
+
+    <section className="agents-clean-access">
+      <header className="agents-clean-section-header">
+        <div><h2>{tr('Created Plugin list')}</h2><p>{tr('A list of created Plugins that can be added to AI models with MCP support to communicate with your computer.')}</p></div>
+        <span>{agents.data?.length ?? 0}</span>
+      </header>
+      {agents.loading ? <Loading label={tr('Loading agents')} /> : agents.error ? <ErrorState message={agents.error} retry={() => void agents.reload()} /> : !agents.data?.length ? <div className="agents-clean-empty">
+        <span><KeyRound /></span><div><strong>{tr('No AI has access yet')}</strong><p>{tr('Add an AI client, choose what it is allowed to do, then copy its connection link.')}</p></div><button className="button primary" onClick={() => setEditor('new')}><Plus />{tr('Create new Plugin connection')}</button>
+      </div> : <div className="agents-clean-list">
+        {agents.data.map((agent) => <article className="agents-clean-row" key={agent.id}>
+          <span className="agent-avatar"><KeyRound /></span>
+          <div className="agents-clean-row-copy"><div><strong>{agent.name}</strong><StatusBadge state={agent.enabled ? 'ready' : 'stopped'} label={agent.enabled ? tr('Allowed') : tr('Blocked')} /></div><p>{tr('{count} permissions', { count: agent.toolIds.length })} · {presetName(agent.presetId)}</p></div>
+          <div className="agents-clean-row-actions">
+            <button className="button primary" onClick={() => setPluginAgent(agent)}><Link2 />{tr('Copy connection link')}</button>
+            <button className="button secondary" onClick={() => setEditor(agent)}><Pencil />{tr('Permissions')}</button>
+            <details className="agents-clean-more"><summary className="icon-button" aria-label={tr('More options')}>•••</summary><div><button type="button" onClick={() => void rotate(agent)}><RotateCw />{tr('Create new access key')}</button><button type="button" className="danger" onClick={() => void remove(agent)}><Trash2 />{tr('Delete')}</button></div></details>
+          </div>
+        </article>)}
+      </div>}
+    </section>
+
+    <details className="agents-clean-advanced" open>
+      <summary><span><Network />{tr('Custom Tunnel / private domain')}</span><small>{tr('For custom domains, Cloudflare Tunnel, or public IP addresses')}</small></summary>
+      <div className="agents-clean-advanced-body">
+        <div className="agents-clean-advanced-heading"><div><strong>{tr('Custom public addresses')}</strong><p>{tr('You can configure your own tunnel server or add tunnels from Cloudflare and similar services so AI models such as ChatGPT or Grok can access your personal computer.')}</p></div><button className="button secondary" onClick={() => setAddingTunnel(true)}><Plus />{tr('Add new domain / Tunnel')}</button></div>
+        {tunnels.loading ? <div className="tunnel-panel-state"><LoaderCircle className="spin" />{tr('Loading public addresses')}</div> : tunnels.error ? <div className="tunnel-panel-state error"><span>{tunnels.error}</span><button className="button secondary compact" onClick={() => void tunnels.reload()}>{tr('Retry')}</button></div> : !tunnels.data?.length ? <div className="agents-clean-no-custom">{tr('No custom addresses')}</div> : <div className="tunnel-list">{tunnels.data.map((tunnel) => <article className="tunnel-row" key={tunnel.id}>
+          <span className="tunnel-icon"><Globe2 /></span><div className="tunnel-copy"><strong>{tunnel.baseUrl}</strong><small>{tr('Custom connection address')}</small></div><div className="tunnel-row-actions">{testedTunnelId === tunnel.id && <span className="tunnel-ok"><CheckCircle2 /></span>}<button className="button secondary compact" disabled={testingTunnelId === tunnel.id || deletingTunnelId === tunnel.id} onClick={() => void testTunnel(tunnel)}>{testingTunnelId === tunnel.id ? <LoaderCircle className="spin" /> : <Wifi />}{tr('Test')}</button><button className="icon-button danger-icon" disabled={deletingTunnelId === tunnel.id} onClick={() => setDeleteTunnelTarget(tunnel)} aria-label={tr('Delete public address {address}', { address: tunnel.baseUrl })}>{deletingTunnelId === tunnel.id ? <LoaderCircle className="spin" /> : <Trash2 />}</button></div>
         </article>)}</div>}
-      </section>
-    </div>
+      </div>
+    </details>
 
     {editor && <AgentEditor agent={editor === 'new' ? undefined : editor} tools={tools.data ?? []} presets={presets.data ?? []} close={() => setEditor(undefined)} save={save} />}
     {secret && <SecretModal result={secret} close={() => setSecret(undefined)} />}
