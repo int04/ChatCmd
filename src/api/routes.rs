@@ -12,9 +12,9 @@ use axum::{
 use crate::websocket::AppState;
 
 use super::{
-    Problem, agents::*, auth, backend, chatgpt::*, crypto, data::*, folders::*, overview::*,
-    sessions::*, settings::*, skills::*, task_controls::*, task_delete::*, task_views::*,
-    tunnels::*, updates::*, workspaces::*,
+    Problem, agents::*, auth, backend, chatgpt::*, chatgpt_completion::*, crypto, data::*,
+    folders::*, overview::*, sessions::*, settings::*, skills::*, task_controls::*, task_delete::*,
+    task_views::*, tunnels::*, updates::*, workspaces::*,
 };
 
 pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
@@ -67,6 +67,10 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
             post(bridge_identity),
         )
         .route("/chatgpt/bridge/{request_id}/result", post(bridge_result))
+        .route(
+            "/chatgpt/bridge/{request_id}/browser-completed",
+            post(bridge_browser_completed),
+        )
         .route("/tasks", get(tasks))
         .route(
             "/tasks/approvals/pending",

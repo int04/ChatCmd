@@ -19,7 +19,7 @@ pub(super) async fn request_json(state: &Arc<AppState>, id: &str) -> Result<Json
     let created_at_ms = row.get::<i64, _>("created_at_ms");
     let has_final_response = if let Some(task_id) = task_id.as_deref() {
         let completed_messages = sqlx::query_scalar::<_, String>(
-            r#"SELECT json_extract(user_event.payload_json,'$.content')
+            r#"SELECT COALESCE(json_extract(user_event.payload_json,'$.submittedContent'),json_extract(user_event.payload_json,'$.content'))
                 FROM timeline_events user_event
                 JOIN timeline_events final_event
                   ON final_event.task_id=user_event.task_id
@@ -235,7 +235,7 @@ pub(super) async fn append_status(
     Ok(())
 }
 
-fn publish(
+pub(super) fn publish(
     state: &Arc<AppState>,
     id: &str,
     kind: &str,

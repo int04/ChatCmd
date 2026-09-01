@@ -20,6 +20,82 @@ impl OriginPolicy for Accept {
     }
 }
 
+#[derive(Clone)]
+struct CatalogRuntime;
+
+impl RuntimeApi for CatalogRuntime {
+    fn call<'a>(
+        &'a self,
+        _tool: &'a str,
+        _context: OperationContext,
+        _arguments: Value,
+    ) -> BoxFuture<'a, RuntimeResult<Value>> {
+        Box::pin(async {
+            Err(RuntimeError::new(
+                "unexpected_tool_call",
+                "catalog test must only list tools",
+            ))
+        })
+    }
+
+    fn local_device(&self) -> DeviceDescriptor {
+        DeviceDescriptor {
+            device_id: "catalog-test".to_owned(),
+            machine_id: None,
+            name: "Catalog Test".to_owned(),
+            platform: "test".to_owned(),
+            os_version: String::new(),
+            architecture: "test".to_owned(),
+            app_version: "test".to_owned(),
+            online: true,
+        }
+    }
+
+    fn fail_subagent<'a>(
+        &'a self,
+        _child_task_id: &'a str,
+        _message: &'a str,
+    ) -> BoxFuture<'a, RuntimeResult<()>> {
+        Box::pin(async {
+            Err(RuntimeError::new(
+                "unexpected_subagent_failure",
+                "catalog test must only list tools",
+            ))
+        })
+    }
+}
+
+async fn list_tools_from_fresh_connection() -> Vec<String> {
+    use rmcp::ServiceExt as _;
+
+    let (server_transport, client_transport) = tokio::io::duplex(32 * 1024);
+    let server = McpServer::new(Arc::new(CatalogRuntime));
+    let server_handle = tokio::spawn(async move {
+        server
+            .serve(server_transport)
+            .await
+            .expect("serve catalog server")
+            .waiting()
+            .await
+            .expect("wait for catalog server");
+    });
+    let client = ().serve(client_transport).await.expect("serve catalog client");
+
+    let mut names = client
+        .list_tools(None)
+        .await
+        .expect("list tools through MCP")
+        .tools
+        .into_iter()
+        .map(|tool| tool.name.to_string())
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+
+    client.cancel().await.expect("cancel catalog client");
+    server_handle.await.expect("catalog server task");
+    names
+}
+
 #[test]
 fn catalog_names_are_stable_and_unique() {
     let mut names = TOOL_NAMES.to_vec();
@@ -30,6 +106,21 @@ fn catalog_names_are_stable_and_unique() {
     assert_eq!(TOOL_NAMES.last(), Some(&"agent_turn_complete"));
     assert!(TOOL_NAMES.contains(&"agent_user_message"));
     assert!(TOOL_NAMES.contains(&"fs_replace_text"));
+}
+
+#[tokio::test]
+async fn fresh_mcp_connections_advertise_every_declared_tool() {
+    let mut declared = TOOL_NAMES
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect::<Vec<_>>();
+    declared.sort_unstable();
+
+    let initial = list_tools_from_fresh_connection().await;
+    let reconnected = list_tools_from_fresh_connection().await;
+
+    assert_eq!(initial, declared);
+    assert_eq!(reconnected, declared);
 }
 
 #[test]

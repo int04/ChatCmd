@@ -5,6 +5,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
+use chatcmd_storage::SqliteRepository;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::Row;
@@ -202,14 +203,15 @@ pub(super) async fn bridge_started(
     Json(input): Json<BridgeStarted>,
 ) -> Result<Json<Value>, Problem> {
     validate_conversation(&input.conversation_id, &input.conversation_url)?;
-    let row = bridge_request_row(&state, request_id.trim()).await?;
+    let request_id = request_id.trim();
+    let row = bridge_request_row(&state, request_id).await?;
     let agent_id = row.get::<String, _>("agent_id");
     let submitted = row.get::<String, _>("submitted_content");
     let user_content = row.get::<String, _>("user_content");
     let project_folder = row.get::<Option<String>, _>("project_folder");
     let existing_task = row.get::<Option<String>, _>("task_id");
     let scope = openai_scope(&input.conversation_id);
-    let task_id = if let Some(id) = existing_task {
+    let candidate_task_id = if let Some(id) = existing_task {
         id
     } else if let Some(id) = task_for_scope(&state, &agent_id, &scope).await? {
         id
@@ -218,45 +220,111 @@ pub(super) async fn bridge_started(
     };
     let now = now_ms();
     let title = compact_title(&user_content);
-    sqlx::query("INSERT INTO tasks(id,agent_id,device_id,conversation_scope_hash,title,source,project_folder,allow_execute,status,active_session_id,generation,stopped_at_ms,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,'chatgpt_web',?,1,'running',NULL,1,NULL,?,?) ON CONFLICT(id) DO UPDATE SET conversation_scope_hash=excluded.conversation_scope_hash,title=COALESCE(tasks.title,excluded.title),source='chatgpt_web',project_folder=COALESCE(excluded.project_folder,tasks.project_folder),allow_execute=1,status='running',stopped_at_ms=NULL,updated_at_ms=excluded.updated_at_ms")
-        .bind(&task_id)
-        .bind(&agent_id)
-        .bind(state.device.id.as_str())
-        .bind(&scope)
-        .bind(title)
-        .bind(project_folder.as_deref())
-        .bind(now)
-        .bind(now)
-        .execute(state.repository.pool())
-        .await
-        .map_err(db_problem)?;
     let model = input
         .model
         .as_deref()
         .map(|value| normalize_model(Some(value)))
         .unwrap_or_else(|| row.get::<String, _>("model"));
+    persist_bridge_started_binding(
+        &state.repository,
+        &BridgeStartedBinding {
+            request_id,
+            candidate_task_id: &candidate_task_id,
+            agent_id: &agent_id,
+            device_id: state.device.id.as_str(),
+            scope: &scope,
+            title: &title,
+            project_folder: project_folder.as_deref(),
+            model: &model,
+            conversation_id: input.conversation_id.trim(),
+            conversation_url: input.conversation_url.trim(),
+            now,
+        },
+    )
+    .await?;
+    request_json(&state, request_id).await
+}
+
+pub(super) struct BridgeStartedBinding<'a> {
+    pub(super) request_id: &'a str,
+    pub(super) candidate_task_id: &'a str,
+    pub(super) agent_id: &'a str,
+    pub(super) device_id: &'a str,
+    pub(super) scope: &'a str,
+    pub(super) title: &'a str,
+    pub(super) project_folder: Option<&'a str>,
+    pub(super) model: &'a str,
+    pub(super) conversation_id: &'a str,
+    pub(super) conversation_url: &'a str,
+    pub(super) now: i64,
+}
+
+pub(super) async fn persist_bridge_started_binding(
+    repository: &SqliteRepository,
+    binding: &BridgeStartedBinding<'_>,
+) -> Result<String, Problem> {
+    let mut transaction = repository.pool().begin().await.map_err(db_problem)?;
+    let candidate_created = sqlx::query("INSERT INTO tasks(id,agent_id,device_id,status,created_at_ms,updated_at_ms) VALUES(?,?,?,'running',?,?) ON CONFLICT(id) DO NOTHING")
+        .bind(binding.candidate_task_id)
+        .bind(binding.agent_id)
+        .bind(binding.device_id)
+        .bind(binding.now)
+        .bind(binding.now)
+        .execute(&mut *transaction)
+        .await
+        .map_err(db_problem)?
+        .rows_affected()
+        == 1;
+    sqlx::query("UPDATE chatgpt_bridge_requests SET task_id=COALESCE(task_id,?),status=CASE WHEN status='stop_requested' THEN status ELSE 'running' END,conversation_id=?,conversation_url=?,model=?,updated_at_ms=? WHERE id=?")
+        .bind(binding.candidate_task_id)
+        .bind(binding.conversation_id)
+        .bind(binding.conversation_url)
+        .bind(binding.model)
+        .bind(binding.now)
+        .bind(binding.request_id)
+        .execute(&mut *transaction)
+        .await
+        .map_err(db_problem)?;
+    let task_id = sqlx::query_scalar::<_, String>(
+        "SELECT task_id FROM chatgpt_bridge_requests WHERE id=? AND task_id IS NOT NULL LIMIT 1",
+    )
+    .bind(binding.request_id)
+    .fetch_optional(&mut *transaction)
+    .await
+    .map_err(db_problem)?
+    .ok_or_else(not_found_chat)?;
+    if candidate_created && task_id != binding.candidate_task_id {
+        sqlx::query("DELETE FROM tasks WHERE id=?")
+            .bind(binding.candidate_task_id)
+            .execute(&mut *transaction)
+            .await
+            .map_err(db_problem)?;
+    }
+    sqlx::query("INSERT INTO tasks(id,agent_id,device_id,conversation_scope_hash,title,source,project_folder,allow_execute,status,active_session_id,generation,stopped_at_ms,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,'chatgpt_web',?,1,'running',NULL,1,NULL,?,?) ON CONFLICT(id) DO UPDATE SET conversation_scope_hash=excluded.conversation_scope_hash,title=COALESCE(tasks.title,excluded.title),source='chatgpt_web',project_folder=COALESCE(excluded.project_folder,tasks.project_folder),allow_execute=1,status='running',stopped_at_ms=NULL,updated_at_ms=excluded.updated_at_ms")
+        .bind(&task_id)
+        .bind(binding.agent_id)
+        .bind(binding.device_id)
+        .bind(binding.scope)
+        .bind(binding.title)
+        .bind(binding.project_folder)
+        .bind(binding.now)
+        .bind(binding.now)
+        .execute(&mut *transaction)
+        .await
+        .map_err(db_problem)?;
     sqlx::query("INSERT INTO chatgpt_conversations(task_id,conversation_id,conversation_url,model,active_request_id,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET conversation_id=excluded.conversation_id,conversation_url=excluded.conversation_url,model=excluded.model,active_request_id=excluded.active_request_id,updated_at_ms=excluded.updated_at_ms")
         .bind(&task_id)
-        .bind(input.conversation_id.trim())
-        .bind(input.conversation_url.trim())
-        .bind(&model)
-        .bind(request_id.trim())
-        .bind(now)
-        .bind(now)
-        .execute(state.repository.pool())
+        .bind(binding.conversation_id)
+        .bind(binding.conversation_url)
+        .bind(binding.model)
+        .bind(binding.request_id)
+        .bind(binding.now)
+        .bind(binding.now)
+        .execute(&mut *transaction)
         .await
         .map_err(db_problem)?;
-    sqlx::query("UPDATE chatgpt_bridge_requests SET task_id=?,status=CASE WHEN status='stop_requested' THEN status ELSE 'running' END,conversation_id=?,conversation_url=?,model=?,updated_at_ms=? WHERE id=?")
-        .bind(&task_id)
-        .bind(input.conversation_id.trim())
-        .bind(input.conversation_url.trim())
-        .bind(&model)
-        .bind(now)
-        .bind(request_id.trim())
-        .execute(state.repository.pool())
-        .await
-        .map_err(db_problem)?;
-    request_json(&state, request_id.trim()).await
+    transaction.commit().await.map_err(db_problem)?;
+    Ok(task_id)
 }
 
 pub(super) async fn bridge_identity(

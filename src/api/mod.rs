@@ -2,7 +2,10 @@ mod agents;
 mod auth;
 mod backend;
 mod chatgpt;
+mod chatgpt_completion;
 mod chatgpt_support;
+#[cfg(test)]
+mod chatgpt_tests;
 mod crypto;
 mod data;
 mod folders;

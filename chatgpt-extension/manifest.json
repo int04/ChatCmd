@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ChatCMD ChatGPT Bridge",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Bridges the local ChatCMD console to an already signed-in chatgpt.com tab.",
   "permissions": ["tabs", "storage", "scripting"],
   "host_permissions": [
@@ -15,7 +15,7 @@
   "content_scripts": [
     {
       "matches": ["https://chatgpt.com/*"],
-      "js": ["content-chatgpt.js"],
+      "js": ["content-chatgpt-ui.js", "content-chatgpt-dom.js", "content-chatgpt.js"],
       "run_at": "document_idle"
     },
     {

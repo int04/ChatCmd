@@ -7,6 +7,8 @@ const LOG_KEY = 'chatcmd-extension-logs';
 const MAX_LOGS = 200;
 const CHATGPT_HOME = 'https://chatgpt.com/';
 
+importScripts('background-io.js');
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message !== 'object') return false;
   if (message.type === 'chatcmd-local-command') {
@@ -62,7 +64,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
   }
   if (message.type === 'chatcmd-chatgpt-progress') {
-    void handleProgress(message, sender.tab?.id).then(() => sendResponse({ ok: true })).catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
+    void handleProgress(message, sender.tab?.id).then((result) => sendResponse({ ok: true, ...result })).catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
     return true;
   }
   if (message.type === 'chatcmd-return-to-source') {
@@ -76,13 +78,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'chatcmd-chatgpt-request-status') {
     void bridgeRequestState(message.requestId, sender.tab?.id)
       .then((state) => sendResponse({ ok: true, ...state }))
-      .catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
-    return true;
-  }
-  if (message.type === 'chatcmd-chatgpt-recovery') {
-    const reason = message.reason === 'thread_error' ? 'ChatGPT hiển thị lỗi luồng' : 'ChatGPT ngừng phản hồi nhưng composer đã sẵn sàng';
-    void logExtension('warn', 'recovery', `${reason}; tự động tiếp tục lần ${Number(message.attempt) || 1} cho request ${message.requestId || 'unknown'}.`)
-      .then(() => sendResponse({ ok: true }))
       .catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
     return true;
   }
@@ -146,45 +141,6 @@ async function reconcileRequest(requestId) {
     reconciled: response?.reconciled === true,
     reason: response?.reason,
   };
-}
-
-async function handleProgress(message, tabId) {
-  if (!message.requestId) throw new Error('ChatGPT progress thiếu request ID.');
-  const context = await requestContext(message.requestId);
-  if (!context) throw new Error('Không tìm thấy ChatCMD request context.');
-  if (tabId && context.tabId !== tabId) throw new Error('ChatGPT progress đến từ tab không khớp.');
-  const identity = await preferredConversationIdentity(context.tabId, message.conversationId, message.conversationUrl);
-  if (message.stage === 'started') {
-    if (identity.conversationId && context.tabId) {
-      await bindConversationTab(identity.conversationId, context.tabId, {
-        requestId: message.requestId,
-        localBaseUrl: context.localBaseUrl,
-      });
-    }
-    await postJson(context.localBaseUrl, `/api/local/chatgpt/bridge/${encodeURIComponent(message.requestId)}/started`, {
-      conversationId: identity.conversationId,
-      conversationUrl: identity.conversationUrl,
-      model: message.model,
-      userText: message.userText,
-    });
-    return;
-  }
-  if (message.stage === 'result') {
-    if (identity.conversationId && context.tabId) {
-      await bindConversationTab(identity.conversationId, context.tabId, {
-        requestId: message.requestId,
-        localBaseUrl: context.localBaseUrl,
-      });
-    }
-    await postJson(context.localBaseUrl, `/api/local/chatgpt/bridge/${encodeURIComponent(message.requestId)}/result`, {
-      status: message.status,
-      conversationId: identity.conversationId,
-      conversationUrl: identity.conversationUrl,
-      assistantContent: message.assistantContent,
-      errorMessage: message.errorMessage,
-    });
-    await releaseRequest(message.requestId);
-  }
 }
 
 async function reportFailure(requestId, localBaseUrl, error) {
@@ -487,198 +443,4 @@ async function hasReturnSource(chatGptTabId) {
   const sourceTabId = stored[key]?.sourceTabId;
   if (!sourceTabId) return false;
   return Boolean(await safeTab(sourceTabId));
-}
-
-async function conversationBindings() {
-  const stored = await chrome.storage.session.get(null);
-  return Object.fromEntries(Object.entries(stored).filter(([key]) => key.startsWith(CONVERSATION_PREFIX)));
-}
-
-async function chatGptTabs() {
-  return chrome.tabs.query({ url: 'https://chatgpt.com/*' });
-}
-
-async function safeTab(tabId) {
-  try { return await chrome.tabs.get(tabId); }
-  catch { return null; }
-}
-
-async function releaseRequest(requestId) {
-  await chrome.storage.session.remove(requestKey(requestId));
-}
-
-async function sendToChatGpt(tabId, payload, options = {}) {
-  let lastError;
-  let reinjected = false;
-  const quiet = options.quiet === true;
-  if (!quiet) await logExtension('info', 'background', `Gửi ${payload?.type || 'message'} tới tab ${tabId}.`);
-  for (let attempt = 0; attempt < 20; attempt++) {
-    try {
-      const response = await chrome.tabs.sendMessage(tabId, payload);
-      if (response?.ok) {
-        if (!quiet) await logExtension('info', 'background', `Tab ${tabId} phản hồi thành công ở lần ${attempt + 1}.`);
-        return response;
-      }
-      lastError = new Error(response?.error || 'ChatGPT content script không thể hoàn tất yêu cầu.');
-      await logExtension('error', 'content-chatgpt', `Tab ${tabId} đã nhận yêu cầu nhưng trả lỗi: ${errorMessage(lastError)}`);
-      throw lastError;
-    } catch (error) {
-      lastError = error;
-      if (!isMissingReceiverError(error)) {
-        await logExtension('error', 'background', `Tab ${tabId} trả lỗi thực tế: ${errorMessage(error)}`);
-        throw error;
-      }
-      await logExtension('warn', 'background', `Không có receiver ở tab ${tabId}, lần ${attempt + 1}: ${errorMessage(error)}`);
-      if (!reinjected) {
-        reinjected = true;
-        try {
-          await logExtension('info', 'background', `Inject lại content-chatgpt.js vào tab ${tabId}.`);
-          await chrome.scripting.executeScript({ target: { tabId }, files: ['content-chatgpt.js'] });
-          await logExtension('info', 'background', `Inject content-chatgpt.js vào tab ${tabId} thành công.`);
-          await delay(150);
-          continue;
-        } catch (injectError) {
-          lastError = injectError;
-          await logExtension('error', 'background', `Inject tab ${tabId} thất bại: ${errorMessage(injectError)}`);
-          throw injectError;
-        }
-      }
-    }
-    await delay(300);
-  }
-  await logExtension('error', 'background', `Không thể gửi tới tab ${tabId}: ${errorMessage(lastError)}`);
-  throw lastError || new Error('Không thể kết nối content script trên chatgpt.com.');
-}
-
-async function logExtension(level, source, message) {
-  const stored = await chrome.storage.local.get(LOG_KEY);
-  const logs = Array.isArray(stored[LOG_KEY]) ? stored[LOG_KEY] : [];
-  logs.push({ at: new Date().toISOString(), level, source, message: String(message || '') });
-  await chrome.storage.local.set({ [LOG_KEY]: logs.slice(-MAX_LOGS) });
-}
-
-async function extensionLogs() {
-  const stored = await chrome.storage.local.get(LOG_KEY);
-  return Array.isArray(stored[LOG_KEY]) ? stored[LOG_KEY] : [];
-}
-
-function isMissingReceiverError(error) {
-  const message = errorMessage(error).toLowerCase();
-  return message.includes('receiving end does not exist') || message.includes('could not establish connection');
-}
-
-async function waitForTab(tabId) {
-  const current = await chrome.tabs.get(tabId);
-  if (current.status === 'complete') return;
-  await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => finish(new Error('ChatGPT tải trang quá lâu.')), 20_000);
-    const listener = (changedId, info) => { if (changedId === tabId && info.status === 'complete') finish(); };
-    const finish = (error) => {
-      clearTimeout(timer); chrome.tabs.onUpdated.removeListener(listener);
-      if (error) reject(error); else resolve();
-    };
-    chrome.tabs.onUpdated.addListener(listener);
-  });
-}
-
-async function postJson(baseUrl, path, body) {
-  const response = await fetch(`${baseUrl}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-ChatCmdClient': 'chatgpt-extension' },
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) {
-    let message = `ChatCMD local API trả lỗi ${response.status}.`;
-    try { message = (await response.json()).detail || message; } catch { /* non-json error */ }
-    throw new Error(message);
-  }
-  return response.status === 204 ? undefined : response.json();
-}
-
-async function getJson(baseUrl, path) {
-  const response = await fetch(`${baseUrl}${path}`, {
-    method: 'GET',
-    headers: { 'X-ChatCmdClient': 'chatgpt-extension' },
-  });
-  if (!response.ok) {
-    let message = `ChatCMD local API trả lỗi ${response.status}.`;
-    try { message = (await response.json()).detail || message; } catch { /* non-json error */ }
-    throw new Error(message);
-  }
-  return response.json();
-}
-
-async function bridgeRequestState(requestId, tabId) {
-  if (!requestId) return { running: false, stopRequested: false, hasFinalResponse: false, active: false };
-  const context = await requestContext(requestId);
-  if (!context?.localBaseUrl || !context?.tabId || context.tabId !== tabId) {
-    return { running: false, stopRequested: false, hasFinalResponse: false, active: false };
-  }
-  const request = await getJson(context.localBaseUrl, `/api/local/chatgpt/requests/${encodeURIComponent(requestId)}`);
-  const running = request?.status === 'running';
-  const stopRequested = request?.status === 'stop_requested';
-  const hasFinalResponse = request?.hasFinalResponse === true;
-  return { running, stopRequested, hasFinalResponse, active: running && !hasFinalResponse };
-}
-
-async function requestContext(requestId) {
-  const key = requestKey(requestId);
-  const value = await chrome.storage.session.get(key);
-  return value[key];
-}
-
-function requestKey(requestId) { return `${REQUEST_PREFIX}${requestId}`; }
-function conversationKey(conversationId) { return `${CONVERSATION_PREFIX}${conversationId}`; }
-function delay(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
-function errorMessage(error) { return error instanceof Error ? error.message : String(error || 'Lỗi ChatGPT bridge.'); }
-
-async function conversationTarget(value) {
-  if (!value) return CHATGPT_HOME;
-  const url = new URL(value);
-  if (url.origin !== 'https://chatgpt.com') throw new Error('Conversation URL không thuộc chatgpt.com.');
-  const conversationId = conversationIdFromUrl(url.href);
-  if (conversationId && isProvisionalConversationId(conversationId)) {
-    const key = `${CONVERSATION_ALIAS_PREFIX}${conversationId}`;
-    const stored = await chrome.storage.local.get(key);
-    const aliasUrl = stored[key]?.conversationUrl;
-    const aliasId = conversationIdFromUrl(aliasUrl || '');
-    if (aliasId && !isProvisionalConversationId(aliasId)) return aliasUrl;
-  }
-  return url.href;
-}
-
-function conversationIdFromUrl(value) {
-  try {
-    const url = new URL(value);
-    if (url.origin !== 'https://chatgpt.com') return null;
-    return url.pathname.match(/(?:^|\/)c\/([^/?#]+)/)?.[1] || null;
-  } catch { return null; }
-}
-
-function sameConversationUrl(left, right) {
-  const leftId = conversationIdFromUrl(left || '');
-  const rightId = conversationIdFromUrl(right || '');
-  return Boolean(leftId && rightId && leftId === rightId);
-}
-
-function isNewConversationUrl(value) {
-  try {
-    const url = new URL(value || '');
-    return url.origin === 'https://chatgpt.com' && url.pathname === '/';
-  } catch { return false; }
-}
-
-function isChatGptUrl(value) {
-  try { return new URL(value || '').origin === 'https://chatgpt.com'; }
-  catch { return false; }
-}
-
-function isProvisionalConversationId(value) {
-  return /^WEB:/i.test(String(value || ''));
-}
-
-function localOrigin(value) {
-  const url = new URL(value);
-  if (url.protocol !== 'http:' || !['localhost', '127.0.0.1'].includes(url.hostname)) throw new Error('ChatCMD bridge chỉ cho phép local HTTP origin.');
-  return url.origin;
 }

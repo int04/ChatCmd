@@ -1,5 +1,5 @@
 import { Bot, CircleAlert, CircleStop, ExternalLink, FolderOpen, LoaderCircle, MessageSquarePlus, Send, ShieldCheck, Sparkles, Unplug, X } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
@@ -12,9 +12,6 @@ import type { Agent } from '../types';
 import { useLoad } from '../useLoad';
 
 const DEFAULT_MODEL = 'Auto';
-const SEND_DISABLED_ERROR_VI = 'Nút gửi ChatGPT đang bị vô hiệu hóa.';
-const SEND_DISABLED_ERROR_EN = 'The ChatGPT send button is disabled.';
-const RETRY_DELAY_SECONDS = 10;
 
 export function NewChatGptConversation() {
   const agents = useLoad(api.agents, []);
@@ -194,9 +191,6 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
   const [extensionReady, setExtensionReady] = useState<boolean | null>(null);
   const [chatGptTabOpen, setChatGptTabOpen] = useState<boolean | null>(null);
   const [chatGptReady, setChatGptReady] = useState<boolean | null>(null);
-  const [retrySeconds, setRetrySeconds] = useState<number | null>(null);
-  const retryGeneration = useRef(0);
-  const retryTimer = useRef<number | null>(null);
   const active = Boolean(bridge.data?.activeRequestId && ['queued', 'running', 'stop_requested'].includes(bridge.data.activeStatus ?? ''));
   const answerCompletedWaitingForUi = active && bridge.data?.taskStatus === 'completed' && chatGptReady !== true;
 
@@ -232,15 +226,8 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
     const timer = window.setInterval(refresh, 1_000);
     return () => { disposed = true; window.clearInterval(timer); };
   }, [bridge.data?.activeRequestId, reloadBridge]);
-  useEffect(() => () => { if (retryTimer.current !== null) window.clearTimeout(retryTimer.current); }, []);
-  useEffect(() => {
-    if (retrySeconds === null || retrySeconds <= 0) return;
-    const timer = window.setTimeout(() => setRetrySeconds((value) => value === null ? null : Math.max(0, value - 1)), 1_000);
-    return () => window.clearTimeout(timer);
-  }, [retrySeconds]);
-
-  const sendContent = async (message: string, generation: number) => {
-    if (!bridge.data || generation !== retryGeneration.current) return;
+  const sendContent = async (message: string) => {
+    if (!bridge.data) return;
     setBusy(true); setError('');
     try {
       const status = await chatGptExtensionStatus(bridge.data.conversationUrl);
@@ -254,42 +241,18 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
       await dispatchChatGptRequest({ requestId: request.id, submittedContent: request.submittedContent, model: request.model, conversationUrl: bridge.data.conversationUrl });
       const latest = await waitForDispatchState(request.id);
       if (latest.status === 'failed') throw new Error(latest.errorMessage || tr('Could not send the message to ChatGPT.'));
-      if (generation !== retryGeneration.current) return;
-      setRetrySeconds(null);
       setContent('');
       await reloadBridge();
     } catch (reason) {
-      const text = errorText(reason);
-      if (generation === retryGeneration.current && isSendDisabledError(text)) {
-        setRetrySeconds(RETRY_DELAY_SECONDS);
-        setError(`${tr('The ChatGPT send button is disabled.')} ${tr('Will retry in {seconds} seconds.', { seconds: RETRY_DELAY_SECONDS })}`);
-        if (retryTimer.current !== null) window.clearTimeout(retryTimer.current);
-        retryTimer.current = window.setTimeout(() => {
-          retryTimer.current = null;
-          if (generation !== retryGeneration.current) return;
-          setRetrySeconds(0);
-          void sendContent(message, generation);
-        }, RETRY_DELAY_SECONDS * 1_000);
-      } else {
-        setError(text);
-      }
+      setError(errorText(reason));
     } finally { setBusy(false); }
   };
 
   const send = async (event: FormEvent) => {
     event.preventDefault();
     const message = content.trim();
-    if (!message || busy || active || retrySeconds !== null || chatGptReady !== true || !bridge.data) return;
-    const generation = retryGeneration.current;
-    await sendContent(message, generation);
-  };
-
-  const cancelRetry = () => {
-    retryGeneration.current += 1;
-    if (retryTimer.current !== null) window.clearTimeout(retryTimer.current);
-    retryTimer.current = null;
-    setRetrySeconds(null);
-    setError(tr('Automatic retry cancelled.'));
+    if (!message || busy || active || chatGptReady !== true || !bridge.data) return;
+    await sendContent(message);
   };
 
   const stop = async () => {
@@ -337,11 +300,10 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
   if (chatGptTabOpen === false) return <div className="chatgpt-tab-required" role="alert"><CircleAlert /><div><strong>{tr('This conversation’s ChatGPT tab is closed')}</strong><span>{tr('ChatCMD must keep this exact ChatGPT tab open to send messages and track response status. Reopen the conversation and keep the tab open in your browser.')}</span><button type="button" onClick={() => void openTab()} disabled={busy}><ExternalLink />{tr('Open ChatGPT conversation')}</button></div></div>;
   return <form className="chatgpt-composer" onSubmit={(event) => void send(event)}>
     {!active && chatGptReady !== true && <div className="chatgpt-retry-warning" role="status"><LoaderCircle className="spin" /><span><strong>{tr('ChatGPT tab is still loading the previous response.')}</strong> {tr('Please wait until ChatGPT is fully ready before sending another message.')}</span></div>}
-    {retrySeconds !== null && <div className="chatgpt-retry-warning" role="status"><CircleAlert /><span>{tr('The ChatGPT send button is disabled.')} {retrySeconds > 0 ? tr('Will retry in {seconds} seconds.', { seconds: retrySeconds }) : tr('Retrying…')}</span><button type="button" onClick={cancelRetry}>{tr('Cancel send')}</button></div>}
     <div className="chatgpt-composer-row">
-      <textarea aria-label={tr('Next message to ChatGPT')} rows={2} value={content} onChange={(event) => setContent(event.target.value)} disabled={active || busy || retrySeconds !== null} placeholder={answerCompletedWaitingForUi ? tr('Answer completed; waiting for the ChatGPT UI before continuing.') : active ? tr('ChatGPT is responding…') : retrySeconds !== null ? tr('Waiting to retry…') : tr('Continue the ChatGPT conversation…')} />
+      <textarea aria-label={tr('Next message to ChatGPT')} rows={2} value={content} onChange={(event) => setContent(event.target.value)} disabled={active || busy} placeholder={answerCompletedWaitingForUi ? tr('Answer completed; waiting for the ChatGPT UI before continuing.') : active ? tr('ChatGPT is responding…') : tr('Continue the ChatGPT conversation…')} />
       {active ? <button type="button" className="chatgpt-stop-button" onClick={() => void stop()} disabled={busy || bridge.data.activeStatus === 'stop_requested'}><CircleStop /><span>{bridge.data.activeStatus === 'stop_requested' ? tr('Stopping…') : tr('Stop')}</span></button>
-        : <button type="submit" className="chatgpt-composer-send" disabled={busy || retrySeconds !== null || chatGptReady !== true || !content.trim()}><Send /><span>{chatGptReady === true ? tr('Send') : tr('Waiting for ChatGPT…')}</span></button>}
+        : <button type="submit" className="chatgpt-composer-send" disabled={busy || chatGptReady !== true || !content.trim()}><Send /><span>{chatGptReady === true ? tr('Send') : tr('Waiting for ChatGPT…')}</span></button>}
     </div>
     <div className="chatgpt-composer-meta chatgpt-composer-actions"><button type="button" onClick={() => void closeTab()} disabled={busy}>{tr('Close this tab')}</button><span aria-hidden="true">|</span><button type="button" onClick={() => void focusTab()} disabled={busy}>{tr('Change model')}</button></div>
     {error && <p className="chatgpt-form-error" role="alert"><CircleAlert />{error}</p>}
@@ -391,5 +353,4 @@ function routeProjectFolder(state: unknown) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function isSendDisabledError(value: string) { return value.includes(SEND_DISABLED_ERROR_VI) || value.includes(SEND_DISABLED_ERROR_EN); }
 function errorText(reason: unknown) { return reason instanceof Error ? reason.message : tr('Could not complete the ChatGPT request.'); }
