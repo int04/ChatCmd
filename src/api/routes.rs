@@ -73,6 +73,7 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
             get(pending_conversation_approvals),
         )
         .route("/tasks/{id}", get(task).delete(delete_task))
+        .route("/tasks/{id}/activities/{activity_id}", get(task_activity))
         .route("/tasks/{id}/title", axum::routing::put(set_task_title))
         .route(
             "/tasks/{id}/command-execution-mode",

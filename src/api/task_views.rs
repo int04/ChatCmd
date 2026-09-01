@@ -145,6 +145,65 @@ pub(super) async fn task(
     .await
 }
 
+pub(super) async fn task_activity(
+    State(state): State<Arc<AppState>>,
+    Path((id, activity_id)): Path<(String, String)>,
+) -> Result<Json<Value>, Problem> {
+    let rows = sqlx::query("SELECT event_id,kind,payload_json FROM timeline_events WHERE task_id=? AND kind IN ('tool_call','tool_result') AND (event_id=? OR json_extract(payload_json,'$.activityId')=?) ORDER BY created_at_ms ASC,event_id ASC")
+        .bind(&id)
+        .bind(&activity_id)
+        .bind(&activity_id)
+        .fetch_all(state.repository.pool())
+        .await
+        .map_err(db_problem)?;
+    if rows.is_empty() {
+        return Err(not_found());
+    }
+    let mut detail = serde_json::Map::new();
+    for row in rows {
+        let kind = row.get::<String, _>("kind");
+        let payload = serde_json::from_str::<Value>(&row.get::<String, _>("payload_json"))
+            .unwrap_or(Value::Null);
+        let Some(payload) = payload.as_object() else {
+            continue;
+        };
+        if kind == "tool_call" {
+            if let Some(value) = payload.get("input") {
+                detail.insert("input".to_owned(), value.clone());
+            }
+        }
+        if kind == "tool_result" {
+            if let Some(value) = payload.get("output") {
+                detail.insert("output".to_owned(), value.clone());
+            }
+        }
+        for key in [
+            "status",
+            "errorCode",
+            "errorMessage",
+            "errorDetails",
+            "details",
+        ] {
+            if let Some(value) = payload.get(key) {
+                let target = if key == "details" {
+                    "errorDetails"
+                } else {
+                    key
+                };
+                detail.insert(target.to_owned(), value.clone());
+            }
+        }
+        if let Some(value) = payload.get("error") {
+            if value.is_string() {
+                detail.insert("error".to_owned(), value.clone());
+            } else if !detail.contains_key("errorDetails") {
+                detail.insert("errorDetails".to_owned(), value.clone());
+            }
+        }
+    }
+    Ok(Json(Value::Object(detail)))
+}
+
 #[derive(Debug, Deserialize)]
 pub(super) struct TaskTitleInput {
     title: String,
@@ -432,5 +491,43 @@ fn task_value(task: chatcmd_core::Task) -> Value {
     json!({"id":task.id.as_str(),"title":task.title,"source":task.source,"projectFolder":task.project_folder,"allowExecute":task.allow_execute,"approvalDeadlineUtc":approval_deadline_utc,"status":task.status.as_str(),"updatedAtUtc":iso_ms(task.updated_at_ms),"createdAtUtc":iso_ms(task.created_at_ms),"generation":task.generation,"activeSessionId":task.active_session_id.map(|id|id.into_string())})
 }
 pub(super) fn timeline_row(row: &sqlx::sqlite::SqliteRow) -> Value {
-    json!({"id":row.get::<String,_>("event_id"),"type":row.get::<String,_>("kind"),"occurredAt":iso_ms(row.get("created_at_ms")),"turnId":row.get::<Option<String>,_>("turn_id"),"sessionId":row.get::<Option<String>,_>("session_id"),"payload":serde_json::from_str::<Value>(&row.get::<String,_>("payload_json")).unwrap_or(Value::Null)})
+    let kind = row.get::<String, _>("kind");
+    let payload =
+        serde_json::from_str::<Value>(&row.get::<String, _>("payload_json")).unwrap_or(Value::Null);
+    let payload = compact_tool_payload(&kind, payload);
+    json!({"id":row.get::<String,_>("event_id"),"type":kind,"occurredAt":iso_ms(row.get("created_at_ms")),"turnId":row.get::<Option<String>,_>("turn_id"),"sessionId":row.get::<Option<String>,_>("session_id"),"payload":payload})
+}
+
+fn compact_tool_payload(kind: &str, payload: Value) -> Value {
+    let Some(mut object) = payload.as_object().cloned() else {
+        return payload;
+    };
+    if kind == "tool_call" {
+        if let Some(input) = object.get("input").and_then(Value::as_object) {
+            let mut summary = serde_json::Map::new();
+            for key in [
+                "path",
+                "workingDirectory",
+                "query",
+                "command",
+                "source",
+                "destination",
+                "name",
+                "pattern",
+            ] {
+                if let Some(value) = input.get(key) {
+                    summary.insert(key.to_owned(), value.clone());
+                }
+            }
+            object.insert("input".to_owned(), Value::Object(summary));
+        }
+    } else if kind == "tool_result" {
+        object.remove("output");
+        object.remove("errorDetails");
+        object.remove("details");
+        if object.get("error").is_some_and(|value| !value.is_string()) {
+            object.remove("error");
+        }
+    }
+    Value::Object(object)
 }

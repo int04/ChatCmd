@@ -3,9 +3,10 @@ import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 're
 import ReactMarkdown from 'react-markdown';
 import rehypeSanitize from 'rehype-sanitize';
 import remarkGfm from 'remark-gfm';
+import { api } from '../api';
 import { Modal } from '../components';
 import { appLocale, formatAppNumber, tr } from '../i18n';
-import type { SubagentRun, TaskTurn, TimelineEvent } from '../types';
+import type { SubagentRun, TaskActivityDetail, TaskTurn, TimelineEvent } from '../types';
 import { ApprovalDecisionActions } from './ApprovalDecisionActions';
 import { StopActivityDialog } from './StopActivityDialog';
 import {
@@ -216,9 +217,19 @@ function RichText({ content }: { content: string }) {
 
 function ActivityRow({ activity, taskId, onStop }: { activity: ToolActivity; taskId: string; onStop: (activity: ToolActivity) => void }) {
   const [open, setOpen] = useState(false);
+  const [detail, setDetail] = useState<TaskActivityDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState('');
   const [recentlyViewed, setRecentlyViewed] = useState(false);
   useEffect(() => { if (!recentlyViewed) return; const timer = window.setTimeout(() => setRecentlyViewed(false), 3000); return () => window.clearTimeout(timer); }, [recentlyViewed]);
   const closePopup = () => { setOpen(false); setRecentlyViewed(false); window.requestAnimationFrame(() => setRecentlyViewed(true)); };
+  const loadDetail = () => {
+    setOpen(true); setDetail(null); setDetailError(''); setDetailLoading(true);
+    void api.taskActivity(taskId, activity.id)
+      .then(setDetail)
+      .catch((reason) => setDetailError(reason instanceof Error ? reason.message : tr('Could not load tool details.')))
+      .finally(() => setDetailLoading(false));
+  };
   const approvalPending = activity.status === 'pending_approval';
   const stopRequested = activity.status === 'stop_requested';
   const stopped = activity.status === 'stopped';
@@ -228,13 +239,9 @@ function ActivityRow({ activity, taskId, onStop }: { activity: ToolActivity; tas
   const failed = activity.status === 'failed';
   const stoppable = activity.status === 'started';
   const Icon = ended ? CircleStop : failed ? CircleAlert : activity.kind === 'read' ? BookOpen : activity.kind === 'search' ? Search : ['edit', 'create', 'delete', 'copy', 'move'].includes(activity.kind) ? FilePenLine : activity.kind === 'git' ? GitBranch : activity.kind === 'tool' ? Wrench : TerminalSquare;
-  const command = activityCommand(activity);
-  const output = activityOutput(activity);
-  const searchCodeViews = fsSearchCodeViews(activity);
-  const diffView = activityDiffView(activity);
-  const codeView = activityCodeView(activity);
+  const resolvedActivity: ToolActivity = detail ? { ...activity, ...detail, status: detail.status ?? activity.status } : activity;
   return <div className={`terminal-activity ${running ? 'running' : ''} ${stopRequested ? 'stopping' : ''} ${ended ? 'stopped' : ''} ${failed ? 'failed' : ''} ${recentlyViewed ? 'recently-viewed' : ''}`}>
-    <button type="button" className="activity-popup-trigger" onClick={() => setOpen(true)} aria-haspopup="dialog">
+    <button type="button" className="activity-popup-trigger" onClick={loadDetail} aria-haspopup="dialog">
       <span className="activity-row-icon" aria-hidden="true">{running ? <LoaderCircle className="spin" /> : <Icon />}</span>
       <span className="activity-label">{activityLabel(activity)}</span>
       <span className="activity-timing"><BubbleTime value={activity.startedAt} /><span aria-label={tr('Execution time')}>· {running ? <LiveActivityDuration startedAt={activity.startedAt} /> : activityDuration(activity.startedAt, activity.finishedAt ?? activity.startedAt)}</span></span>
@@ -243,23 +250,37 @@ function ActivityRow({ activity, taskId, onStop }: { activity: ToolActivity; tas
     {stoppable && <button type="button" className="activity-stop-button" aria-label={tr('Stop {name}', { name: activityLabel(activity) })} onClick={(event) => { event.preventDefault(); event.stopPropagation(); onStop(activity); }}><CircleStop aria-hidden="true" /><span>{tr('Stop')}</span></button>}
     {approvalPending && taskId && <ApprovalDecisionActions target={{ taskId, activityId: activity.id, turnId: activity.turnId }} />}
     {open && <Modal className="tool-activity-modal" title={activityLabel(activity)} description={`${formatClockTime(activity.startedAt)} · ${activityDuration(activity.startedAt, activity.finishedAt ?? new Date().toISOString())}`} close={closePopup}>
-      <div className="activity-popup-content">
-        <div className="activity-command"><FileCode2 /><code>{command}</code></div>
-        {failed && <div className="activity-error-detail" role="alert">
-          <div className="activity-error-heading"><CircleAlert aria-hidden="true" /><strong>{tr('Tool failed')}</strong></div>
-          {activity.errorCode && <div className="activity-error-row"><span>{tr('Error code')}</span><code>{activity.errorCode}</code></div>}
-          <div className="activity-error-message">{activity.errorMessage || activity.error || tr('Tool returned failed status without an error message.')}</div>
-          {activity.errorDetails !== undefined && activity.errorDetails !== null && <pre tabIndex={0} aria-label={tr('Tool error details')}><code>{formatErrorDetails(activity.errorDetails)}</code></pre>}
-        </div>}
-        {diffView
-          ? <div className="tool-diff-view"><div className="tool-diff-pane"><div className="tool-diff-tab removed">{tr('Original file')}</div><code className="tool-diff-path">{diffView.path}</code><Suspense fallback={<pre><code>{diffView.before}</code></pre>}><TaskCodeViewer code={diffView.before} path={diffView.path} highlightedLines={diffView.beforeMarks} label={tr('Original file')} /></Suspense></div><div className="tool-diff-pane"><div className="tool-diff-tab added">{tr('Modified file')}</div><code className="tool-diff-path">{diffView.path}</code><Suspense fallback={<pre><code>{diffView.after}</code></pre>}><TaskCodeViewer code={diffView.after} path={diffView.path} highlightedLines={diffView.afterMarks} label={tr('Modified file')} /></Suspense></div></div>
-          : searchCodeViews.length > 0
-          ? <div className="fs-search-code-results">{searchCodeViews.map((view, index) => <div className="fs-search-code-result" key={`${view.path}:${view.startLine}:${index}`}><code className="fs-search-result-path">{view.path}</code><Suspense fallback={<pre tabIndex={0} aria-label={tr('Output of {command}', { command })}><code>{view.code}</code></pre>}><TaskCodeViewer {...view} label={view.path} /></Suspense></div>)}</div>
-          : codeView
-            ? <Suspense fallback={<pre tabIndex={0} aria-label={tr('Output of {command}', { command })}><code>{codeView.code}</code></pre>}><TaskCodeViewer {...codeView} label={tr('Output of {command}', { command })} /></Suspense>
-            : <pre tabIndex={0} aria-label={tr('Output of {command}', { command })}><code>{output || (approvalPending ? tr('Waiting for your approval…') : running ? tr('Waiting for output…') : tr('Command produced no output.'))}</code></pre>}
-      </div>
+      {detailLoading
+        ? <div className="activity-popup-content"><div className="activity-detail-loading" role="status"><LoaderCircle className="spin" aria-hidden="true" /><span>{tr('Loading…')}</span></div></div>
+        : detailError
+          ? <div className="activity-popup-content"><div className="activity-error-detail" role="alert"><div className="activity-error-heading"><CircleAlert aria-hidden="true" /><strong>{tr('Could not load tool details.')}</strong></div><div className="activity-error-message">{detailError}</div><button className="button secondary compact" type="button" onClick={loadDetail}>{tr('Reload')}</button></div></div>
+          : <ActivityPopupContent activity={resolvedActivity} approvalPending={approvalPending} running={running} />}
     </Modal>}
+  </div>;
+}
+
+function ActivityPopupContent({ activity, approvalPending, running }: { activity: ToolActivity; approvalPending: boolean; running: boolean }) {
+  const failed = activity.status === 'failed';
+  const command = activityCommand(activity);
+  const output = activityOutput(activity);
+  const searchCodeViews = fsSearchCodeViews(activity);
+  const diffView = activityDiffView(activity);
+  const codeView = activityCodeView(activity);
+  return <div className="activity-popup-content">
+    <div className="activity-command"><FileCode2 /><code>{command}</code></div>
+    {failed && <div className="activity-error-detail" role="alert">
+      <div className="activity-error-heading"><CircleAlert aria-hidden="true" /><strong>{tr('Tool failed')}</strong></div>
+      {activity.errorCode && <div className="activity-error-row"><span>{tr('Error code')}</span><code>{activity.errorCode}</code></div>}
+      <div className="activity-error-message">{activity.errorMessage || activity.error || tr('Tool returned failed status without an error message.')}</div>
+      {activity.errorDetails !== undefined && activity.errorDetails !== null && <pre tabIndex={0} aria-label={tr('Tool error details')}><code>{formatErrorDetails(activity.errorDetails)}</code></pre>}
+    </div>}
+    {diffView
+      ? <div className="tool-diff-view"><div className="tool-diff-pane"><div className="tool-diff-tab removed">{tr('Original file')}</div><code className="tool-diff-path">{diffView.path}</code><Suspense fallback={<pre><code>{diffView.before}</code></pre>}><TaskCodeViewer code={diffView.before} path={diffView.path} highlightedLines={diffView.beforeMarks} label={tr('Original file')} /></Suspense></div><div className="tool-diff-pane"><div className="tool-diff-tab added">{tr('Modified file')}</div><code className="tool-diff-path">{diffView.path}</code><Suspense fallback={<pre><code>{diffView.after}</code></pre>}><TaskCodeViewer code={diffView.after} path={diffView.path} highlightedLines={diffView.afterMarks} label={tr('Modified file')} /></Suspense></div></div>
+      : searchCodeViews.length > 0
+        ? <div className="fs-search-code-results">{searchCodeViews.map((view, index) => <div className="fs-search-code-result" key={`${view.path}:${view.startLine}:${index}`}><code className="fs-search-result-path">{view.path}</code><Suspense fallback={<pre tabIndex={0} aria-label={tr('Output of {command}', { command })}><code>{view.code}</code></pre>}><TaskCodeViewer {...view} label={view.path} /></Suspense></div>)}</div>
+        : codeView
+          ? <Suspense fallback={<pre tabIndex={0} aria-label={tr('Output of {command}', { command })}><code>{codeView.code}</code></pre>}><TaskCodeViewer {...codeView} label={tr('Output of {command}', { command })} /></Suspense>
+          : <pre tabIndex={0} aria-label={tr('Output of {command}', { command })}><code>{output || (approvalPending ? tr('Waiting for your approval…') : running ? tr('Waiting for output…') : tr('Command produced no output.'))}</code></pre>}
   </div>;
 }
 

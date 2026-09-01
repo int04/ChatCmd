@@ -34,7 +34,10 @@ function TasksWorkspace() {
     }
     if (!event.taskId) return;
     if (event.taskId === taskId && (event.type === 'conversation.approval_pending' || event.type === 'conversation.title_updated')) { setDetailVersion((value) => value + 1); return; }
-    if (event.taskId === taskId) setLiveEvents((current) => current.some((item) => item.id === event.id) ? current : [...current, event]);
+    if (event.taskId === taskId) {
+      const compactEvent = compactLiveToolEvent(event);
+      setLiveEvents((current) => current.some((item) => item.id === compactEvent.id) ? current : [...current, compactEvent]);
+    }
     else if (taskId && hiddenSubagentTaskIds.current.has(event.taskId)) setDetailVersion((value) => value + 1);
   }, [hideSubagentTask, taskId]);
   const realtime = useRealtime(handleRealtime);
@@ -128,6 +131,22 @@ function mergeUniqueEvents(first: TimelineEvent[], second: TimelineEvent[]) {
   return [...merged.values()].sort((left, right) => left.occurredAt.localeCompare(right.occurredAt) || left.id.localeCompare(right.id));
 }
 
+function compactLiveToolEvent(event: TimelineEvent): TimelineEvent {
+  if ((event.type !== 'tool_call' && event.type !== 'tool_result') || !event.payload || typeof event.payload !== 'object' || Array.isArray(event.payload)) return event;
+  const payload = { ...(event.payload as Record<string, unknown>) };
+  if (event.type === 'tool_call' && payload.input && typeof payload.input === 'object' && !Array.isArray(payload.input)) {
+    const source = payload.input as Record<string, unknown>;
+    const input: Record<string, unknown> = {};
+    for (const key of ['path', 'workingDirectory', 'query', 'command', 'source', 'destination', 'name', 'pattern']) if (source[key] !== undefined) input[key] = source[key];
+    payload.input = input;
+  } else if (event.type === 'tool_result') {
+    delete payload.output;
+    delete payload.errorDetails;
+    delete payload.details;
+    if (typeof payload.error !== 'string') delete payload.error;
+  }
+  return { ...event, payload };
+}
 function subagentChildTaskId(event: TimelineEvent) { if (!event.payload || typeof event.payload !== 'object' || Array.isArray(event.payload)) return ''; const value = (event.payload as Record<string, unknown>).childTaskId; return typeof value === 'string' ? value.trim() : ''; }
 function conversationName(task: Task) { return task.title?.trim() || task.agentName?.trim() || generatedConversationName(task.id); }
 function generatedConversationName(id: string) { const first = [tr('Cloud'), tr('Star'), tr('Wind'), tr('Sun'), tr('Moon'), tr('Sea'), tr('Forest'), tr('Mist')]; const second = [tr('Blue'), tr('Soft'), tr('Morning'), tr('Night'), tr('New'), tr('Far'), tr('Warm'), tr('Bright')]; let hash = 2166136261; for (let index = 0; index < id.length; index++) { hash ^= id.charCodeAt(index); hash = Math.imul(hash, 16777619); } const value = hash >>> 0; return `${first[value % first.length]} ${second[Math.floor(value / first.length) % second.length]} ${String(value % 97 + 1).padStart(2, '0')}`; }
