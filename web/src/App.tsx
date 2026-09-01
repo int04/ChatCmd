@@ -25,7 +25,7 @@ const legacyPaths = ['/plans', '/account', '/payment', '/payments', '/purchase',
 
 export default function App() {
   useAppLanguage();
-  return <AuthProvider><Routes><Route path="/login" element={<AuthPage mode="login" />} /><Route path="/register" element={<AuthPage mode="register" />} /><Route path="/*" element={<ProtectedApp />} /></Routes></AuthProvider>;
+  return <AuthProvider><AdminElevationPrompt /><Routes><Route path="/login" element={<AuthPage mode="login" />} /><Route path="/register" element={<AuthPage mode="register" />} /><Route path="/*" element={<ProtectedApp />} /></Routes></AuthProvider>;
 }
 
 function ProtectedApp() {
@@ -33,7 +33,7 @@ function ProtectedApp() {
   const location = useLocation();
   if (loading) return <main className="auth-screen"><div className="auth-loading"><span className="spinner" />Đang kiểm tra đăng nhập…</div></main>;
   if (!user) return <Navigate replace to="/login" state={{ from: `${location.pathname}${location.search}` }} />;
-  return <RealtimeProvider><GlobalDocumentTitleBridge /><SoundNotificationsBridge /><GlobalConversationApprovalQueue /><GlobalUpdatePrompt /><AdminElevationPrompt /><Routes><Route element={<Shell />}><Route index element={<DashboardPage />} /><Route path="tasks/:taskId?" element={<TasksPage />} /><Route path="sessions" element={<SessionsPage />} /><Route path="sessions/terminal/:sessionId" element={<LiveTerminalPage />} /><Route path="sessions/:sessionId" element={<SessionDetailPage />} /><Route path="agents" element={<AgentsPage />} /><Route path="skills" element={<SkillsPage />} /><Route path="settings" element={<SettingsPage />} />{legacyPaths.map((path) => <Route key={path} path={path} element={<Navigate replace to="/" />} />)}<Route path="*" element={<NotFound />} /></Route></Routes></RealtimeProvider>;
+  return <RealtimeProvider><GlobalDocumentTitleBridge /><SoundNotificationsBridge /><GlobalConversationApprovalQueue /><GlobalUpdatePrompt /><Routes><Route element={<Shell />}><Route index element={<DashboardPage />} /><Route path="tasks/:taskId?" element={<TasksPage />} /><Route path="sessions" element={<SessionsPage />} /><Route path="sessions/terminal/:sessionId" element={<LiveTerminalPage />} /><Route path="sessions/:sessionId" element={<SessionDetailPage />} /><Route path="agents" element={<AgentsPage />} /><Route path="skills" element={<SkillsPage />} /><Route path="settings" element={<SettingsPage />} />{legacyPaths.map((path) => <Route key={path} path={path} element={<Navigate replace to="/" />} />)}<Route path="*" element={<NotFound />} /></Route></Routes></RealtimeProvider>;
 }
 
 function AdminElevationPrompt() {
