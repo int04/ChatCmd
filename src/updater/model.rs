@@ -27,6 +27,7 @@ pub(crate) struct UpdateStatus {
     pub note: Option<String>,
     pub platform: String,
     pub architecture: String,
+    pub debug_build: bool,
     pub phase: UpdatePhase,
     pub update_available: bool,
     pub download_available: bool,
@@ -45,6 +46,7 @@ impl UpdateStatus {
             note: None,
             platform: target.platform.to_owned(),
             architecture: target.architecture.to_owned(),
+            debug_build: cfg!(debug_assertions),
             phase: if target.supported {
                 UpdatePhase::Idle
             } else {

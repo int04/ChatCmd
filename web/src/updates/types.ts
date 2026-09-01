@@ -17,6 +17,7 @@ export interface UpdateStatus {
   note: string | null;
   platform: string;
   architecture: string;
+  debugBuild: boolean;
   phase: UpdatePhase;
   updateAvailable: boolean;
   downloadAvailable: boolean;

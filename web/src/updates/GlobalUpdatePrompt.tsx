@@ -16,7 +16,7 @@ export function GlobalUpdatePrompt() {
   useEffect(() => {
     let cancelled = false;
     void api.checkForUpdate().then((next) => {
-      if (!cancelled && next.updateAvailable) setStatus(next);
+      if (!cancelled && !next.debugBuild && next.updateAvailable) setStatus(next);
     }).catch(() => {
       // Startup update checks are intentionally silent when the network is unavailable.
     });
