@@ -88,16 +88,35 @@ async fn main() -> Result<()> {
 
 fn apply_elevated_restart_delay() {
     let mut args = std::env::args().skip(1);
+    let mut delay_ms = None;
+    #[cfg(target_os = "macos")]
+    let mut ready_port = None;
+    #[cfg(target_os = "macos")]
+    let mut ready_token = None;
     while let Some(arg) = args.next() {
-        if arg != "--elevated-restart-delay-ms" {
-            continue;
+        match arg.as_str() {
+            "--elevated-restart-delay-ms" => {
+                delay_ms = args.next().and_then(|value| value.parse::<u64>().ok());
+            }
+            #[cfg(target_os = "macos")]
+            "--elevated-restart-ready-port" => {
+                ready_port = args.next().and_then(|value| value.parse::<u16>().ok());
+            }
+            #[cfg(target_os = "macos")]
+            "--elevated-restart-ready-token" => {
+                ready_token = args.next();
+            }
+            _ => {}
         }
-        if let Some(value) = args.next()
-            && let Ok(delay_ms) = value.parse::<u64>()
-        {
-            std::thread::sleep(std::time::Duration::from_millis(delay_ms.min(5_000)));
+    }
+    #[cfg(target_os = "macos")]
+    if let (Some(port), Some(token)) = (ready_port, ready_token) {
+        if api::signal_elevated_restart_ready(port, &token).is_err() {
+            std::process::exit(1);
         }
-        break;
+    }
+    if let Some(delay_ms) = delay_ms {
+        std::thread::sleep(std::time::Duration::from_millis(delay_ms.min(5_000)));
     }
 }
 

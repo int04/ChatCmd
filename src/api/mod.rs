@@ -48,6 +48,8 @@ use sqlx::{QueryBuilder, Row, Sqlite};
 use crate::websocket::{AppEvent, AppState};
 
 pub(crate) use routes::router;
+#[cfg(target_os = "macos")]
+pub(crate) use system::signal_elevated_restart_ready;
 pub(crate) use task_delete::start_data_cleanup_scheduler;
 
 pub(crate) fn iso_now() -> String {

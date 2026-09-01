@@ -5,6 +5,12 @@ use std::{
     time::Duration,
 };
 
+#[cfg(target_os = "macos")]
+use std::{
+    io::{ErrorKind, Read, Write},
+    net::{Ipv4Addr, TcpListener, TcpStream},
+};
+
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
@@ -140,6 +146,7 @@ fn spawn_elevated_copy() -> Result<(), String> {
 fn spawn_elevated_copy() -> Result<(), String> {
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let working_directory = std::env::current_dir().map_err(|error| error.to_string())?;
+    let (ready_listener, ready_port, ready_token) = elevated_ready_listener()?;
 
     let mut environment_exports = String::new();
     for key in ["HOME", "PATH", "USER", "LOGNAME", "SHELL", "TMPDIR"] {
@@ -152,39 +159,94 @@ fn spawn_elevated_copy() -> Result<(), String> {
         }
     }
 
-    // Keep every standard stream detached from osascript. Otherwise the
-    // privileged shell can tear down its background child when it exits.
-    // Checking the PID also prevents the current app from exiting when exec
-    // failed before the replacement process reached its startup delay.
+    // Keep the elevated executable in the foreground of the privileged shell.
+    // macOS can reap a background process created by `do shell script` as soon
+    // as that shell exits, even when nohup is used. The replacement process
+    // sends the handshake before its startup delay; only then may this process
+    // return success and schedule its own exit.
     let shell_command = format!(
-        "{}cd {}; /usr/bin/nohup {} --elevated-restart-delay-ms 1500 </dev/null >/dev/null 2>&1 & elevated_pid=$!; /bin/sleep 0.2; /bin/kill -0 \"$elevated_pid\"",
+        "{}cd {}; exec {} --elevated-restart-ready-port {} --elevated-restart-ready-token {} --elevated-restart-delay-ms 1500 </dev/null >/dev/null 2>&1",
         environment_exports,
         sh_quote_path(&working_directory),
         sh_quote_path(&executable),
+        ready_port,
+        sh_quote_text(&ready_token),
     );
     let apple_script = format!(
         "do shell script \"{}\" with administrator privileges",
         apple_script_string(&shell_command),
     );
 
-    let output = Command::new("/usr/bin/osascript")
+    let mut child = Command::new("/usr/bin/osascript")
         .args(["-e", &apple_script])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .output()
+        .spawn()
         .map_err(|error| format!("failed to start macOS administrator prompt: {error}"))?;
 
-    if output.status.success() {
-        return Ok(());
-    }
+    loop {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| format!("failed to monitor macOS administrator prompt: {error}"))?
+        {
+            let mut stderr = String::new();
+            if let Some(mut stream) = child.stderr.take() {
+                let _ = stream.read_to_string(&mut stderr);
+            }
+            let detail = stderr.trim();
+            return if detail.is_empty() {
+                Err(format!(
+                    "macOS did not start the elevated ChatCMD process (status {status})."
+                ))
+            } else {
+                Err(detail.to_owned())
+            };
+        }
 
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-    if stderr.is_empty() {
-        Err("macOS did not start the elevated ChatCMD process.".to_owned())
-    } else {
-        Err(stderr)
+        match ready_listener.accept() {
+            Ok((mut stream, _)) => {
+                let mut received = String::new();
+                stream.read_to_string(&mut received).map_err(|error| {
+                    format!("failed to read macOS elevation handshake: {error}")
+                })?;
+                if received == ready_token {
+                    return Ok(());
+                }
+            }
+            Err(error) if error.kind() == ErrorKind::WouldBlock => {}
+            Err(error) => {
+                return Err(format!(
+                    "failed to accept macOS elevation handshake: {error}"
+                ));
+            }
+        }
+
+        std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+#[cfg(target_os = "macos")]
+fn elevated_ready_listener() -> Result<(TcpListener, u16, String), String> {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .map_err(|error| format!("failed to bind macOS elevation handshake: {error}"))?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|error| format!("failed to configure macOS elevation handshake: {error}"))?;
+    let port = listener
+        .local_addr()
+        .map_err(|error| format!("failed to inspect macOS elevation handshake: {error}"))?
+        .port();
+    Ok((listener, port, uuid::Uuid::new_v4().to_string()))
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn signal_elevated_restart_ready(port: u16, token: &str) -> Result<(), String> {
+    let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port))
+        .map_err(|error| format!("failed to connect macOS elevation handshake: {error}"))?;
+    stream
+        .write_all(token.as_bytes())
+        .map_err(|error| format!("failed to signal macOS elevation readiness: {error}"))
 }
 
 #[cfg(target_os = "macos")]
