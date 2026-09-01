@@ -12,6 +12,14 @@ use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+#[cfg(target_os = "macos")]
+use std::{
+    io::Write as _,
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
+    path::Path,
+    process::{Command, Stdio},
+};
+
 use super::Problem;
 use crate::{
     backend_api::BackendApiResponse,
@@ -27,6 +35,12 @@ use crate::{
 const AUTH_KEYRING_SERVICE: &str = "com.chatcmd.client.auth";
 #[cfg(not(target_os = "macos"))]
 const AUTH_KEYRING_SERVICE: &str = "chatcmd.client.auth";
+
+#[cfg(target_os = "macos")]
+const ELEVATED_AUTH_DIRECTORY: &str = "/var/root/Library/Application Support/ChatCmdClient";
+#[cfg(target_os = "macos")]
+const ELEVATED_AUTH_FILE: &str =
+    "/var/root/Library/Application Support/ChatCmdClient/auth-session.json";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -49,6 +63,14 @@ struct TokenResponse {
     refresh_token: String,
     access_token_expires_at: String,
     refresh_token_expires_at: String,
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ElevatedCredential {
+    account: String,
+    secret: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -316,13 +338,11 @@ pub(super) async fn load_session(
             AuthCredentialCache::Uninitialized => {
                 let account = state.backend_api.base_url().to_owned();
                 let read_result = tokio::task::spawn_blocking(move || {
-                    let entry = keyring::Entry::new(AUTH_KEYRING_SERVICE, &account)
-                        .map_err(|error| error.to_string())?;
-                    match entry.get_password() {
-                        Ok(value) => Ok(Some(value)),
-                        Err(keyring::Error::NoEntry) => Ok(None),
-                        Err(error) => Err(error.to_string()),
+                    #[cfg(target_os = "macos")]
+                    if is_macos_elevated() {
+                        return read_elevated_credential(&account);
                     }
+                    read_keyring_credential(&account)
                 })
                 .await
                 .map_err(|_| secure_store_problem())?;
@@ -356,9 +376,11 @@ async fn save_session(state: &Arc<AppState>, tokens: &TokenResponse) -> Result<(
     let secret = serde_json::to_string(tokens).map_err(|_| internal_problem())?;
     let stored_secret = secret.clone();
     tokio::task::spawn_blocking(move || {
-        keyring::Entry::new(AUTH_KEYRING_SERVICE, &account)
-            .and_then(|entry| entry.set_password(&stored_secret))
-            .map_err(|error| error.to_string())
+        #[cfg(target_os = "macos")]
+        if is_macos_elevated() {
+            return write_elevated_credential(&account, &stored_secret);
+        }
+        write_keyring_credential(&account, &stored_secret)
     })
     .await
     .map_err(|_| secure_store_problem())?
@@ -373,12 +395,11 @@ async fn save_session(state: &Arc<AppState>, tokens: &TokenResponse) -> Result<(
 async fn clear_session(state: &Arc<AppState>) -> Result<(), Problem> {
     let account = state.backend_api.base_url().to_owned();
     tokio::task::spawn_blocking(move || {
-        let entry = keyring::Entry::new(AUTH_KEYRING_SERVICE, &account)
-            .map_err(|error| error.to_string())?;
-        match entry.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(error) => Err(error.to_string()),
+        #[cfg(target_os = "macos")]
+        if is_macos_elevated() {
+            return delete_elevated_credential();
         }
+        delete_keyring_credential(&account)
     })
     .await
     .map_err(|_| secure_store_problem())?
@@ -389,6 +410,97 @@ async fn clear_session(state: &Arc<AppState>) -> Result<(), Problem> {
     *state.auth_credential_cache.lock().await = AuthCredentialCache::Ready(None);
     state.backend_api.reset_session().await;
     Ok(())
+}
+
+fn read_keyring_credential(account: &str) -> Result<Option<String>, String> {
+    let entry =
+        keyring::Entry::new(AUTH_KEYRING_SERVICE, account).map_err(|error| error.to_string())?;
+    match entry.get_password() {
+        Ok(value) => Ok(Some(value)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn write_keyring_credential(account: &str, secret: &str) -> Result<(), String> {
+    keyring::Entry::new(AUTH_KEYRING_SERVICE, account)
+        .and_then(|entry| entry.set_password(secret))
+        .map_err(|error| error.to_string())
+}
+
+fn delete_keyring_credential(account: &str) -> Result<(), String> {
+    let entry =
+        keyring::Entry::new(AUTH_KEYRING_SERVICE, account).map_err(|error| error.to_string())?;
+    match entry.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn is_macos_elevated() -> bool {
+    Command::new("/usr/bin/id")
+        .arg("-u")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .is_some_and(|output| String::from_utf8_lossy(&output.stdout).trim() == "0")
+}
+
+#[cfg(target_os = "macos")]
+fn read_elevated_credential(account: &str) -> Result<Option<String>, String> {
+    let content = match std::fs::read_to_string(ELEVATED_AUTH_FILE) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.to_string()),
+    };
+    let credential: ElevatedCredential =
+        serde_json::from_str(&content).map_err(|error| error.to_string())?;
+    Ok((credential.account == account).then_some(credential.secret))
+}
+
+#[cfg(target_os = "macos")]
+fn write_elevated_credential(account: &str, secret: &str) -> Result<(), String> {
+    let directory = Path::new(ELEVATED_AUTH_DIRECTORY);
+    std::fs::create_dir_all(directory).map_err(|error| error.to_string())?;
+    std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))
+        .map_err(|error| error.to_string())?;
+    let temporary = directory.join(format!(".auth-session-{}.tmp", uuid::Uuid::new_v4()));
+    let content = serde_json::to_vec(&ElevatedCredential {
+        account: account.to_owned(),
+        secret: secret.to_owned(),
+    })
+    .map_err(|error| error.to_string())?;
+    let result = write_private_file(&temporary, &content).and_then(|()| {
+        std::fs::rename(&temporary, ELEVATED_AUTH_FILE).map_err(|error| error.to_string())
+    });
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
+
+#[cfg(target_os = "macos")]
+fn write_private_file(path: &Path, content: &[u8]) -> Result<(), String> {
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|error| error.to_string())?;
+    file.write_all(content).map_err(|error| error.to_string())?;
+    file.sync_all().map_err(|error| error.to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn delete_elevated_credential() -> Result<(), String> {
+    match std::fs::remove_file(ELEVATED_AUTH_FILE) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 fn to_response(backend: BackendApiResponse) -> Response {
