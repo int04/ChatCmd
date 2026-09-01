@@ -48,8 +48,6 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
             post(copy_plugin_link),
         )
         .route("/system/folder-picker", post(pick_project_folder))
-        .route("/system/elevation", get(elevation_status))
-        .route("/system/elevation/restart", post(restart_elevated))
         .route(
             "/workspaces/projects",
             get(workspace_projects).post(save_workspace_project),
@@ -132,6 +130,8 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/auth/register", post(auth::register))
         .route("/auth/login", post(auth::login))
         .route("/crypto/handshake", post(crypto::handshake))
+        .route("/system/elevation", get(elevation_status))
+        .route("/system/elevation/restart", post(restart_elevated))
         .merge(protected)
         .layer(middleware::from_fn_with_state(
             state,
