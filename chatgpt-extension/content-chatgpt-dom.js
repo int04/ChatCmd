@@ -11,8 +11,12 @@
   }
 
   function findVisible(selectors) {
+    return findVisibleWithin(document, selectors);
+  }
+
+  function findVisibleWithin(root, selectors) {
     for (const selector of selectors) {
-      for (const element of document.querySelectorAll(selector)) if (isVisible(element)) return element;
+      for (const element of root.querySelectorAll(selector)) if (isVisible(element)) return element;
     }
     return null;
   }
@@ -46,7 +50,9 @@
   }
 
   function findStopButton() {
-    const direct = findVisible([
+    const composers = [...document.querySelectorAll('form[data-type="unified-composer"]')].filter(isVisible);
+    const root = composers.at(-1) || document;
+    const direct = findVisibleWithin(root, [
       'button[data-testid="stop-button"]',
       'button[data-testid="stop-generating-button"]',
       'button[aria-label*="Stop" i]',
@@ -54,7 +60,7 @@
       'button[aria-label*="Ngừng" i]',
     ]);
     if (direct) return direct;
-    return [...document.querySelectorAll('button')].filter(isVisible).find((button) =>
+    return [...root.querySelectorAll('button')].filter(isVisible).find((button) =>
       /^(stop|dừng|ngừng)(?:\s|$)/i.test(normalize(button.getAttribute('aria-label') || button.textContent))) || null;
   }
 

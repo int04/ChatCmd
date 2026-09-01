@@ -22,7 +22,7 @@ function loadBridge(statusHandler = () => Promise.resolve({ ok: true, known: tru
     __sendButton: null,
     __stopButton: null,
     chrome: { runtime: {
-      onMessage: { addListener() {} },
+      onMessage: { addListener(listener) { context.__messageListener = listener; } },
       sendMessage(message, callback) {
         if (typeof callback === 'function') { callback({ ok: false }); return undefined; }
         if (message?.type === 'chatcmd-chatgpt-request-status') return statusHandler(message);
@@ -74,6 +74,53 @@ function prepareMonitor(context, state, { text = 'Phản hồi hoàn tất', sen
   `, context);
 }
 
+test('ready status trusts the usable composer even when an old local request is stale', () => {
+  const context = loadBridge();
+  vm.runInContext("findComposer = () => ({}); activeRequest = { id: 'stale', startedAt: 0, stopRequested: false };", context);
+  let response;
+  context.__messageListener({ type: 'chatcmd-chatgpt-ready' }, null, (value) => { response = value; });
+  assert.equal(response.ok, true);
+  assert.equal(response.ready, true);
+  assert.equal(response.composerReady, true);
+  assert.equal(response.generating, false);
+});
+
+test('ready status is still blocked while ChatGPT exposes a stop button', () => {
+  const context = loadBridge();
+  context.__stopButton = {};
+  vm.runInContext('findComposer = () => ({})', context);
+  let response;
+  context.__messageListener({ type: 'chatcmd-chatgpt-ready' }, null, (value) => { response = value; });
+  assert.equal(response.ready, false);
+  assert.equal(response.generating, true);
+});
+
+test('a stale request slot does not block a new run once the composer is idle', async () => {
+  const context = loadBridge();
+  vm.runInContext(`
+    Date.now = () => 5_000;
+    findComposer = () => ({});
+    activeRequest = { id: 'stale', startedAt: 0, stopRequested: false };
+    runRequest = async () => {};
+  `, context);
+  let response;
+  context.__messageListener(
+    { type: 'chatcmd-chatgpt-run', requestId: 'new-request' },
+    null,
+    (value) => { response = value; },
+  );
+  assert.equal(response.ok, true);
+  await Promise.resolve();
+});
+
+test('a superseded request monitor exits instead of touching the newer request', async () => {
+  const context = loadBridge();
+  prepareMonitor(context, { known: true, running: true, stopRequested: false, hasFinalResponse: false, active: true }, { text: '' });
+  vm.runInContext("activeRequest = { id: 'request-2', startedAt: 10_000, stopRequested: false, retryCount: 0, resultReported: false }", context);
+  assert.equal(await vm.runInContext("waitForAssistant(0, 'request-1', 'OLD')", context), '');
+  assert.equal(context.__submitCalls, 0);
+});
+
 test('automatic retry resubmits the original prompt when no progress was observed', async () => {
   const context = loadBridge();
   prepareMonitor(context, { known: true, running: true, stopRequested: false, hasFinalResponse: false, active: true }, { text: '' });
@@ -109,14 +156,18 @@ test('a ChatGPT error retries while the request is active and send is ready', as
 
 test('unknown backend state never authorizes an automatic resend', async () => {
   const context = loadBridge(() => Promise.resolve({ ok: false, error: 'offline' }));
-  prepareMonitor(context, { known: false, running: null, stopRequested: false, hasFinalResponse: false, active: null }, { sendReady: false });
+  prepareMonitor(context, { known: false, running: null, stopRequested: false, hasFinalResponse: false, active: null }, { text: '', sendReady: false });
   await assert.rejects(vm.runInContext("waitForAssistant(0, 'request-1', 'DO NOT RETRY')", context), /Quá lâu/);
   assert.equal(context.__submitCalls, 0);
 });
 
-test('raw assistant bubble pings backend finalization and locks retry', async () => {
+test('raw assistant bubble completes even when the empty composer has no send button', async () => {
   const context = loadBridge();
-  prepareMonitor(context, { known: true, running: true, stopRequested: false, hasFinalResponse: false, active: true });
+  prepareMonitor(
+    context,
+    { known: true, running: true, stopRequested: false, hasFinalResponse: false, active: true },
+    { sendReady: false },
+  );
   assert.equal(await vm.runInContext("waitForAssistant(0, 'request-1', 'ORIGINAL')", context), 'Phản hồi hoàn tất');
   assert.equal(context.__completionPings, 1);
   assert.equal(context.__submitCalls, 0);
@@ -155,6 +206,7 @@ test('Vietnamese stop controls are detected by the shared DOM helper', () => {
     constructor(label) { this.label = label; this.textContent = ''; }
     getAttribute(name) { return name === 'aria-label' ? this.label : null; }
     getBoundingClientRect() { return { width: 10, height: 10 }; }
+    querySelectorAll() { return []; }
   }
   for (const label of ['Dừng tạo phản hồi', 'Ngừng tạo']) {
     const button = new FakeElement(label);
@@ -169,6 +221,32 @@ test('Vietnamese stop controls are detected by the shared DOM helper', () => {
     context.__button = button;
     assert.equal(vm.runInContext('ChatCmdConversationDom.findStopButton() === globalThis.__button', context), true);
   }
+});
+
+test('a stop-like button outside the unified composer does not mark ChatGPT as generating', () => {
+  class FakeElement {
+    constructor(label = '') { this.label = label; this.textContent = ''; }
+    getAttribute(name) { return name === 'aria-label' ? this.label : null; }
+    getBoundingClientRect() { return { width: 10, height: 10 }; }
+    querySelectorAll() { return []; }
+  }
+  const composer = new FakeElement();
+  const outsideStop = new FakeElement('Dừng chia sẻ màn hình');
+  const context = {
+    Element: FakeElement,
+    Node: { DOCUMENT_POSITION_FOLLOWING: 4 },
+    getComputedStyle: () => ({ visibility: 'visible', display: 'block' }),
+    document: {
+      querySelectorAll(selector) {
+        if (selector === 'form[data-type="unified-composer"]') return [composer];
+        if (selector === 'button' || selector.includes('Dừng')) return [outsideStop];
+        return [];
+      },
+    },
+  };
+  vm.createContext(context);
+  vm.runInContext(domSource, context, { filename: 'content-chatgpt-dom.js' });
+  assert.equal(vm.runInContext('ChatCmdConversationDom.findStopButton()', context), null);
 });
 
 test('content scripts load helpers before the request runner', () => {
@@ -188,4 +266,10 @@ test('all extension sources stay within the 500-line maintenance limit', () => {
 test('local UI keeps failed dispatches for explicit user control', () => {
   assert.doesNotMatch(localUiSource, /RETRY_DELAY_SECONDS|retryTimer/);
   assert.match(localUiSource, /catch \(reason\) \{ setError\(errorText\(reason\)\); \}/);
+});
+
+test('local UI does not block sending on the polling-only conversationReady signal', () => {
+  assert.doesNotMatch(localUiSource, /if \(!status\.conversationReady\)/);
+  assert.doesNotMatch(localUiSource, /active \|\| chatGptReady !== true/);
+  assert.doesNotMatch(localUiSource, /chatgpt-retry-warning/);
 });

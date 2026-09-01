@@ -18,12 +18,19 @@ void chrome.runtime.sendMessage({ type: 'chatcmd-return-binding-status' }, (resp
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === 'chatcmd-chatgpt-run') {
-    if (activeRequest) {
+    const composer = findComposer();
+    if (!composer || findStopButton()) {
+      sendResponse({ ok: false, error: 'Tab ChatGPT chưa sẵn sàng nhận tin nhắn mới.' });
+      return false;
+    }
+    if (activeRequest && Date.now() - activeRequest.startedAt < 1_500) {
       sendResponse({ ok: false, error: 'Tab ChatGPT này đang xử lý một yêu cầu khác.' });
       return false;
     }
-    activeRequest = { id: message.requestId, stopRequested: false, retryCount: 0, resultReported: false };
-    void runRequest(message).finally(() => { activeRequest = null; });
+    activeRequest = { id: message.requestId, stopRequested: false, retryCount: 0, resultReported: false, startedAt: Date.now() };
+    void runRequest(message).finally(() => {
+      if (activeRequest?.id === message.requestId) activeRequest = null;
+    });
     sendResponse({ ok: true });
     return false;
   }
@@ -39,7 +46,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (message?.type === 'chatcmd-chatgpt-ready') {
     const composer = findComposer();
-    const generating = Boolean(activeRequest || findStopButton());
+    const generating = Boolean(findStopButton());
     sendResponse({
       ok: true,
       ready: Boolean(composer) && !generating,
@@ -95,7 +102,7 @@ async function runRequest(message) {
     }
     await reportRequestResult({
       requestId: message.requestId,
-      status: activeRequest?.stopRequested ? 'stopped' : 'completed',
+      status: activeRequest?.id === message.requestId && activeRequest.stopRequested ? 'stopped' : 'completed',
       conversationId,
       conversationUrl: conversationUrl || window.location.href,
       assistantContent: result,
@@ -103,7 +110,7 @@ async function runRequest(message) {
   } catch (error) {
     await reportRequestResult({
       requestId: message.requestId,
-      status: activeRequest?.stopRequested ? 'stopped' : 'failed',
+      status: activeRequest?.id === message.requestId && activeRequest.stopRequested ? 'stopped' : 'failed',
       conversationId,
       conversationUrl: conversationUrl || (started ? window.location.href : undefined),
       assistantContent: started ? latestMessageText('assistant') : undefined,
@@ -334,7 +341,7 @@ async function waitForAssistant(previousCount, requestId, submittedContent) {
   let observedProgress = false;
   const startedAt = Date.now();
   while (Date.now() - startedAt < 10 * 60_000) {
-    if (activeRequest?.resultReported) return latestMessageText('assistant');
+    if (!activeRequest || activeRequest.id !== requestId || activeRequest.resultReported) return latestMessageText('assistant');
     const now = Date.now();
     const nodes = assistantNodes();
     const latest = nodes.at(-1);
@@ -345,7 +352,7 @@ async function waitForAssistant(previousCount, requestId, submittedContent) {
     if (now - lastStateCheckAt > 800) {
       lastStateCheckAt = now;
       lastRequestState = await requestState(requestId);
-      if (lastRequestState.stopRequested && !activeRequest?.stopRequested) {
+      if (lastRequestState.stopRequested && activeRequest?.id === requestId && !activeRequest.stopRequested) {
         activeRequest.stopRequested = true;
         clickStopButton();
         await delay(250);
@@ -353,7 +360,7 @@ async function waitForAssistant(previousCount, requestId, submittedContent) {
       }
     }
 
-    if (activeRequest?.stopRequested) {
+    if (activeRequest?.id === requestId && activeRequest.stopRequested) {
       clickStopButton();
       if (!findStopButton() && (lastRequestState.stopRequested || isTerminalRequestState(lastRequestState))) return text;
     }
@@ -376,7 +383,7 @@ async function waitForAssistant(previousCount, requestId, submittedContent) {
       const stableMs = stableSince ? now - stableSince : 0;
       if (!stopButton && stableMs >= RAW_BUBBLE_STABILITY_MS && isTerminalRequestState(lastRequestState)) return text;
       if (
-        !stopButton && !threadError && findComposer() && findSendButton() &&
+        !stopButton && !threadError && findComposer() &&
         stableMs >= RAW_BUBBLE_STABILITY_MS && now - lastCompletionPingAt >= COMPLETION_PING_INTERVAL_MS
       ) {
         lastCompletionPingAt = now;
@@ -384,7 +391,7 @@ async function waitForAssistant(previousCount, requestId, submittedContent) {
       }
     }
 
-    if (!stopButton && findComposer() && findSendButton()) {
+    if (!stopButton && findComposer()) {
       const idleMs = now - lastActivityAt;
       const reason = threadError && idleMs >= ERROR_INTERRUPT_GRACE_MS
         ? 'thread_error'

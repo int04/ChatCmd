@@ -236,7 +236,6 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
       setChatGptReady(status.ready && status.conversationTabOpen && status.conversationReady);
       if (!status.ready) throw new Error(tr('ChatCMD ChatGPT Bridge extension is not ready. Enable or reload it, then try again.'));
       if (!status.conversationTabOpen) throw new Error(tr('This conversation’s ChatGPT tab is no longer open. Reopen the ChatGPT conversation and try again.'));
-      if (!status.conversationReady) throw new Error(tr('The ChatGPT tab is still loading the previous response. Wait until it is ready before sending another message.'));
       const request = await api.sendChatGptMessage(taskId, { model: DEFAULT_MODEL, content: message });
       await dispatchChatGptRequest({ requestId: request.id, submittedContent: request.submittedContent, model: request.model, conversationUrl: bridge.data.conversationUrl });
       const latest = await waitForDispatchState(request.id);
@@ -251,7 +250,7 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
   const send = async (event: FormEvent) => {
     event.preventDefault();
     const message = content.trim();
-    if (!message || busy || active || chatGptReady !== true || !bridge.data) return;
+    if (!message || busy || active || extensionReady !== true || chatGptTabOpen !== true || !bridge.data) return;
     await sendContent(message);
   };
 
@@ -299,11 +298,10 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
   if (extensionReady === false) return <div className="chatgpt-tab-required error" role="alert"><Unplug /><div><strong>{tr('Could not connect to ChatGPT Bridge')}</strong><span>{tr('Enable or reload the extension, then return to this conversation.')}</span></div></div>;
   if (chatGptTabOpen === false) return <div className="chatgpt-tab-required" role="alert"><CircleAlert /><div><strong>{tr('This conversation’s ChatGPT tab is closed')}</strong><span>{tr('ChatCMD must keep this exact ChatGPT tab open to send messages and track response status. Reopen the conversation and keep the tab open in your browser.')}</span><button type="button" onClick={() => void openTab()} disabled={busy}><ExternalLink />{tr('Open ChatGPT conversation')}</button></div></div>;
   return <form className="chatgpt-composer" onSubmit={(event) => void send(event)}>
-    {!active && chatGptReady !== true && <div className="chatgpt-retry-warning" role="status"><LoaderCircle className="spin" /><span><strong>{tr('ChatGPT tab is still loading the previous response.')}</strong> {tr('Please wait until ChatGPT is fully ready before sending another message.')}</span></div>}
     <div className="chatgpt-composer-row">
       <textarea aria-label={tr('Next message to ChatGPT')} rows={2} value={content} onChange={(event) => setContent(event.target.value)} disabled={active || busy} placeholder={answerCompletedWaitingForUi ? tr('Answer completed; waiting for the ChatGPT UI before continuing.') : active ? tr('ChatGPT is responding…') : tr('Continue the ChatGPT conversation…')} />
       {active ? <button type="button" className="chatgpt-stop-button" onClick={() => void stop()} disabled={busy || bridge.data.activeStatus === 'stop_requested'}><CircleStop /><span>{bridge.data.activeStatus === 'stop_requested' ? tr('Stopping…') : tr('Stop')}</span></button>
-        : <button type="submit" className="chatgpt-composer-send" disabled={busy || chatGptReady !== true || !content.trim()}><Send /><span>{chatGptReady === true ? tr('Send') : tr('Waiting for ChatGPT…')}</span></button>}
+        : <button type="submit" className="chatgpt-composer-send" disabled={busy || extensionReady !== true || chatGptTabOpen !== true || !content.trim()}><Send /><span>{tr('Send')}</span></button>}
     </div>
     <div className="chatgpt-composer-meta chatgpt-composer-actions"><button type="button" onClick={() => void closeTab()} disabled={busy}>{tr('Close this tab')}</button><span aria-hidden="true">|</span><button type="button" onClick={() => void focusTab()} disabled={busy}>{tr('Change model')}</button></div>
     {error && <p className="chatgpt-form-error" role="alert"><CircleAlert />{error}</p>}

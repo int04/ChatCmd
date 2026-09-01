@@ -277,8 +277,16 @@ async function chatGptTabStatus(conversationUrl, sourceTabId) {
   let ready = false;
   try {
     const response = await sendToChatGpt(tab.id, { type: 'chatcmd-chatgpt-ready' }, { quiet: true });
-    ready = response?.ready === true;
-  } catch {
+    ready = response?.composerReady === true && response?.generating !== true;
+    if (!ready) {
+      await logExtension(
+        'warn',
+        'ready-check',
+        `Tab ${tab.id} chưa ready: composerReady=${response?.composerReady === true}, generating=${response?.generating === true}, ready=${response?.ready === true}.`,
+      );
+    }
+  } catch (error) {
+    await logExtension('warn', 'ready-check', `Không đọc được trạng thái ready của tab ${tab.id}: ${errorMessage(error)}`);
     ready = false;
   }
   return {
