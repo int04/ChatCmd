@@ -24,9 +24,12 @@ export function AgentsPage() {
   const managedTunnel = useLoad(api.managedTunnelStatus, []);
   const tools = useLoad(api.tools, []);
   const presets = useLoad(api.presets, []);
+  const settings = useLoad(api.settings, []);
   const [editor, setEditor] = useState<Agent | 'new'>();
   const [secret, setSecret] = useState<SecretResult>();
   const [pluginAgent, setPluginAgent] = useState<Agent>();
+  const [rotateTarget, setRotateTarget] = useState<Agent>();
+  const [rotatingAgentId, setRotatingAgentId] = useState<string>();
   const [addingTunnel, setAddingTunnel] = useState(false);
   const [testingTunnelId, setTestingTunnelId] = useState<number>();
   const [testedTunnelId, setTestedTunnelId] = useState<number>();
@@ -69,10 +72,16 @@ export function AgentsPage() {
       setEditor(undefined);
     } catch (error) { setProblem(error instanceof Error ? error.message : tr('Save failed')); }
   };
-  const rotate = async (agent: Agent) => {
+  const rotate = async () => {
+    if (!rotateTarget) return;
+    const agent = rotateTarget;
     setProblem('');
-    try { setSecret(await api.rotateAgentSecret(agent.id)); }
-    catch (error) { setProblem(error instanceof Error ? error.message : tr('Rotation failed')); }
+    setRotatingAgentId(agent.id);
+    try {
+      setSecret(await api.rotateAgentSecret(agent.id));
+      setRotateTarget(undefined);
+    } catch (error) { setProblem(error instanceof Error ? error.message : tr('Rotation failed')); }
+    finally { setRotatingAgentId(undefined); }
   };
   const remove = async (agent: Agent) => {
     if (!confirm(tr('Delete access profile “{name}”? Existing connection links for it will stop working.', { name: agent.name }))) return;
@@ -166,7 +175,7 @@ export function AgentsPage() {
           <div className="agents-clean-row-actions">
             <button className="button primary" onClick={() => setPluginAgent(agent)}><Link2 />{tr('Copy connection link')}</button>
             <button className="button secondary" onClick={() => setEditor(agent)}><Pencil />{tr('Permissions')}</button>
-            <details className="agents-clean-more"><summary className="icon-button" aria-label={tr('More options')}>•••</summary><div><button type="button" onClick={() => void rotate(agent)}><RotateCw />{tr('Create new access key')}</button><button type="button" className="danger" onClick={() => void remove(agent)}><Trash2 />{tr('Delete')}</button></div></details>
+            <details className="agents-clean-more"><summary className="icon-button" aria-label={tr('More options')}>•••</summary><div><button type="button" onClick={() => setRotateTarget(agent)}><RotateCw />{tr('Create new access code')}</button><button type="button" className="danger" onClick={() => void remove(agent)}><Trash2 />{tr('Delete')}</button></div></details>
           </div>
         </article>)}
       </div>}
@@ -184,7 +193,11 @@ export function AgentsPage() {
 
     {editor && <AgentEditor agent={editor === 'new' ? undefined : editor} tools={tools.data ?? []} presets={presets.data ?? []} close={() => setEditor(undefined)} save={save} />}
     {secret && <SecretModal result={secret} close={() => setSecret(undefined)} />}
-    {addingTunnel && <AddTunnelModal close={() => setAddingTunnel(false)} added={tunnelAdded} />}
+    {rotateTarget && <Modal title={tr('Create new access code?')} description={rotateTarget.name} close={() => !rotatingAgentId && setRotateTarget(undefined)} dangerous>
+      <div className="warning-copy">{tr('After confirmation, you must update this Plugin link on your AI models before it can be used again. Confirm?')}</div>
+      <div className="modal-actions"><button className="button secondary" type="button" disabled={Boolean(rotatingAgentId)} onClick={() => setRotateTarget(undefined)}>{tr('Cancel')}</button><button className="button danger" type="button" disabled={Boolean(rotatingAgentId)} onClick={() => void rotate()}>{rotatingAgentId ? <LoaderCircle className="spin" /> : <RotateCw />}{rotatingAgentId ? tr('Creating…') : tr('Confirm')}</button></div>
+    </Modal>}
+    {addingTunnel && <AddTunnelModal port={settings.data?.port} close={() => setAddingTunnel(false)} added={tunnelAdded} />}
     {deleteTunnelTarget && <Modal title={tr('Delete public address?')} description={deleteTunnelTarget.baseUrl} close={() => !deletingTunnelId && setDeleteTunnelTarget(undefined)} dangerous>
       <div className="warning-copy">{tr('This address will be removed from the saved Tunnel list and will no longer be available when generating connection links.')}</div>
       <div className="modal-actions"><button className="button secondary" type="button" disabled={Boolean(deletingTunnelId)} onClick={() => setDeleteTunnelTarget(undefined)}>{tr('Cancel')}</button><button className="button danger" type="button" disabled={Boolean(deletingTunnelId)} onClick={() => void deleteTunnel()}>{deletingTunnelId ? <LoaderCircle className="spin" /> : <Trash2 />}{deletingTunnelId ? tr('Deleting…') : tr('Delete public address')}</button></div>
@@ -193,7 +206,7 @@ export function AgentsPage() {
   </div>;
 }
 
-function AddTunnelModal({ close, added }: { close: () => void; added: (tunnel: Tunnel) => void }) {
+function AddTunnelModal({ port, close, added }: { port?: number; close: () => void; added: (tunnel: Tunnel) => void }) {
   const [baseUrl, setBaseUrl] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -207,7 +220,7 @@ function AddTunnelModal({ close, added }: { close: () => void; added: (tunnel: T
   };
   return <Modal title={tr('Add public address')} description={tr('ChatCMD will verify that this address reaches the current device before saving it.')} close={close}>
     <form className="form-stack" onSubmit={submit}>
-      <div className="tunnel-guide"><span><Cloud /></span><div><strong>{tr('Use an address you control')}</strong><p>{tr('The address must route to ChatCMD running on this device. You can use a Cloudflare Tunnel, your own domain, or a public IP/port exposed through your router.')}</p><div className="tunnel-guide-examples"><code>https://mcp.example.com</code><code>http://203.0.113.10:8080</code></div></div></div>
+      <div className="tunnel-guide"><span><Cloud /></span><div><strong>{tr('Use an address you control')}</strong><div className="tunnel-port-highlight"><small>{tr('Rust server port')}</small><strong>{port ?? '—'}</strong></div><p>{tr('Point your domain, reverse proxy, Cloudflare Tunnel, or router port forwarding to the ChatCMD Rust server running on this device. The current local server port is {port}.', { port: port ?? '—' })}</p><p>{tr('For Cloudflare Tunnel, use a service target such as http://127.0.0.1:{port}. For router/NAT forwarding, forward an external TCP port to this computer on port {port}, then enter the public domain or IP here.', { port: port ?? '—' })}</p><div className="tunnel-guide-examples"><code>https://mcp.example.com</code><code>{`http://203.0.113.10:${port ?? 'PORT'}`}</code><code>{`http://127.0.0.1:${port ?? 'PORT'}`}</code></div></div></div>
       <label>{tr('Public address')}<input required autoFocus maxLength={512} placeholder="https://mcp.example.com" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} /><small>{tr('Enter a domain, IP:port, or full URL. If no protocol is provided, ChatCMD will try HTTPS and verify the connection before saving.')}</small></label>
       {error && <div className="tunnel-form-error">{error}</div>}
       <div className="modal-actions"><button className="button secondary" type="button" onClick={close}>{tr('Cancel')}</button><button className="button primary" disabled={busy || !baseUrl.trim()}>{busy ? <LoaderCircle className="spin" /> : <Wifi />}{busy ? tr('Testing & saving…') : tr('Verify & add')}</button></div>
