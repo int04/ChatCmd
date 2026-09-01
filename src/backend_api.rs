@@ -15,7 +15,7 @@ use p256::{
 use reqwest::{Client, Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 const PROTOCOL: u8 = 1;
 const DEBUG_BACKEND_API_URL: &str = "http://127.0.0.1:5121";
@@ -37,6 +37,7 @@ pub(crate) struct BackendApiClient {
     http: Client,
     base_url: String,
     session: Arc<RwLock<Option<BackendSession>>>,
+    request_lock: Arc<Mutex<()>>,
 }
 
 #[derive(Clone)]
@@ -82,6 +83,7 @@ impl BackendApiClient {
             http,
             base_url,
             session: Arc::new(RwLock::new(None)),
+            request_lock: Arc::new(Mutex::new(())),
         })
     }
 
@@ -90,6 +92,7 @@ impl BackendApiClient {
     }
 
     pub(crate) async fn reset_session(&self) {
+        let _request_guard = self.request_lock.lock().await;
         *self.session.write().await = None;
     }
 
@@ -101,28 +104,35 @@ impl BackendApiClient {
         authorization: Option<&str>,
         accept_language: Option<&str>,
     ) -> Result<BackendApiResponse> {
-        match self
-            .request_once(
-                method.clone(),
-                path_and_query,
-                body,
-                authorization,
-                accept_language,
-            )
-            .await?
-        {
-            RequestAttempt::Complete(response) => Ok(response),
-            RequestAttempt::Reset => {
-                *self.session.write().await = None;
-                match self
-                    .request_once(method, path_and_query, body, authorization, accept_language)
-                    .await?
-                {
-                    RequestAttempt::Complete(response) => Ok(response),
-                    RequestAttempt::Reset => bail!("backend API crypto session reset twice"),
+        const MAX_SESSION_RESETS: usize = 3;
+
+        let _request_guard = self.request_lock.lock().await;
+        for reset_count in 0..=MAX_SESSION_RESETS {
+            match self
+                .request_once(
+                    method.clone(),
+                    path_and_query,
+                    body,
+                    authorization,
+                    accept_language,
+                )
+                .await?
+            {
+                RequestAttempt::Complete(response) => return Ok(response),
+                RequestAttempt::Reset if reset_count < MAX_SESSION_RESETS => {
+                    tracing::warn!(
+                        path = path_and_query,
+                        reset_count = reset_count + 1,
+                        "backend API crypto session was reset; handshaking again"
+                    );
+                    *self.session.write().await = None;
+                }
+                RequestAttempt::Reset => {
+                    bail!("backend API crypto session reset too many times")
                 }
             }
         }
+        unreachable!("bounded backend API reset loop must return")
     }
 
     async fn request_once(
