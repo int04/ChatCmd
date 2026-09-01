@@ -558,6 +558,7 @@ const vi: Record<string, string> = {
   'Conversation activity': 'Hoạt động hội thoại',
   'No activity yet': 'Chưa có hoạt động',
   'The Agent has not recorded any activity for this task yet.': 'Agent chưa ghi nhận nội dung cho task này.',
+  'The conversation is connected, ChatGPT is thinking about the answer...': 'Cuộc trò chuyện đã được kết nối, ChatGPT đang suy nghĩ câu trả lời...',
   'Task information': 'Thông tin công việc',
   'Resize task information': 'Điều chỉnh độ rộng thông tin task',
   '{count} agent turns': '{count} lượt agent',

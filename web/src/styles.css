@@ -112,6 +112,10 @@
 /* Bubble parity with ChatCMD.Client TerminalSessionPanel */
 .tasks-workspace .task-chat-column{--primary:#8b5cf6;--primary-2:color-mix(in srgb,var(--primary),white 14%);--primary-soft:color-mix(in srgb,var(--primary),transparent 76%);--border-2:#3a3a43;--green:#34d399;--red:#f87171;--focus:color-mix(in srgb,var(--primary),white 30%)}
 .tasks-workspace .task-bubble-timeline{display:block;max-width:none;margin:0}
+.task-awaiting-first-response{min-height:180px;display:flex;align-items:center;justify-content:center;gap:12px;padding:32px 20px;color:var(--muted);font-size:.78rem;line-height:1.55;text-align:center}
+.task-awaiting-first-response-icon{position:relative;display:grid;width:38px;height:38px;flex:0 0 38px;place-items:center;border:1px solid color-mix(in srgb,var(--primary) 30%,var(--border));border-radius:50%;background:color-mix(in srgb,var(--primary) 8%,transparent);color:#c4b5fd;box-shadow:0 0 0 0 color-mix(in srgb,var(--primary) 18%,transparent);animation:task-awaiting-pulse 1.8s ease-out infinite}
+.task-awaiting-first-response-icon svg{width:18px;height:18px;animation:spin .9s linear infinite}
+@keyframes task-awaiting-pulse{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--primary) 18%,transparent)}50%{box-shadow:0 0 0 8px transparent}}
 .turn-list{gap:0}
 .turn-bubble,.turn-bubble.running,.turn-bubble.failed{overflow:visible;background:transparent;border:0;border-radius:0;box-shadow:none}
 .turn-header{display:grid;min-height:68px;padding:8px 4px 12px;grid-template-columns:38px minmax(0,1fr) auto;align-items:center;gap:10px;background:transparent;border-bottom:0}

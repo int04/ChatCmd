@@ -4,7 +4,7 @@ import { useParams } from 'react-router-dom';
 
 import { api } from '../api';
 import { ChatGptTaskCard, ChatGptTaskComposer, NewChatGptConversation } from '../chatgpt/ChatGptConversation';
-import { Empty, ErrorState, Loading, StatusBadge, formatTime } from '../components';
+import { ErrorState, Loading, StatusBadge, formatTime } from '../components';
 import { tr, translatedStatus } from '../i18n';
 import { useRealtime } from '../realtime';
 import { TaskAccessCard } from '../tasks/TaskAccessCard';
@@ -103,7 +103,7 @@ function TaskDetailContent({ detail, realtime, onTaskChanged, hasOlder, loadingO
           <SubagentApprovalQueue approvals={detail.subagentApprovals ?? []} onResolved={(activityId) => onTaskChanged({ ...detail, subagentApprovals: (detail.subagentApprovals ?? []).filter((item) => item.activityId !== activityId) })} />
           {loadingOlder && <div className="task-history-skeleton" role="status" aria-label={tr('Loading older conversation')}><span /><span /><span /></div>}
           <section className="task-bubble-timeline turn-timeline" aria-label={tr('Conversation activity')}>
-            {turns.length ? turns.map((turn) => <TaskTurnBubble turn={turn} taskId={task.id} agentLabel={chatGpt ? 'ChatGPT' : tr('Codex Agent')} subagents={(detail.subagents ?? []).filter((agent) => agent.parentTurnId === turn.id)} key={turn.id} />) : <Empty title={tr('No activity yet')} body={tr('The Agent has not recorded any activity for this task yet.')} />}
+            {turns.length ? turns.map((turn) => <TaskTurnBubble turn={turn} taskId={task.id} agentLabel={chatGpt ? 'ChatGPT' : tr('Codex Agent')} subagents={(detail.subagents ?? []).filter((agent) => agent.parentTurnId === turn.id)} key={turn.id} />) : <div className="task-awaiting-first-response" role="status" aria-live="polite"><span className="task-awaiting-first-response-icon"><LoaderCircle /></span><span>{tr('The conversation is connected, ChatGPT is thinking about the answer...')}</span></div>}
           </section>
         </main>
         {chatGpt && <footer className="task-chat-footer"><ChatGptTaskComposer taskId={task.id} /></footer>}
