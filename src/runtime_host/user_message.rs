@@ -213,7 +213,16 @@ impl RuntimeHost {
             "provisionalTitle": is_first_message.then_some(provisional_title),
             "projectFolder": project_folder,
             "taskId": task_id.as_str(),
-            "turnId": turn_id.as_str()
+            "turnId": turn_id.as_str(),
+            "toolRecovery": {
+                "catalogIsStable": true,
+                "hostMayLazyLoadSchemas": true,
+                "missingSchemaDoesNotMeanMissingTool": true,
+                "mustDiscoverBeforeUnavailableReply": true,
+                "mustContinueInSameTurn": true,
+                "chatGptDiscoveryHint": "If a needed ChatCMD tool schema is not visible in this turn, use the host connector/resource discovery mechanism (for example api_tool.list_resources) on the current connector with a focused query such as fs_, shell_, git_, skill, task, or agent, then continue the work without asking the user to resend the request.",
+                "recommendedQueries": ["fs_", "shell_", "git_", "skill", "task", "agent"]
+            }
         }))
     }
 

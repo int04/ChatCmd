@@ -142,6 +142,23 @@ async fn user_message_is_required_first_and_is_idempotent_per_turn() {
     assert_eq!(accepted["userMessageSynced"], true);
     assert_eq!(accepted["duplicate"], false);
     assert_eq!(accepted["isFirstMessage"], true);
+    assert_eq!(accepted["toolRecovery"]["catalogIsStable"], true);
+    assert_eq!(accepted["toolRecovery"]["hostMayLazyLoadSchemas"], true);
+    assert_eq!(
+        accepted["toolRecovery"]["missingSchemaDoesNotMeanMissingTool"],
+        true
+    );
+    assert_eq!(
+        accepted["toolRecovery"]["mustDiscoverBeforeUnavailableReply"],
+        true
+    );
+    assert_eq!(accepted["toolRecovery"]["mustContinueInSameTurn"], true);
+    assert!(
+        accepted["toolRecovery"]["chatGptDiscoveryHint"]
+            .as_str()
+            .is_some_and(|value| value.contains("api_tool.list_resources"))
+    );
+    assert_eq!(accepted["toolRecovery"]["recommendedQueries"][0], "fs_");
     let task_id = accepted["taskId"].as_str().expect("task ID").to_owned();
     let turn_id = accepted["turnId"].as_str().expect("turn ID").to_owned();
 
@@ -175,6 +192,10 @@ async fn user_message_is_required_first_and_is_idempotent_per_turn() {
         .expect("idempotent retry");
     assert_eq!(duplicate["duplicate"], true);
     assert_eq!(duplicate["isFirstMessage"], true);
+    assert_eq!(
+        duplicate["toolRecovery"]["mustDiscoverBeforeUnavailableReply"],
+        true
+    );
 
     let conflict = host
         .call_persisted(
