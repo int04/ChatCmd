@@ -6,10 +6,8 @@
 .task-project-group{padding:7px 7px 13px;border-bottom:1px solid color-mix(in srgb,var(--border) 72%,transparent)}
 .task-project-group:last-child{border-bottom:0}
 .task-project-heading{min-height:42px;display:flex;align-items:center;justify-content:space-between;gap:5px;padding:3px 4px 6px}
-.task-project-drag-handle{width:20px;height:30px;display:grid;place-items:center;flex:0 0 auto;border-radius:6px;color:var(--subtle);cursor:grab;user-select:none}
-.task-project-drag-handle:hover{background:var(--surface-2);color:var(--text)}
-.task-project-drag-handle:active{cursor:grabbing}
-.task-project-drag-handle svg{width:14px;height:14px}
+.task-project-title-drag-handle{cursor:grab;user-select:none}
+.task-project-title-drag-handle:active{cursor:grabbing}
 .task-project-group{transition:opacity .14s ease,background .14s ease,box-shadow .14s ease}
 .task-project-group.dragging{opacity:.45}
 .task-project-group.drag-over{background:color-mix(in srgb,var(--accent) 4%,transparent);box-shadow:inset 0 2px 0 color-mix(in srgb,var(--accent) 75%,transparent)}
