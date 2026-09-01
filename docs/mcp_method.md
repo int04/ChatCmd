@@ -20,11 +20,12 @@ Phần lớn method đều có các trường correlation chung do ChatCMD bổ 
 
 Luồng agent bắt buộc:
 
-1. `agent_user_message` phải là tool đầu tiên của mỗi user turn.
-2. Với công việc project không tầm thường, gọi `skills_list`; nếu có skill phù hợp thì đọc bằng `skill_read` trước khi thao tác liên quan.
-3. Thực hiện các MCP method cần thiết.
-4. Nếu có sub-agent thì phải chờ chúng hoàn tất bằng `agent_subagent_wait`.
-5. `agent_turn_complete` phải là tool cuối cùng, gọi đúng một lần ngay trước khi agent trả lời user.
+1. `agent_user_message` phải là tool đầu tiên và chỉ gọi đúng một lần cho user turn thật.
+2. Với mọi yêu cầu không-trivial, gọi `agent_progress` ngay sau đó để tóm tắt user yêu cầu gì và agent sẽ làm gì tiếp theo, trước `skills_list` hoặc tool substantive khác.
+3. Với công việc project không tầm thường, gọi `skills_list`; nếu có skill phù hợp thì đọc bằng `skill_read` trước khi thao tác liên quan.
+4. Trong lúc thực hiện, duy trì `agent_progress` xuyên suốt: tối đa 2 substantive call không có progress; shell pending và lỗi/retry có rule bắt buộc riêng.
+5. Nếu có sub-agent thì phải chờ chúng hoàn tất bằng `agent_subagent_wait`.
+6. `agent_turn_complete` phải là tool cuối cùng, gọi đúng một lần ngay trước khi agent trả lời user.
 
 ---
 
@@ -135,7 +136,7 @@ Các Git method được thiết kế để tránh shell interpolation và truy�
 | Method | Tham số chính | Ý nghĩa |
 |---|---|---|
 | `agent_user_message` | `content` | **Bắt buộc là MCP call đầu tiên và chỉ gọi đúng một lần trong mỗi user turn.** Đồng bộ nguyên văn user message lên ChatCMD và thiết lập/correlate `taskId` + `turnId`. `content` phải đúng nguyên văn message hiện tại. Không dùng method này cho progress/reflection/finding sau tool result; các cập nhật đó phải dùng `agent_progress`. |
-| `agent_progress` | `message`, `suggestedTitle?` | **Bắt buộc với mọi turn project không-trivial.** Ngoài việc mirror mọi user-visible commentary/progress/update milestone trước final answer, agent phải phát progress ngay sau khi đọc/inspect xong nội dung quan trọng, sau khi sửa/tạo file thành công, và sau build/test/lint/search/Git/command/deploy có kết quả đáng báo cáo. Nội dung chỉ tóm tắt kết quả quan sát được, điều vừa hiểu hoặc tác động của thay đổi; không gửi private chain-of-thought/hidden reasoning và không spam các call cơ học/no-op. Không gọi sau `agent_turn_complete`. |
+| `agent_progress` | `message`, `suggestedTitle?` | **Bắt buộc với mọi turn project không-trivial và phải duy trì xuyên suốt turn.** Ngay sau `agent_user_message`, trước `skills_list` hoặc tool substantive khác, phải gửi một progress tóm tắt yêu cầu user + hành động kế tiếp. Sau đó không được có quá 2 substantive tool call liên tiếp mà không có progress. Bắt buộc báo sau inspect/read quan trọng, sau sửa/tạo file, sau mọi `shell_wait` còn `completed=false`/timeout hoặc `shell_read` chưa có kết luận trước khi poll tiếp, và sau mọi lỗi/non-zero/rejection trước khi retry/fallback; message lỗi phải nêu lỗi quan sát được và hướng recovery/alternative tiếp theo. Không gửi private chain-of-thought/hidden reasoning. Không gọi sau `agent_turn_complete`. |
 | `agent_subagent_start` | `name`, `request` | Tạo và dispatch một child agent khi ChatGPT chủ động chia việc hoặc người dùng yêu cầu chia agent. Chỉ sử dụng model sampling do ChatGPT/MCP host cung cấp; nếu host không hỗ trợ sampling thì trả `samplingUnavailable`/`failed` và tuyệt đối không khởi chạy Codex hay executor local. |
 | `agent_subagent_wait` | `timeoutMs?` | Chờ các child agent của parent turn. Nếu `allFinished=false` thì tiếp tục gọi lại trước khi finalize. |
 | `agent_turn_complete` | `content`, `suggestedTitle?` | **Bắt buộc là MCP call cuối cùng.** Xác nhận turn đã hoàn tất và gửi đúng nội dung cuối cùng agent sẽ trả cho user. Chỉ được gọi đúng một lần sau khi mọi tool/sub-agent đã xong. |
@@ -202,9 +203,9 @@ Một turn sửa code thông thường có thể có flow:
 
 ```text
 agent_user_message
+  -> agent_progress              (ngay lập tức: tóm tắt user yêu cầu gì + bước tiếp theo)
   -> skills_list
   -> skill_read                  (nếu có skill phù hợp)
-  -> agent_progress              (bắt buộc trước substantive project work)
   -> workspace_roots / fs_find
   -> fs_read_text / fs_search
   -> agent_progress              (báo ngay điều vừa hiểu/phát hiện sau inspect quan trọng)
@@ -215,14 +216,19 @@ agent_user_message
   -> agent_turn_complete
 ```
 
+Trong toàn bộ flow, không để quá **2 substantive tool call liên tiếp** mà không có `agent_progress`.
+
 Một turn có sub-agent:
 
 ```text
 agent_user_message
+  -> agent_progress              (tóm tắt yêu cầu + kế hoạch chia việc)
   -> skills_list
   -> agent_subagent_start
-  -> ... parent tiếp tục công việc ...
+  -> agent_progress              (báo child đã được dispatch hoặc lỗi dispatch + fallback)
+  -> ... parent tiếp tục công việc, vẫn giữ cadence progress ...
   -> agent_subagent_wait
+  -> agent_progress              (nếu child vẫn chưa xong, báo đang chờ gì)
   -> agent_subagent_wait         (lặp nếu allFinished=false)
   -> agent_turn_complete
 ```
@@ -231,13 +237,20 @@ Một turn chạy terminal dài:
 
 ```text
 agent_user_message
+  -> agent_progress              (tóm tắt command/workflow sắp chạy)
   -> shell_create
   -> shell_write
-  -> shell_read / shell_wait
-  -> shell_read                  (đọc tiếp bằng afterSequence)
+  -> shell_wait                  (nếu completed=false/timeout)
+  -> agent_progress              (báo command vẫn chạy + đang chờ gì)
+  -> shell_read                  (nếu vẫn chưa có kết luận/process còn chạy)
+  -> agent_progress              (báo output/stage hiện tại trước khi poll tiếp)
+  -> shell_wait / shell_read     (poll tiếp)
+  -> agent_progress              (kết quả cuối, hoặc lỗi + hướng recovery)
   -> shell_close                 (nếu cần đóng session)
   -> agent_turn_complete
 ```
+
+Nếu command/tool trả lỗi hoặc exit code khác 0, `agent_progress` phải xuất hiện **trước** lần retry, đổi command hoặc fallback tiếp theo; không được retry âm thầm.
 
 ---
 

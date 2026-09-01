@@ -686,7 +686,7 @@ tool_methods!(
     (
         agent_progress,
         ProgressArgs,
-        "Publish one concise progress milestone. Required field: message; optional suggestedTitle. For non-trivial project work, call after meaningful file/code inspection, after successful file edits/creates, and after build/test/lint/search/Git/command/deploy results that materially help the user; summarize observable findings or effects, never private chain-of-thought. Do not spam tiny mechanical/no-op calls. Do not call after agent_turn_complete."
+        "Publish one concise user-visible progress milestone. Required field: message; optional suggestedTitle. For non-trivial work, call once immediately after agent_user_message with a summary of the request and next action, then keep using it throughout the turn with no more than 2 substantive non-progress calls between updates. It is mandatory after meaningful file/code inspection, successful file edits/creates, every pending shell_wait/shell_read state before polling again, and every task-relevant error/non-zero result before retry or fallback. Error updates should summarize the failure and next recovery/alternative. Report observable findings and decisions only, never private chain-of-thought. Do not call after agent_turn_complete."
     ),
     (
         agent_subagent_wait,
