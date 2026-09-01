@@ -49,7 +49,13 @@ export function TaskTurnBubble({ turn, taskId, subagents = [], agentLabel = 'Cod
   const headingId = `turn-${turn.id}`;
   const [stopTarget, setStopTarget] = useState<ToolActivity | null>(null);
   const [changeTarget, setChangeTarget] = useState<ToolActivity | null>(null);
+  const [thinkingOpen, setThinkingOpen] = useState(() => !response);
+  const hasThinkingContent = subagents.length > 0 || activities.length > 0 || blocks.some((block) => block.type === 'progress') || isThinking || status === 'failed' || status === 'incomplete' || (status === 'completed' && autoFinalized && !response);
   const fileChanges = response ? responseFileChanges(response.event) : [];
+
+  useEffect(() => {
+    setThinkingOpen(!response);
+  }, [Boolean(response)]);
 
   return <div className="turn-item">
     {userMessage && <article className="turn-user-message">
@@ -74,16 +80,26 @@ export function TaskTurnBubble({ turn, taskId, subagents = [], agentLabel = 'Cod
         <div><h3 id={headingId}>{agentLabel}</h3><p>{status === 'running' ? tr('{count} activities', { count: formatAppNumber(activities.length) }) : <><span>{stateLabel}</span> · {tr('{count} activities', { count: formatAppNumber(activities.length) })}</>}</p></div>
         {status === 'running' ? <time dateTime={startedAt} aria-hidden="true"><LiveDuration startedAt={startedAt} /></time> : <BubbleTime value={startedAt} ariaHidden />}
       </header>
-      {subagents.length > 0 && <SubagentList agents={subagents} />}
-      {(activities.length > 0 || blocks.some((block) => block.type === 'progress')) && <TurnProcess blocks={blocks} taskId={taskId} onStop={setStopTarget} />}
-      {isThinking && <div className="turn-thinking" role="status"><span>{tr('Thinking and preparing a response…')}</span></div>}
-      {status === 'failed' && (agentLabel === 'ChatGPT' && isChatGptSendDisabledMessage(latestMessage(events))
-        ? <div className="turn-warning" role="status"><CircleAlert /><div><strong>{tr('Waiting to retry')}</strong><p>{tr('The ChatGPT send button is temporarily disabled. The system will retry in 10 seconds; you can cancel the send below.')}</p></div></div>
-        : <div className="turn-error" role="alert"><CircleAlert /><div><strong>{tr('Agent turn failed')}</strong><p>{latestMessage(events) || tr('The Agent could not complete this turn. Review the activity above to find the cause.')}</p></div></div>)}
-      {status === 'incomplete' && <div className="turn-warning" role="status"><CircleAlert /><div><strong>{tr('This turn may have been interrupted')}</strong><p>{latestMessage(events) || tr('No new activity or completion signal was received for a long time. The turn may have been interrupted or delayed; its state will recover automatically if new data arrives.')}</p></div></div>}
-      {status === 'completed' && autoFinalized && !response && <div className="turn-warning" role="status"><CircleAlert /><div><strong>{tr('Finalizer was not received')}</strong><p>{tr('No completion callback arrived from the Agent. ChatCMD stopped waiting after the inactivity grace period; later Agent activity will reopen the turn automatically.')}</p></div></div>}
-      {status === 'completed' && response && <div className="turn-response"><div className="turn-response-label"><CheckCircle2 /> {tr('Final response')}</div><div className="turn-response-content"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]} components={{ a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer noopener" /> }}>{response.text}</ReactMarkdown></div></div>}
-      {status === 'completed' && fileChanges.length > 0 && <TurnFileChanges changes={fileChanges} onOpen={(activity) => setChangeTarget(activity)} />}
+      {hasThinkingContent && <section className={`turn-thinking-section ${thinkingOpen ? 'open' : 'collapsed'}`}>
+        <button type="button" className="turn-section-toggle" aria-expanded={thinkingOpen} onClick={() => setThinkingOpen((value) => !value)}>
+          <span><MessageSquareText aria-hidden="true" />{tr('Thinking')}</span><ChevronDown aria-hidden="true" />
+        </button>
+        {thinkingOpen && <div className="turn-thinking-content">
+          {subagents.length > 0 && <SubagentList agents={subagents} />}
+          {(activities.length > 0 || blocks.some((block) => block.type === 'progress')) && <TurnProcess blocks={blocks} taskId={taskId} onStop={setStopTarget} />}
+          {isThinking && <div className="turn-thinking" role="status"><span>{tr('Thinking and preparing a response…')}</span></div>}
+          {status === 'failed' && (agentLabel === 'ChatGPT' && isChatGptSendDisabledMessage(latestMessage(events))
+            ? <div className="turn-warning" role="status"><CircleAlert /><div><strong>{tr('Waiting to retry')}</strong><p>{tr('The ChatGPT send button is temporarily disabled. The system will retry in 10 seconds; you can cancel the send below.')}</p></div></div>
+            : <div className="turn-error" role="alert"><CircleAlert /><div><strong>{tr('Agent turn failed')}</strong><p>{latestMessage(events) || tr('The Agent could not complete this turn. Review the activity above to find the cause.')}</p></div></div>)}
+          {status === 'incomplete' && <div className="turn-warning" role="status"><CircleAlert /><div><strong>{tr('This turn may have been interrupted')}</strong><p>{latestMessage(events) || tr('No new activity or completion signal was received for a long time. The turn may have been interrupted or delayed; its state will recover automatically if new data arrives.')}</p></div></div>}
+          {status === 'completed' && autoFinalized && !response && <div className="turn-warning" role="status"><CircleAlert /><div><strong>{tr('Finalizer was not received')}</strong><p>{tr('No completion callback arrived from the Agent. ChatCMD stopped waiting after the inactivity grace period; later Agent activity will reopen the turn automatically.')}</p></div></div>}
+          <button type="button" className="turn-thinking-collapse" onClick={() => setThinkingOpen(false)}><ChevronDown aria-hidden="true" />{tr('Show less')}</button>
+        </div>}
+      </section>}
+      {status === 'completed' && response && <section className="turn-final-section">
+        <div className="turn-response"><div className="turn-response-label"><CheckCircle2 /> {tr('Final response')}</div><div className="turn-response-content"><RichText content={response.text} /></div></div>
+        {fileChanges.length > 0 && <TurnFileChanges changes={fileChanges} onOpen={(activity) => setChangeTarget(activity)} />}
+      </section>}
     </article>
     {stopTarget && taskId && <StopActivityDialog taskId={taskId} activity={stopTarget} onClose={() => setStopTarget(null)} />}
     {changeTarget && <ActivityDiffModal activity={changeTarget} close={() => setChangeTarget(null)} />}
@@ -191,7 +207,11 @@ function TurnProcess({ blocks, taskId, onStop }: { blocks: ReturnType<typeof bui
 }
 
 function ProgressMessage({ event }: { event: TimelineEvent }) {
-  return <div className="turn-progress-message"><MessageSquareText aria-hidden="true" /><p>{eventText(event)}</p><time dateTime={event.occurredAt}>{formatClockTime(event.occurredAt)}</time></div>;
+  return <div className="turn-progress-message"><MessageSquareText aria-hidden="true" /><div className="turn-progress-content turn-response-content"><RichText content={eventText(event)} /></div><time dateTime={event.occurredAt}>{formatClockTime(event.occurredAt)}</time></div>;
+}
+
+function RichText({ content }: { content: string }) {
+  return <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]} components={{ a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer noopener" /> }}>{content}</ReactMarkdown>;
 }
 
 function ActivityRow({ activity, taskId, onStop }: { activity: ToolActivity; taskId: string; onStop: (activity: ToolActivity) => void }) {
