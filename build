@@ -1,3 +1,2 @@
 ﻿powershell -ExecutionPolicy Bypass -File scripts\build-windows.ps1
-
-
+bash scripts/build-macos.sh
