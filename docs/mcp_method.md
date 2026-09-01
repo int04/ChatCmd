@@ -134,8 +134,8 @@ Các Git method được thiết kế để tránh shell interpolation và truy�
 
 | Method | Tham số chính | Ý nghĩa |
 |---|---|---|
-| `agent_user_message` | `content` | **Bắt buộc là MCP call đầu tiên của mỗi user turn.** Đồng bộ nguyên văn user message lên ChatCMD và thiết lập/correlate `taskId` + `turnId`. `content` phải đúng nguyên văn message hiện tại. |
-| `agent_progress` | `message`, `suggestedTitle?` | **Bắt buộc với mọi turn project không-trivial.** Mỗi user-visible commentary/progress/update milestone trước final answer phải được mirror sang MCP bằng `agent_progress` trước khi hiển thị cho user. Không mirror private chain-of-thought/hidden reasoning. Không gọi sau `agent_turn_complete`. |
+| `agent_user_message` | `content` | **Bắt buộc là MCP call đầu tiên và chỉ gọi đúng một lần trong mỗi user turn.** Đồng bộ nguyên văn user message lên ChatCMD và thiết lập/correlate `taskId` + `turnId`. `content` phải đúng nguyên văn message hiện tại. Không dùng method này cho progress/reflection/finding sau tool result; các cập nhật đó phải dùng `agent_progress`. |
+| `agent_progress` | `message`, `suggestedTitle?` | **Bắt buộc với mọi turn project không-trivial.** Ngoài việc mirror mọi user-visible commentary/progress/update milestone trước final answer, agent phải phát progress ngay sau khi đọc/inspect xong nội dung quan trọng, sau khi sửa/tạo file thành công, và sau build/test/lint/search/Git/command/deploy có kết quả đáng báo cáo. Nội dung chỉ tóm tắt kết quả quan sát được, điều vừa hiểu hoặc tác động của thay đổi; không gửi private chain-of-thought/hidden reasoning và không spam các call cơ học/no-op. Không gọi sau `agent_turn_complete`. |
 | `agent_subagent_start` | `name`, `request` | Tạo và dispatch một child agent khi ChatGPT chủ động chia việc hoặc người dùng yêu cầu chia agent. Chỉ sử dụng model sampling do ChatGPT/MCP host cung cấp; nếu host không hỗ trợ sampling thì trả `samplingUnavailable`/`failed` và tuyệt đối không khởi chạy Codex hay executor local. |
 | `agent_subagent_wait` | `timeoutMs?` | Chờ các child agent của parent turn. Nếu `allFinished=false` thì tiếp tục gọi lại trước khi finalize. |
 | `agent_turn_complete` | `content`, `suggestedTitle?` | **Bắt buộc là MCP call cuối cùng.** Xác nhận turn đã hoàn tất và gửi đúng nội dung cuối cùng agent sẽ trả cho user. Chỉ được gọi đúng một lần sau khi mọi tool/sub-agent đã xong. |
@@ -207,10 +207,11 @@ agent_user_message
   -> agent_progress              (bắt buộc trước substantive project work)
   -> workspace_roots / fs_find
   -> fs_read_text / fs_search
-  -> agent_progress              (mirror finding/phase update nếu có commentary cho user)
+  -> agent_progress              (báo ngay điều vừa hiểu/phát hiện sau inspect quan trọng)
   -> fs_replace_text / fs_write_text
+  -> agent_progress              (báo ngay file vừa đổi gì và tác động chính)
   -> git_diff / git_status       (nếu cần kiểm tra thay đổi)
-  -> agent_progress              (mirror milestone tiếp theo nếu có)
+  -> agent_progress              (báo kết quả verify/Git đáng chú ý)
   -> agent_turn_complete
 ```
 

@@ -681,12 +681,12 @@ tool_methods!(
     (
         agent_user_message,
         UserMessageArgs,
-        "MANDATORY FIRST TOOL: call exactly once at the start of every user turn. Required field: content containing the exact current user message. Reuse the same turnId for all calls in that turn."
+        "MANDATORY FIRST TOOL: call exactly once at the start of every user turn. Required field: content containing the exact current user message. Reuse the same turnId for all calls in that turn. Never use agent_user_message for progress, reflections, findings, or commentary after tool results; use agent_progress for those updates."
     ),
     (
         agent_progress,
         ProgressArgs,
-        "Publish one concise progress milestone. Required field: message; optional suggestedTitle. Do not call after agent_turn_complete."
+        "Publish one concise progress milestone. Required field: message; optional suggestedTitle. For non-trivial project work, call after meaningful file/code inspection, after successful file edits/creates, and after build/test/lint/search/Git/command/deploy results that materially help the user; summarize observable findings or effects, never private chain-of-thought. Do not spam tiny mechanical/no-op calls. Do not call after agent_turn_complete."
     ),
     (
         agent_subagent_wait,
