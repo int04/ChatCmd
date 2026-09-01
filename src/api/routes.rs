@@ -13,8 +13,8 @@ use crate::websocket::AppState;
 
 use super::{
     Problem, agents::*, auth, backend, chatgpt::*, chatgpt_completion::*, crypto, data::*,
-    folders::*, overview::*, sessions::*, settings::*, skills::*, task_controls::*, task_delete::*,
-    task_views::*, tunnels::*, updates::*, workspaces::*,
+    folders::*, overview::*, payment::*, sessions::*, settings::*, skills::*, task_controls::*,
+    task_delete::*, task_views::*, tunnels::*, updates::*, workspaces::*,
 };
 
 pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
@@ -107,6 +107,7 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/skills/{id}/options", patch(set_skill_options))
         .route("/skills/{id}/icon", get(skill_icon))
         .route("/settings", get(settings).put(save_settings))
+        .route("/payment/create", post(create_payment))
         .route("/diagnostics/database", get(database_diagnostics))
         .route("/diagnostics/logs", get(diagnostic_logs))
         .route(

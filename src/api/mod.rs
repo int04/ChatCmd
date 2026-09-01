@@ -10,6 +10,7 @@ mod crypto;
 mod data;
 mod folders;
 mod overview;
+mod payment;
 mod routes;
 mod sessions;
 mod settings;

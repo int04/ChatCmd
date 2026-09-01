@@ -214,13 +214,14 @@ async fn multiple_absolute_paths_do_not_bind_an_ambiguous_project_folder() {
 }
 
 #[tokio::test]
-async fn chatgpt_bridge_reuses_existing_task_when_dom_inserts_nbsp() {
+async fn chatgpt_bridge_reuses_existing_task_when_chatgpt_reformats_the_prompt() {
     let (host, agent_id, _directory) = test_host().await;
     let task_id = "task-chatgpt-bridge-existing";
     let request_id = "chatgpt-request-existing";
-    let submitted = "Sử dụng plugin @User message sync test\n\nThư mục dự án: D:\\DEV\\CmdGPT\\ChatCmdClient\n\nđể thực hiện yêu cầu sau: Kiểm tra D:\\DEV\\ChatCMD\\ChatCMD (ChatCMD.Tunnel) \n\nVí dụ abcd ";
+    let submitted = "Sử dụng plugin @test_rust\n\nThư mục dự án: D:\\DEV\\CmdGPT\\ChatCmdClient\n\nđể thực hiện yêu cầu sau: Kiểm tra http://localhost:8080/api/local/payment/create \n\nVí dụ abcd ";
     let message_from_chatgpt = submitted
-        .replacen("(ChatCMD.Tunnel) ", "(ChatCMD.Tunnel)\u{00a0}", 1)
+        .replacen("@test_rust", "@test\\_rust", 1)
+        .replacen("http://localhost:8080/api/local/payment/create", "[http://localhost:8080/api/local/payment/create](http://localhost:8080/api/local/payment/create)", 1)
         .replacen("Ví dụ abcd ", "Ví dụ abcd\u{00a0}", 1);
     let now = now_ms();
 

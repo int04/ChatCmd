@@ -19,6 +19,18 @@ export interface GiftCodeRedeemResult {
 }
 
 export interface BillingBalance { vnd: number }
+export interface PaymentCreateResult {
+  success: true;
+  data: {
+    publicId: string;
+    payUrl: string;
+    qrUrl: string | null;
+    accountName: string;
+    accountNumber: string;
+    amount: number;
+    content: string;
+  };
+}
 export interface DatabaseDiagnostics { path: string; tableCount: number; totalRows: number; fileSizeBytes: number; pageCount: number; pageSizeBytes: number; freePageCount: number; usedSizeBytes: number; tables: Array<{ name: string; rowCount: number }> }
 export interface DiagnosticLogs { path: string; lineCount: number; lines: string[] }
 export interface ServicePlan { id: number; name: string; price: number; type: number; days: number }
@@ -90,6 +102,7 @@ export const api = {
   register: (email: string, password: string) => request<AuthResult>('/api/local/auth/register', { method: 'POST', body: json({ email, password }) }),
   authInfo: () => request<AuthInfo>('/api/local/auth/info'),
   billingBalance: () => request<BillingBalance>(backendPath('billing/balance')),
+  createPayment: (amount: number, content: string) => request<PaymentCreateResult>('/api/local/payment/create', { method: 'POST', body: json({ amount, content }) }),
   servicePlans: () => request<ServicePlan[]>(backendPath('plans')),
   checkDeal: (code: string, planId: number) => request<DealCheckResult>(backendPath('deals/check'), { method: 'POST', body: json({ code, planId }) }),
   purchasePlan: (planId: number, dealCode: string | null) => request<PlanPurchaseResult>(backendPath('plans/purchase'), { method: 'POST', body: json({ planId, dealCode }) }),
