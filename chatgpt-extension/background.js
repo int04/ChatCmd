@@ -1,5 +1,6 @@
 const REQUEST_PREFIX = 'chatcmd-request:';
 const CONVERSATION_PREFIX = 'chatcmd-conversation:';
+const CONVERSATION_ALIAS_PREFIX = 'chatcmd-conversation-alias:';
 const RETURN_TAB_PREFIX = 'chatcmd-return-tab:';
 const PREPARED_TAB_PREFIX = 'chatcmd-prepared-tab:';
 const LOG_KEY = 'chatcmd-extension-logs';
@@ -103,7 +104,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
 async function startRequest(message) {
   if (!message.requestId || !message.submittedContent) throw new Error('Yêu cầu gửi ChatGPT không hợp lệ.');
-  const target = conversationTarget(message.conversationUrl);
+  const target = await conversationTarget(message.conversationUrl);
   const tab = message.conversationUrl
     ? await acquireConversationTab(target)
     : await acquireNewConversationTab(message.sourceTabId);
@@ -152,24 +153,33 @@ async function handleProgress(message, tabId) {
   const context = await requestContext(message.requestId);
   if (!context) throw new Error('Không tìm thấy ChatCMD request context.');
   if (tabId && context.tabId !== tabId) throw new Error('ChatGPT progress đến từ tab không khớp.');
+  const identity = await preferredConversationIdentity(context.tabId, message.conversationId, message.conversationUrl);
   if (message.stage === 'started') {
-    if (message.conversationId && context.tabId) await bindConversationTab(message.conversationId, context.tabId);
+    if (identity.conversationId && context.tabId) {
+      await bindConversationTab(identity.conversationId, context.tabId, {
+        requestId: message.requestId,
+        localBaseUrl: context.localBaseUrl,
+      });
+    }
     await postJson(context.localBaseUrl, `/api/local/chatgpt/bridge/${encodeURIComponent(message.requestId)}/started`, {
-      conversationId: message.conversationId,
-      conversationUrl: message.conversationUrl,
+      conversationId: identity.conversationId,
+      conversationUrl: identity.conversationUrl,
       model: message.model,
       userText: message.userText,
     });
     return;
   }
   if (message.stage === 'result') {
-    if (message.conversationId && context.tabId) {
-      await bindConversationTab(message.conversationId, context.tabId);
+    if (identity.conversationId && context.tabId) {
+      await bindConversationTab(identity.conversationId, context.tabId, {
+        requestId: message.requestId,
+        localBaseUrl: context.localBaseUrl,
+      });
     }
     await postJson(context.localBaseUrl, `/api/local/chatgpt/bridge/${encodeURIComponent(message.requestId)}/result`, {
       status: message.status,
-      conversationId: message.conversationId,
-      conversationUrl: message.conversationUrl,
+      conversationId: identity.conversationId,
+      conversationUrl: identity.conversationUrl,
       assistantContent: message.assistantContent,
       errorMessage: message.errorMessage,
     });
@@ -249,10 +259,52 @@ async function migrateTabBindings(removedTabId, addedTabId) {
   await logExtension('info', 'background', `Chrome thay tab ${removedTabId} bằng ${addedTabId}; đã chuyển binding ChatCMD sang tab mới.`);
 }
 
+async function preferredConversationIdentity(tabId, conversationId, conversationUrl) {
+  const tab = tabId ? await safeTab(tabId) : null;
+  const liveId = conversationIdFromUrl(tab?.url || '');
+  if (liveId && !isProvisionalConversationId(liveId)) {
+    return { conversationId: liveId, conversationUrl: tab.url };
+  }
+  return { conversationId, conversationUrl };
+}
+
 async function refreshConversationAliases(tabId, tabUrl) {
   const liveId = conversationIdFromUrl(tabUrl || '');
   if (!tabId || !liveId) return;
-  await bindConversationTab(liveId, tabId);
+  if (isProvisionalConversationId(liveId)) {
+    await bindConversationTab(liveId, tabId);
+    return;
+  }
+
+  const bindings = await conversationBindings();
+  let metadata = {};
+  const provisionalKeys = [];
+  for (const [key, binding] of Object.entries(bindings)) {
+    if (!binding || binding.tabId !== tabId) continue;
+    const boundId = key.slice(CONVERSATION_PREFIX.length);
+    if (!isProvisionalConversationId(boundId)) continue;
+    metadata = { ...metadata, ...binding };
+    provisionalKeys.push(key);
+    await chrome.storage.local.set({
+      [`${CONVERSATION_ALIAS_PREFIX}${boundId}`]: {
+        conversationId: liveId,
+        conversationUrl: tabUrl,
+      },
+    });
+    if (binding.requestId && binding.localBaseUrl) {
+      try {
+        await postJson(binding.localBaseUrl, `/api/local/chatgpt/bridge/${encodeURIComponent(binding.requestId)}/identity`, {
+          conversationId: liveId,
+          conversationUrl: tabUrl,
+        });
+        await logExtension('info', 'background', `Đã nâng conversation ${boundId} thành ID thật ${liveId}.`);
+      } catch (error) {
+        await logExtension('warn', 'background', `Chưa đồng bộ được ChatGPT conversation ID thật ${liveId}: ${errorMessage(error)}`);
+      }
+    }
+  }
+  await bindConversationTab(liveId, tabId, metadata);
+  if (provisionalKeys.length) await chrome.storage.session.remove(provisionalKeys);
 }
 
 async function chatGptTabStatus(conversationUrl, sourceTabId) {
@@ -261,7 +313,7 @@ async function chatGptTabStatus(conversationUrl, sourceTabId) {
     const tab = prepared || await findAvailableNewConversationTab();
     return { chatGptTabOpen: Boolean(tab?.id), tabId: tab?.id, tabUrl: tab?.url };
   }
-  const target = conversationTarget(conversationUrl);
+  const target = await conversationTarget(conversationUrl);
   const tab = await findConversationTab(target);
   if (!tab?.id) {
     return { chatGptTabOpen: false, conversationTabOpen: false, conversationReady: false };
@@ -329,7 +381,7 @@ async function acquireNewConversationTab(sourceTabId) {
 }
 
 async function openConversationTab(conversationUrl, sourceTabId) {
-  const target = conversationTarget(conversationUrl);
+  const target = await conversationTarget(conversationUrl);
   const existing = await findConversationTab(target);
   if (existing?.id) {
     await bindReturnSource(existing.id, sourceTabId);
@@ -345,7 +397,7 @@ async function openConversationTab(conversationUrl, sourceTabId) {
 }
 
 async function focusConversationTab(conversationUrl, sourceTabId) {
-  const target = conversationTarget(conversationUrl);
+  const target = await conversationTarget(conversationUrl);
   const tab = await findConversationTab(target);
   if (!tab?.id) throw new Error('Tab ChatGPT của cuộc trò chuyện này không còn mở.');
   await bindReturnSource(tab.id, sourceTabId);
@@ -354,7 +406,7 @@ async function focusConversationTab(conversationUrl, sourceTabId) {
 }
 
 async function closeConversationTab(conversationUrl) {
-  const target = conversationTarget(conversationUrl);
+  const target = await conversationTarget(conversationUrl);
   const tab = await findConversationTab(target);
   if (!tab?.id) throw new Error('Tab ChatGPT của cuộc trò chuyện này không còn mở.');
   await chrome.tabs.remove(tab.id);
@@ -389,10 +441,7 @@ async function findConversationTab(target) {
     const tab = await safeTab(bound.tabId);
     if (tab && sameConversationUrl(tab.url, target)) return tab;
     if (tab && isChatGptUrl(tab.url) && isProvisionalConversationId(conversationId)) {
-      const liveId = conversationIdFromUrl(tab.url);
-      if (liveId && !isProvisionalConversationId(liveId)) {
-        await bindConversationTab(liveId, tab.id);
-      }
+      await refreshConversationAliases(tab.id, tab.url);
       return tab;
     }
     if (tab?.status === 'loading' && isChatGptUrl(tab.url)) return tab;
@@ -403,9 +452,14 @@ async function findConversationTab(target) {
   return discovered || null;
 }
 
-async function bindConversationTab(conversationId, tabId) {
+async function bindConversationTab(conversationId, tabId, metadata = {}) {
   if (!conversationId || !tabId) return;
-  await chrome.storage.session.set({ [conversationKey(conversationId)]: { tabId } });
+  const key = conversationKey(conversationId);
+  const stored = await chrome.storage.session.get(key);
+  const existing = stored[key] && typeof stored[key] === 'object' ? stored[key] : {};
+  await chrome.storage.session.set({
+    [key]: { ...existing, ...metadata, tabId },
+  });
 }
 
 async function bindReturnSource(chatGptTabId, sourceTabId) {
@@ -578,10 +632,18 @@ function conversationKey(conversationId) { return `${CONVERSATION_PREFIX}${conve
 function delay(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 function errorMessage(error) { return error instanceof Error ? error.message : String(error || 'Lỗi ChatGPT bridge.'); }
 
-function conversationTarget(value) {
+async function conversationTarget(value) {
   if (!value) return CHATGPT_HOME;
   const url = new URL(value);
   if (url.origin !== 'https://chatgpt.com') throw new Error('Conversation URL không thuộc chatgpt.com.');
+  const conversationId = conversationIdFromUrl(url.href);
+  if (conversationId && isProvisionalConversationId(conversationId)) {
+    const key = `${CONVERSATION_ALIAS_PREFIX}${conversationId}`;
+    const stored = await chrome.storage.local.get(key);
+    const aliasUrl = stored[key]?.conversationUrl;
+    const aliasId = conversationIdFromUrl(aliasUrl || '');
+    if (aliasId && !isProvisionalConversationId(aliasId)) return aliasUrl;
+  }
   return url.href;
 }
 

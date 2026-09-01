@@ -41,6 +41,13 @@ pub(super) struct BridgeStarted {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub(super) struct BridgeIdentity {
+    conversation_id: String,
+    conversation_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(super) struct BridgeResult {
     status: String,
     conversation_id: Option<String>,
@@ -252,6 +259,48 @@ pub(super) async fn bridge_started(
     request_json(&state, request_id.trim()).await
 }
 
+pub(super) async fn bridge_identity(
+    State(state): State<Arc<AppState>>,
+    Path(request_id): Path<String>,
+    Json(input): Json<BridgeIdentity>,
+) -> Result<Json<Value>, Problem> {
+    validate_conversation(&input.conversation_id, &input.conversation_url)?;
+    if is_provisional_conversation_id(&input.conversation_id) {
+        return Err(Problem::new(
+            StatusCode::BAD_REQUEST,
+            "Provisional ChatGPT conversation",
+            "A provisional WEB conversation ID cannot replace the durable ChatGPT conversation ID.",
+        ));
+    }
+    let request_id = request_id.trim();
+    let row = bridge_request_row(&state, request_id).await?;
+    let task_id = row
+        .get::<Option<String>, _>("task_id")
+        .ok_or_else(|| Problem::new(
+            StatusCode::CONFLICT,
+            "ChatGPT conversation not bound",
+            "The ChatGPT bridge request must be bound to a task before its durable identity can be updated.",
+        ))?;
+    let now = now_ms();
+    sqlx::query("UPDATE chatgpt_bridge_requests SET conversation_id=?,conversation_url=?,updated_at_ms=? WHERE id=?")
+        .bind(input.conversation_id.trim())
+        .bind(input.conversation_url.trim())
+        .bind(now)
+        .bind(request_id)
+        .execute(state.repository.pool())
+        .await
+        .map_err(db_problem)?;
+    sqlx::query("UPDATE chatgpt_conversations SET conversation_id=?,conversation_url=?,updated_at_ms=? WHERE task_id=?")
+        .bind(input.conversation_id.trim())
+        .bind(input.conversation_url.trim())
+        .bind(now)
+        .bind(&task_id)
+        .execute(state.repository.pool())
+        .await
+        .map_err(db_problem)?;
+    request_json(&state, request_id).await
+}
+
 pub(super) async fn bridge_result(
     State(state): State<Arc<AppState>>,
     Path(request_id): Path<String>,
@@ -294,12 +343,19 @@ pub(super) async fn bridge_result(
     let submitted = row.get::<String, _>("submitted_content");
     let user_content = row.get::<String, _>("user_content");
     let created_at_ms = row.get::<i64, _>("created_at_ms");
+    let (result_conversation_id, result_conversation_url) = match (
+        input.conversation_id.as_deref(),
+        input.conversation_url.as_deref(),
+    ) {
+        (Some(id), Some(url)) if !is_provisional_conversation_id(id) => (Some(id), Some(url)),
+        _ => (None, None),
+    };
     let mcp_authoritative =
         has_mcp_turn_for_request(&state, &task_id, &submitted, created_at_ms).await?;
     sqlx::query("UPDATE chatgpt_bridge_requests SET status=?,conversation_id=COALESCE(?,conversation_id),conversation_url=COALESCE(?,conversation_url),assistant_content=?,error_message=?,updated_at_ms=?,completed_at_ms=? WHERE id=?")
         .bind(&input.status)
-        .bind(input.conversation_id.as_deref())
-        .bind(input.conversation_url.as_deref())
+        .bind(result_conversation_id)
+        .bind(result_conversation_url)
         .bind(if assistant.is_empty() { None::<&str> } else { Some(assistant) })
         .bind(if error.is_empty() { None::<&str> } else { Some(error) })
         .bind(now)
@@ -323,8 +379,8 @@ pub(super) async fn bridge_result(
             .map_err(db_problem)?;
     }
     sqlx::query("UPDATE chatgpt_conversations SET active_request_id=NULL,conversation_id=COALESCE(?,conversation_id),conversation_url=COALESCE(?,conversation_url),updated_at_ms=? WHERE task_id=? AND active_request_id=?")
-        .bind(input.conversation_id.as_deref())
-        .bind(input.conversation_url.as_deref())
+        .bind(result_conversation_id)
+        .bind(result_conversation_url)
         .bind(now)
         .bind(&task_id)
         .bind(request_id.trim())

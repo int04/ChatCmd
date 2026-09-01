@@ -62,6 +62,10 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/chatgpt/tasks/{task_id}/messages", post(continue_message))
         .route("/chatgpt/tasks/{task_id}/stop", post(stop_message))
         .route("/chatgpt/bridge/{request_id}/started", post(bridge_started))
+        .route(
+            "/chatgpt/bridge/{request_id}/identity",
+            post(bridge_identity),
+        )
         .route("/chatgpt/bridge/{request_id}/result", post(bridge_result))
         .route("/tasks", get(tasks))
         .route(

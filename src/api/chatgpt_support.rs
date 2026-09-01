@@ -279,6 +279,10 @@ pub(super) fn validate_conversation(id: &str, url: &str) -> Result<(), Problem> 
     Ok(())
 }
 
+pub(super) fn is_provisional_conversation_id(id: &str) -> bool {
+    id.trim().to_ascii_uppercase().starts_with("WEB:")
+}
+
 pub(super) fn normalize_model(value: Option<&str>) -> String {
     value
         .map(str::trim)
@@ -307,7 +311,16 @@ pub(super) fn wrapped_message(
 
 #[cfg(test)]
 mod tests {
-    use super::wrapped_message;
+    use super::{is_provisional_conversation_id, wrapped_message};
+
+    #[test]
+    fn detects_provisional_web_conversation_ids() {
+        assert!(is_provisional_conversation_id("WEB:abc"));
+        assert!(is_provisional_conversation_id(" web:abc "));
+        assert!(!is_provisional_conversation_id(
+            "6a961d4f-a928-83ec-a645-298e743e207f"
+        ));
+    }
 
     #[test]
     fn wrapped_message_omits_empty_project_folder() {
