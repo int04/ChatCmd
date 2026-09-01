@@ -23,7 +23,7 @@ Luồng agent bắt buộc:
 1. `agent_user_message` phải là tool đầu tiên và chỉ gọi đúng một lần cho user turn thật.
 2. Với mọi yêu cầu không-trivial, gọi `agent_progress` ngay sau đó để tóm tắt user yêu cầu gì và agent sẽ làm gì tiếp theo, trước `skills_list` hoặc tool substantive khác.
 3. Với công việc project không tầm thường, gọi `skills_list`; nếu có skill phù hợp thì đọc bằng `skill_read` trước khi thao tác liên quan.
-4. Trong lúc thực hiện, duy trì `agent_progress` xuyên suốt: tối đa 2 substantive call không có progress; shell pending và lỗi/retry có rule bắt buộc riêng.
+4. Trong lúc thực hiện, duy trì `agent_progress` theo checkpoint có ý nghĩa: thường sau khoảng 2–4 substantive operation hoặc sau một batch thao tác low-level liên quan chặt. Không cần callback theo từng tool; shell polling nhanh có thể gom cho đến khi trạng thái/output thay đổi đáng kể, còn lỗi/retry nên báo hướng xử lý trước khi đổi cách làm.
 5. Nếu có sub-agent thì phải chờ chúng hoàn tất bằng `agent_subagent_wait`.
 6. `agent_turn_complete` phải là tool cuối cùng, gọi đúng một lần ngay trước khi agent trả lời user.
 
@@ -136,10 +136,12 @@ Các Git method được thiết kế để tránh shell interpolation và truy�
 | Method | Tham số chính | Ý nghĩa |
 |---|---|---|
 | `agent_user_message` | `content` | **Bắt buộc là MCP call đầu tiên và chỉ gọi đúng một lần trong mỗi user turn.** Đồng bộ nguyên văn user message lên ChatCMD và thiết lập/correlate `taskId` + `turnId`. `content` phải đúng nguyên văn message hiện tại. Không dùng method này cho progress/reflection/finding sau tool result; các cập nhật đó phải dùng `agent_progress`. |
-| `agent_progress` | `message`, `suggestedTitle?` | **Bắt buộc với mọi turn project không-trivial và phải duy trì xuyên suốt turn.** Ngay sau `agent_user_message`, trước `skills_list` hoặc tool substantive khác, phải gửi một progress tóm tắt yêu cầu user + hành động kế tiếp. Sau đó không được có quá 2 substantive tool call liên tiếp mà không có progress. Bắt buộc báo sau inspect/read quan trọng, sau sửa/tạo file, sau mọi `shell_wait` còn `completed=false`/timeout hoặc `shell_read` chưa có kết luận trước khi poll tiếp, và sau mọi lỗi/non-zero/rejection trước khi retry/fallback; message lỗi phải nêu lỗi quan sát được và hướng recovery/alternative tiếp theo. Không gửi private chain-of-thought/hidden reasoning. Không gọi sau `agent_turn_complete`. |
+| `agent_progress` | `message`, `suggestedTitle?` | **Rule phía AI cho mọi turn project không-trivial.** Ngay sau `agent_user_message` nên gửi progress tóm tắt yêu cầu + hành động kế tiếp. Sau các kết quả `fs_*` có ý nghĩa (đặc biệt `fs_find`, `fs_search`, `fs_read_text`, edit/write/delete), Git/process, `shell_read`/`shell_wait` còn pending, sub-agent wait chưa xong, hoặc failure/non-zero, AI nên gửi progress mô tả kết quả quan sát được và bước tiếp theo trước khi tiếp tục. Đây không phải runtime gate: server không reject tool chỉ vì thiếu progress; các thao tác low-level liên quan chặt có thể gom thành một checkpoint để tránh làm chậm tiến độ và tránh callback MCP không cần thiết. Không gửi private chain-of-thought. |
 | `agent_subagent_start` | `name`, `request` | Tạo và dispatch một child agent khi ChatGPT chủ động chia việc hoặc người dùng yêu cầu chia agent. Chỉ sử dụng model sampling do ChatGPT/MCP host cung cấp; nếu host không hỗ trợ sampling thì trả `samplingUnavailable`/`failed` và tuyệt đối không khởi chạy Codex hay executor local. |
 | `agent_subagent_wait` | `timeoutMs?` | Chờ các child agent của parent turn. Nếu `allFinished=false` thì tiếp tục gọi lại trước khi finalize. |
 | `agent_turn_complete` | `content`, `suggestedTitle?` | **Bắt buộc là MCP call cuối cùng.** Xác nhận turn đã hoàn tất và gửi đúng nội dung cuối cùng agent sẽ trả cho user. Chỉ được gọi đúng một lần sau khi mọi tool/sub-agent đã xong. |
+
+Lưu ý: `fs_find`, `fs_search`, `fs_read_text`, các tool sửa file, shell, Git... **không tạo thêm `agent_user_message`**. `agent_user_message` chỉ đại diện cho message thật của user ở đầu turn. Sau kết quả của các tool này, message cập nhật gửi cho user phải đi qua `agent_progress`.
 
 ---
 
@@ -207,16 +209,16 @@ agent_user_message
   -> skills_list
   -> skill_read                  (nếu có skill phù hợp)
   -> workspace_roots / fs_find
-  -> fs_read_text / fs_search
-  -> agent_progress              (báo ngay điều vừa hiểu/phát hiện sau inspect quan trọng)
+  -> fs_read_text / fs_search    (có thể gom các read/search liên quan thành một batch)
+  -> agent_progress              (báo finding chính sau batch inspect/search)
   -> fs_replace_text / fs_write_text
-  -> agent_progress              (báo ngay file vừa đổi gì và tác động chính)
+  -> agent_progress              (báo file vừa đổi gì và tác động chính nếu đáng báo)
   -> git_diff / git_status       (nếu cần kiểm tra thay đổi)
   -> agent_progress              (báo kết quả verify/Git đáng chú ý)
   -> agent_turn_complete
 ```
 
-Trong toàn bộ flow, không để quá **2 substantive tool call liên tiếp** mà không có `agent_progress`.
+Cadence mặc định là khoảng **2–4 substantive operation hoặc hết một coherent batch**, không phải một progress cho mỗi tool call. Nếu có finding quan trọng, lỗi, hoặc chuyển phase thì có thể báo sớm hơn.
 
 Một turn có sub-agent:
 
@@ -240,12 +242,10 @@ agent_user_message
   -> agent_progress              (tóm tắt command/workflow sắp chạy)
   -> shell_create
   -> shell_write
-  -> shell_wait                  (nếu completed=false/timeout)
-  -> agent_progress              (báo command vẫn chạy + đang chờ gì)
-  -> shell_read                  (nếu vẫn chưa có kết luận/process còn chạy)
-  -> agent_progress              (báo output/stage hiện tại trước khi poll tiếp)
-  -> shell_wait / shell_read     (poll tiếp)
-  -> agent_progress              (kết quả cuối, hoặc lỗi + hướng recovery)
+  -> shell_wait / shell_read     (có thể poll ngắn liên tiếp)
+  -> agent_progress              (nếu vẫn chạy lâu: báo stage/output hiện tại + đang chờ gì)
+  -> shell_wait / shell_read     (tiếp tục poll; không lặp message nếu trạng thái chưa đổi)
+  -> agent_progress              (khi có thay đổi đáng kể, kết quả cuối, hoặc lỗi + hướng recovery)
   -> shell_close                 (nếu cần đóng session)
   -> agent_turn_complete
 ```

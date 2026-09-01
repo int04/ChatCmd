@@ -686,7 +686,7 @@ tool_methods!(
     (
         agent_progress,
         ProgressArgs,
-        "Publish one concise user-visible progress milestone. Required field: message; optional suggestedTitle. For non-trivial work, call once immediately after agent_user_message with a summary of the request and next action, then keep using it throughout the turn with no more than 2 substantive non-progress calls between updates. It is mandatory after meaningful file/code inspection, successful file edits/creates, every pending shell_wait/shell_read state before polling again, and every task-relevant error/non-zero result before retry or fallback. Error updates should summarize the failure and next recovery/alternative. Report observable findings and decisions only, never private chain-of-thought. Do not call after agent_turn_complete."
+        "Publish one concise user-visible progress milestone. Required field: message; optional suggestedTitle. For non-trivial work, call once immediately after agent_user_message with a summary of the request and next action, then keep using it throughout the turn. Strongly prefer updates after meaningful filesystem/search/read/edit results, Git/process results, pending shell work, incomplete sub-agent waits, and task-relevant failures/non-zero command results before retry or fallback. This is an AI-side execution rule, not a server-side gate: group tightly related low-level operations when useful so progress updates do not materially slow the task or add unnecessary MCP round trips. Error updates should summarize the observable failure and next recovery/alternative. Report observable findings and decisions only, never private chain-of-thought. Do not call after agent_turn_complete."
     ),
     (
         agent_subagent_wait,
