@@ -11,6 +11,7 @@ mod git_tests;
 mod identity;
 mod inputs;
 mod persistence;
+mod plan_prompt;
 mod subagents;
 mod turn_file_changes;
 mod user_message;
@@ -34,6 +35,9 @@ use tokio::sync::broadcast;
 
 use crate::websocket::AppEvent;
 pub(crate) use activity_control::{ActivityRegistry, StopActivityResult};
+pub(crate) use plan_prompt::{
+    PlanPromptRegistry, PlanPromptResolution, PlanPromptResolveError, PlanPromptView,
+};
 use turn_file_changes::TurnFileChangeTracker;
 
 #[derive(Clone)]
@@ -47,6 +51,7 @@ pub(crate) struct RuntimeHost {
     skills: SkillService,
     events: broadcast::Sender<AppEvent>,
     activities: ActivityRegistry,
+    plan_prompts: PlanPromptRegistry,
     file_changes: TurnFileChangeTracker,
 }
 
@@ -71,12 +76,17 @@ impl RuntimeHost {
             skills,
             events,
             activities: ActivityRegistry::default(),
+            plan_prompts: PlanPromptRegistry::default(),
             file_changes: TurnFileChangeTracker::default(),
         }
     }
 
     pub(crate) fn activity_registry(&self) -> ActivityRegistry {
         self.activities.clone()
+    }
+
+    pub(crate) fn plan_prompt_registry(&self) -> PlanPromptRegistry {
+        self.plan_prompts.clone()
     }
 
     pub(super) fn publish_event(

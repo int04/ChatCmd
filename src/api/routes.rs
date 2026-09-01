@@ -13,8 +13,9 @@ use crate::websocket::AppState;
 
 use super::{
     Problem, agents::*, auth, backend, chatgpt::*, chatgpt_completion::*, crypto, data::*,
-    folders::*, overview::*, payment::*, sessions::*, settings::*, skills::*, system::*,
-    task_controls::*, task_delete::*, task_views::*, tunnels::*, updates::*, workspaces::*,
+    folders::*, overview::*, payment::*, plan_questions::*, sessions::*, settings::*, skills::*,
+    system::*, task_controls::*, task_delete::*, task_views::*, tunnels::*, updates::*,
+    workspaces::*,
 };
 
 pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
@@ -77,6 +78,8 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
             "/tasks/approvals/pending",
             get(pending_conversation_approvals),
         )
+        .route("/plan/questions/pending", get(pending_plan_questions))
+        .route("/plan/questions/{id}/answer", post(answer_plan_question))
         .route("/tasks/{id}", get(task).delete(delete_task))
         .route("/tasks/{id}/activities/{activity_id}", get(task_activity))
         .route("/tasks/{id}/title", axum::routing::put(set_task_title))

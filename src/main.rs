@@ -196,6 +196,7 @@ async fn run_server(ready: Option<std::sync::mpsc::Sender<()>>) -> Result<()> {
         event_tx.clone(),
     ));
     let activity_registry = runtime.activity_registry();
+    let plan_prompt_registry = runtime.plan_prompt_registry();
     let _finalization_watchdog = runtime.start_finalization_watchdog();
     let security = HttpSecurity::new(
         Arc::new(DatabaseAuth(repository.clone())),
@@ -220,6 +221,7 @@ async fn run_server(ready: Option<std::sync::mpsc::Sender<()>>) -> Result<()> {
         shell,
         skills,
         activity_registry,
+        plan_prompt_registry,
         backend_api,
         event_tx,
     ));

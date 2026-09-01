@@ -11,6 +11,7 @@ mod data;
 mod folders;
 mod overview;
 mod payment;
+mod plan_questions;
 mod routes;
 mod sessions;
 mod settings;

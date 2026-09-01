@@ -1,6 +1,6 @@
 import { decodeEncryptedApiResponse, encryptedApiFetch } from './apiCrypto';
 import { tr } from './i18n';
-import type { Agent, AgentInput, AuthInfo, AuthResult, ChatGptBridge, ChatGptRequest, CommandExecutionMode, LiveTerminalOutput, LocalSettings, ManagedTunnelStatus, McpStatus, Overview, PluginLink, ProblemDetails, SecretResult, Session, SessionDetail, Skill, SkillInstallPreview, SkillInstallResult, SkillOptionValue, Task, TaskActivityDetail, TaskDetail, TaskPage, Tool, ToolPreset, Tunnel, TunnelTestResult, UserSkill, WorkspaceProject } from './types';
+import type { Agent, AgentInput, AuthInfo, AuthResult, ChatGptBridge, ChatGptRequest, CommandExecutionMode, LiveTerminalOutput, LocalSettings, ManagedTunnelStatus, McpStatus, Overview, PlanQuestion, PluginLink, ProblemDetails, SecretResult, Session, SessionDetail, Skill, SkillInstallPreview, SkillInstallResult, SkillOptionValue, Task, TaskActivityDetail, TaskDetail, TaskPage, Tool, ToolPreset, Tunnel, TunnelTestResult, UserSkill, WorkspaceProject } from './types';
 import type { UpdateStatus } from './updates/types';
 
 export class ApiError extends Error {
@@ -144,6 +144,8 @@ export const api = {
   stopChatGptMessage: (taskId: string) => request<ChatGptRequest>(`/api/local/chatgpt/tasks/${item(taskId)}/stop`, { method: 'POST', body: '{}' }),
   tasks: (cursor?: string, limit = 10, projectFolder?: string) => request<TaskPage>(`/api/local/tasks?limit=${limit}${cursor ? `&cursor=${item(cursor)}` : ''}${projectFolder ? `&projectFolder=${item(projectFolder)}` : ''}`),
   pendingConversationApprovals: () => request<Task[]>('/api/local/tasks/approvals/pending'),
+  pendingPlanQuestions: () => request<PlanQuestion[]>('/api/local/plan/questions/pending'),
+  answerPlanQuestion: (id: string, answer: { kind: 'option'; optionIndex: 1 | 2 } | { kind: 'custom'; text: string }) => request<{ accepted: boolean; questionId: string; taskId: string; turnId: string }>(`/api/local/plan/questions/${item(id)}/answer`, { method: 'POST', body: json(answer) }),
   task: (id: string, cursor?: string, limit = 2) => request<TaskDetail>(`/api/local/tasks/${item(id)}?limit=${limit}${cursor ? `&cursor=${item(cursor)}` : ''}`),
   taskActivity: (taskId: string, activityId: string) => request<TaskActivityDetail>(`/api/local/tasks/${item(taskId)}/activities/${item(activityId)}`),
   setTaskTitle: (id: string, title: string) => request<TaskDetail>(`/api/local/tasks/${item(id)}/title`, { method: 'PUT', body: json({ title }) }),

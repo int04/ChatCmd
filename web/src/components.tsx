@@ -14,14 +14,17 @@ export function ErrorState({ message, retry }: { message: string; retry?: () => 
 export function ProblemBanner({ message, clear }: { message?: string; clear?: () => void }) { return message ? <div className="problem-banner" role="alert"><AlertTriangle /><span>{message}</span>{clear && <button className="icon-button" aria-label={tr('Dismiss error')} onClick={clear}><X /></button>}</div> : null; }
 export function PageHeading({ eyebrow, title, body, actions }: { eyebrow: string; title: string; body?: string; actions?: React.ReactNode }) { return <header className="page-heading"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1>{body && <p>{body}</p>}</div>{actions && <div className="heading-actions">{actions}</div>}</header>; }
 export function Disclosure({ title, children }: { title: string; children: React.ReactNode }) { return <details className="disclosure"><summary>{title}<ChevronDown /></summary><div>{children}</div></details>; }
-export function Modal({ title, description, children, close, dangerous = false, className }: { title: string; description?: string; children: React.ReactNode; close: () => void; dangerous?: boolean; className?: string }) {
-  const titleId = useId(); const panel = useRef<HTMLDivElement>(null); const previous = useRef<HTMLElement | null>(null); const closeRef = useRef(close);
-  closeRef.current = close;
+export function Modal({ title, description, children, close, dangerous = false, dismissible = true, className }: { title: string; description?: string; children: React.ReactNode; close: () => void; dangerous?: boolean; dismissible?: boolean; className?: string }) {
+  const titleId = useId(); const panel = useRef<HTMLDivElement>(null); const previous = useRef<HTMLElement | null>(null); const closeRef = useRef(close); const dismissibleRef = useRef(dismissible);
+  useEffect(() => {
+    closeRef.current = close;
+    dismissibleRef.current = dismissible;
+  }, [close, dismissible]);
   useEffect(() => {
     previous.current = document.activeElement as HTMLElement;
     const root = panel.current; root?.querySelector<HTMLElement>('button,input,select,textarea')?.focus();
     const keydown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') closeRef.current();
+      if (event.key === 'Escape' && dismissibleRef.current) closeRef.current();
       if (event.key !== 'Tab' || !root) return;
       const items = [...root.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled),textarea:not(:disabled),[href]')];
       if (!items.length) return; const first = items[0]; const last = items.at(-1)!;
@@ -30,7 +33,7 @@ export function Modal({ title, description, children, close, dangerous = false, 
     };
     document.addEventListener('keydown', keydown); return () => { document.removeEventListener('keydown', keydown); previous.current?.focus(); };
   }, []);
-  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) close(); }}><div ref={panel} className={`modal ${dangerous ? 'dangerous' : ''} ${className ?? ''}`} role={dangerous ? 'alertdialog' : 'dialog'} aria-modal="true" aria-labelledby={titleId}><header><div><h2 id={titleId}>{title}</h2>{description && <p>{description}</p>}</div><button className="icon-button" aria-label={tr('Close dialog')} onClick={close}><X /></button></header>{children}</div></div>;
+  return <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (dismissible && event.target === event.currentTarget) close(); }}><div ref={panel} className={`modal ${dangerous ? 'dangerous' : ''} ${className ?? ''}`} role={dangerous ? 'alertdialog' : 'dialog'} aria-modal="true" aria-labelledby={titleId}><header><div><h2 id={titleId}>{title}</h2>{description && <p>{description}</p>}</div>{dismissible && <button className="icon-button" aria-label={tr('Close dialog')} onClick={close}><X /></button>}</header>{children}</div></div>;
 }
 export function formatTime(value?: string) { if (!value) return '—'; const date = new Date(value); return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat(appLocale(), { dateStyle: 'medium', timeStyle: 'short' }).format(date); }
 export function healthLabel(state: HealthState) { return state === 'unknown' ? tr('Not reported') : translatedStatus(state); }

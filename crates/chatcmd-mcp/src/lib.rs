@@ -215,6 +215,10 @@ tool_args!(ProgressArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     suggested_title: Option<String>
 });
+tool_args!(PlanQuestionArgs {
+    question: String,
+    options: [String; 2]
+});
 tool_args!(CompleteArgs {
     content: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -687,6 +691,11 @@ tool_methods!(
         agent_progress,
         ProgressArgs,
         "Publish one concise user-visible progress milestone. Required field: message; optional suggestedTitle. For non-trivial work, call once immediately after agent_user_message with a summary of the request and next action, then keep using it throughout the turn. Strongly prefer updates after meaningful filesystem/search/read/edit results, Git/process results, pending shell work, incomplete sub-agent waits, and task-relevant failures/non-zero command results before retry or fallback. This is an AI-side execution rule, not a server-side gate: group tightly related low-level operations when useful so progress updates do not materially slow the task or add unnecessary MCP round trips. If another ChatCMD schema needed for the work is not currently visible, do not treat the visible subset as the server capability boundary: use the host connector/resource discovery mechanism in the same turn (for ChatGPT, for example api_tool.list_resources with a focused query such as fs_ or shell_) and continue instead of reporting that the tool is not loaded. Error updates should summarize the observable failure and next recovery/alternative. Report observable findings and decisions only, never private chain-of-thought. Do not call after agent_turn_complete."
+    ),
+    (
+        agent_plan_question,
+        PlanQuestionArgs,
+        "PLAN MODE ONLY: ask one missing-information question and wait inside the current turn for up to 120 seconds. Required fields: question and options containing exactly two distinct choices. The UI also lets the user submit a custom answer. When the call returns an answer, immediately publish the returned agentProgressMessage with agent_progress before any further reasoning or tool call. If timedOut=true, choose one of the returned options yourself, publish the question plus chosen answer with agent_progress, then continue. Ask only information that materially changes the plan; do not ask questions whose answers are already known."
     ),
     (
         agent_subagent_wait,

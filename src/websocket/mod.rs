@@ -91,6 +91,7 @@ pub(crate) struct AppState {
     pub shell: chatcmd_runtime::ShellRuntime,
     pub skills: chatcmd_runtime::SkillService,
     pub activities: crate::runtime_host::ActivityRegistry,
+    pub plan_prompts: crate::runtime_host::PlanPromptRegistry,
     pub backend_api: crate::backend_api::BackendApiClient,
     pub tunnel: Arc<crate::tunnel_client::TunnelClientManager>,
     pub updater: Arc<crate::updater::UpdateManager>,
@@ -112,6 +113,7 @@ impl AppState {
         shell: chatcmd_runtime::ShellRuntime,
         skills: chatcmd_runtime::SkillService,
         activities: crate::runtime_host::ActivityRegistry,
+        plan_prompts: crate::runtime_host::PlanPromptRegistry,
         backend_api: crate::backend_api::BackendApiClient,
         events: broadcast::Sender<AppEvent>,
     ) -> Self {
@@ -130,6 +132,7 @@ impl AppState {
             shell,
             skills,
             activities,
+            plan_prompts,
             backend_api,
             tunnel,
             updater: crate::updater::UpdateManager::new(),

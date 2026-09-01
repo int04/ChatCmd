@@ -208,6 +208,7 @@ impl RuntimeHost {
             "accepted": true,
             "duplicate": inserted == 0,
             "userMessageSynced": true,
+            "planMode": is_plan_mode_request(content),
             "isFirstMessage": is_first_message,
             "suggestedTitleRequired": is_first_message,
             "provisionalTitle": is_first_message.then_some(provisional_title),
@@ -269,6 +270,17 @@ pub(super) fn compact_task_title(value: &str) -> String {
     } else {
         title
     }
+}
+
+fn is_plan_mode_request(content: &str) -> bool {
+    let normalized = content
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    normalized.contains("lên kế hoạch")
+        || normalized.contains("lập kế hoạch")
+        || normalized.contains("#plan")
 }
 
 fn required_task_id(context: &OperationContext) -> RuntimeResult<TaskId> {
@@ -377,5 +389,14 @@ mod tests {
             "sửa lỗi git diff"
         );
         assert!(compact_task_title(&"x".repeat(100)).chars().count() <= 78);
+    }
+
+    #[test]
+    fn plan_mode_detects_explicit_planning_triggers_only() {
+        assert!(is_plan_mode_request("Lên kế hoạch cho tôi mua quà"));
+        assert!(is_plan_mode_request("LẬP   KẾ HOẠCH\nwebsite bán hàng"));
+        assert!(is_plan_mode_request("Xây website giúp tôi #PLAN"));
+        assert!(!is_plan_mode_request("Cho tôi xem kế hoạch hiện tại"));
+        assert!(!is_plan_mode_request("Dùng planner để theo dõi công việc"));
     }
 }

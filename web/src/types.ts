@@ -15,6 +15,7 @@ export interface Overview {
 }
 export interface McpStatus { state: HealthState; endpoint?: string; connectedClients?: number; lastError?: string }
 export interface TimelineEvent { id: Id; type: string; occurredAt: string; taskId?: Id; sessionId?: Id; turnId?: Id; payload?: unknown }
+export interface PlanQuestion { id: Id; taskId: Id; turnId: Id; question: string; options: [string, string]; createdAtMs: number; deadlineAtMs: number }
 export interface Agent { id: Id; name: string; enabled: boolean; presetId?: Id; toolIds: Id[]; secretLast4?: string; updatedAtUtc?: string }
 export interface AgentInput { name: string; enabled: boolean; presetId?: Id; toolIds: Id[] }
 export interface SecretResult { agent?: Agent; endpoint: string }

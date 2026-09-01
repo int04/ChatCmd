@@ -79,6 +79,13 @@ pub(super) struct ProgressInput {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct PlanQuestionInput {
+    pub(super) question: String,
+    pub(super) options: [String; 2],
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct CompleteInput {
     pub(super) content: String,
     #[serde(default)]

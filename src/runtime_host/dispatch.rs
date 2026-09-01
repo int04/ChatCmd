@@ -30,6 +30,7 @@ impl RuntimeHost {
             tool,
             "agent_user_message"
                 | "agent_progress"
+                | "agent_plan_question"
                 | "agent_subagent_start"
                 | "agent_subagent_wait"
                 | "agent_turn_complete"
@@ -415,6 +416,11 @@ impl RuntimeHost {
                     input.suggested_title.as_deref(),
                 )
                 .await
+            }
+            "agent_plan_question" => {
+                let input: PlanQuestionInput = parse(arguments)?;
+                self.ask_plan_question(&context, input.question, input.options)
+                    .await
             }
             "agent_subagent_start" => {
                 let input: SubagentStartInput = parse(arguments)?;
