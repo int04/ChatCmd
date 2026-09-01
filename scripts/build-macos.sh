@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Public release example:
+#   MACOS_SIGN_IDENTITY="Developer ID Application: Nghia Duc (ZB8Y3RH44B)" \
+#   MACOS_NOTARY_PROFILE="CmdGPTNotary" \
+#   ./scripts/build-macos.sh
+
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
@@ -13,6 +18,7 @@ export CHATCMD_BUILD_VERSION="$VERSION"
 ICON_SOURCE="$ROOT/assets/icons/logo-icon-master-1024.png"
 ICONSET="$ROOT/target/chatcmd.iconset"
 EXTENSION_SOURCE="$ROOT/chatgpt-extension"
+DEFAULT_SIGN_IDENTITY="Developer ID Application: Nghia Duc (ZB8Y3RH44B)"
 
 TARGETS=(
   "aarch64-apple-darwin|silicon"
@@ -39,6 +45,37 @@ cd "$ROOT"
 if ! command -v rustup >/dev/null 2>&1; then
   echo "rustup is required to install both macOS Rust targets" >&2
   exit 1
+fi
+
+for command_name in codesign ditto security; do
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    echo "$command_name is required to package the macOS app" >&2
+    exit 1
+  fi
+done
+
+if [[ -n "${MACOS_SIGN_IDENTITY+x}" ]]; then
+  SIGN_IDENTITY="$MACOS_SIGN_IDENTITY"
+elif security find-identity -v -p codesigning 2>/dev/null | grep -Fq "$DEFAULT_SIGN_IDENTITY"; then
+  SIGN_IDENTITY="$DEFAULT_SIGN_IDENTITY"
+else
+  SIGN_IDENTITY="-"
+fi
+
+if [[ -z "$SIGN_IDENTITY" ]]; then
+  echo "MACOS_SIGN_IDENTITY cannot be empty" >&2
+  exit 1
+fi
+
+if [[ -n "${MACOS_NOTARY_PROFILE:-}" ]]; then
+  if [[ "$SIGN_IDENTITY" == "-" ]]; then
+    echo "MACOS_NOTARY_PROFILE requires a Developer ID signing identity" >&2
+    exit 1
+  fi
+  if ! command -v xcrun >/dev/null 2>&1; then
+    echo "xcrun is required for macOS notarization" >&2
+    exit 1
+  fi
 fi
 
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
@@ -103,10 +140,36 @@ package_target() {
 </plist>
 EOF
 
+  if [[ "$SIGN_IDENTITY" == "-" ]]; then
+    printf 'Applying ad-hoc signature to %s...\n' "$label"
+    codesign --force --sign - "$macos/ChatCMD"
+    codesign --force --sign - "$app"
+  else
+    printf 'Signing %s with Developer ID: %s\n' "$label" "$SIGN_IDENTITY"
+    codesign --force --options runtime --timestamp \
+      --sign "$SIGN_IDENTITY" \
+      "$macos/ChatCMD"
+    codesign --force --options runtime --timestamp \
+      --sign "$SIGN_IDENTITY" \
+      "$app"
+  fi
+  codesign --verify --deep --strict --verbose=2 "$app"
+
   rm -f "$archive"
-  cd "$ROOT/release"
-  zip -qry "$archive" "$(basename "$output")"
-  cd "$ROOT"
+  ditto -c -k --sequesterRsrc --keepParent "$output" "$archive"
+
+  if [[ -n "${MACOS_NOTARY_PROFILE:-}" ]]; then
+    printf 'Submitting %s for notarization...\n' "$label"
+    xcrun notarytool submit "$archive" \
+      --keychain-profile "$MACOS_NOTARY_PROFILE" \
+      --wait
+    xcrun stapler staple "$app"
+    xcrun stapler validate "$app"
+    codesign --verify --deep --strict --verbose=2 "$app"
+
+    rm -f "$archive"
+    ditto -c -k --sequesterRsrc --keepParent "$output" "$archive"
+  fi
 
   printf 'Build completed: %s\nArchive: %s\n' "$output" "$archive"
 }
@@ -118,3 +181,7 @@ done
 
 rm -rf "$ICONSET"
 printf '\nAll macOS builds completed.\n'
+
+if [[ "$SIGN_IDENTITY" == "-" ]]; then
+  printf 'WARNING: ad-hoc signing was used. Set MACOS_SIGN_IDENTITY for public releases.\n'
+fi

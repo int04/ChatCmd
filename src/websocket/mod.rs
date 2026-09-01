@@ -95,6 +95,7 @@ pub(crate) struct AppState {
     pub tunnel: Arc<crate::tunnel_client::TunnelClientManager>,
     pub updater: Arc<crate::updater::UpdateManager>,
     pub auth_refresh_lock: Mutex<()>,
+    pub auth_credential_cache: Mutex<AuthCredentialCache>,
     events: broadcast::Sender<AppEvent>,
     connected_clients: AtomicUsize,
     api_crypto_sessions: RwLock<HashMap<String, Arc<Aes256Gcm>>>,
@@ -133,6 +134,7 @@ impl AppState {
             tunnel,
             updater: crate::updater::UpdateManager::new(),
             auth_refresh_lock: Mutex::new(()),
+            auth_credential_cache: Mutex::new(AuthCredentialCache::Uninitialized),
             events,
             connected_clients: AtomicUsize::new(0),
             api_crypto_sessions: RwLock::new(HashMap::new()),
@@ -160,6 +162,12 @@ impl AppState {
     pub(crate) async fn api_crypto_session(&self, id: &str) -> Option<Arc<Aes256Gcm>> {
         self.api_crypto_sessions.read().await.get(id).cloned()
     }
+}
+
+pub(crate) enum AuthCredentialCache {
+    Uninitialized,
+    Ready(Option<String>),
+    Unavailable,
 }
 
 #[derive(Debug, Deserialize)]

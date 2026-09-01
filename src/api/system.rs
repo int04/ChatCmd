@@ -1,3 +1,4 @@
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 use std::{
     path::Path,
     process::{Command, Stdio},
@@ -90,8 +91,7 @@ fn is_elevated() -> bool {
         .output()
         .ok()
         .filter(|output| output.status.success())
-        .map(|output| String::from_utf8_lossy(&output.stdout).trim() == "0")
-        .unwrap_or(false)
+        .is_some_and(|output| String::from_utf8_lossy(&output.stdout).trim() == "0")
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
@@ -152,8 +152,12 @@ fn spawn_elevated_copy() -> Result<(), String> {
         }
     }
 
+    // Keep every standard stream detached from osascript. Otherwise the
+    // privileged shell can tear down its background child when it exits.
+    // Checking the PID also prevents the current app from exiting when exec
+    // failed before the replacement process reached its startup delay.
     let shell_command = format!(
-        "{}cd {}; nohup {} --elevated-restart-delay-ms 900 >/dev/null 2>&1 &",
+        "{}cd {}; /usr/bin/nohup {} --elevated-restart-delay-ms 1500 </dev/null >/dev/null 2>&1 & elevated_pid=$!; /bin/sleep 0.2; /bin/kill -0 \"$elevated_pid\"",
         environment_exports,
         sh_quote_path(&working_directory),
         sh_quote_path(&executable),

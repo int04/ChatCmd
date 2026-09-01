@@ -13,7 +13,20 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::Problem;
-use crate::{backend_api::BackendApiResponse, websocket::AppState};
+use crate::{
+    backend_api::BackendApiResponse,
+    websocket::{AppState, AuthCredentialCache},
+};
+
+// macOS releases before Developer ID signing stored this service from an
+// unsigned/ad-hoc process. Those Keychain ACLs cannot reliably recognize the
+// stable signed app and can show an Allow dialog for every access. Use a new
+// service name so the signed app creates a clean credential item. Keep the
+// existing service on other platforms to avoid an unrelated forced sign-in.
+#[cfg(target_os = "macos")]
+const AUTH_KEYRING_SERVICE: &str = "com.chatcmd.client.auth";
+#[cfg(not(target_os = "macos"))]
+const AUTH_KEYRING_SERVICE: &str = "chatcmd.client.auth";
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -291,22 +304,42 @@ async fn send_authorized(
 pub(super) async fn load_session(
     state: &Arc<AppState>,
 ) -> Result<Option<StoredAuthSession>, Problem> {
-    let account = state.backend_api.base_url().to_owned();
-    let secret = tokio::task::spawn_blocking(move || {
-        let entry = keyring::Entry::new("chatcmd.client.auth", &account)
-            .map_err(|error| error.to_string())?;
-        match entry.get_password() {
-            Ok(value) => Ok(Some(value)),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(error) => Err(error.to_string()),
+    let secret = {
+        // Serialize the first read and cache it for the process lifetime. On
+        // macOS, every Keychain read by an elevated process can show a new
+        // confirmation dialog when the user chose Allow instead of Always
+        // Allow. API authentication must not touch Keychain on every request.
+        let mut cache = state.auth_credential_cache.lock().await;
+        match &*cache {
+            AuthCredentialCache::Ready(secret) => secret.clone(),
+            AuthCredentialCache::Unavailable => return Err(secure_store_problem()),
+            AuthCredentialCache::Uninitialized => {
+                let account = state.backend_api.base_url().to_owned();
+                let read_result = tokio::task::spawn_blocking(move || {
+                    let entry = keyring::Entry::new(AUTH_KEYRING_SERVICE, &account)
+                        .map_err(|error| error.to_string())?;
+                    match entry.get_password() {
+                        Ok(value) => Ok(Some(value)),
+                        Err(keyring::Error::NoEntry) => Ok(None),
+                        Err(error) => Err(error.to_string()),
+                    }
+                })
+                .await
+                .map_err(|_| secure_store_problem())?;
+                match read_result {
+                    Ok(secret) => {
+                        *cache = AuthCredentialCache::Ready(secret.clone());
+                        secret
+                    }
+                    Err(error) => {
+                        tracing::warn!(error, "read auth session from OS credential vault failed");
+                        *cache = AuthCredentialCache::Unavailable;
+                        return Err(secure_store_problem());
+                    }
+                }
+            }
         }
-    })
-    .await
-    .map_err(|_| secure_store_problem())?
-    .map_err(|error| {
-        tracing::warn!(error, "read auth session from OS credential vault failed");
-        secure_store_problem()
-    })?;
+    };
     let Some(secret) = secret else {
         return Ok(None);
     };
@@ -321,9 +354,10 @@ pub(super) async fn load_session(
 async fn save_session(state: &Arc<AppState>, tokens: &TokenResponse) -> Result<(), Problem> {
     let account = state.backend_api.base_url().to_owned();
     let secret = serde_json::to_string(tokens).map_err(|_| internal_problem())?;
+    let stored_secret = secret.clone();
     tokio::task::spawn_blocking(move || {
-        keyring::Entry::new("chatcmd.client.auth", &account)
-            .and_then(|entry| entry.set_password(&secret))
+        keyring::Entry::new(AUTH_KEYRING_SERVICE, &account)
+            .and_then(|entry| entry.set_password(&stored_secret))
             .map_err(|error| error.to_string())
     })
     .await
@@ -332,13 +366,14 @@ async fn save_session(state: &Arc<AppState>, tokens: &TokenResponse) -> Result<(
         tracing::warn!(error, "write auth session to OS credential vault failed");
         secure_store_problem()
     })?;
+    *state.auth_credential_cache.lock().await = AuthCredentialCache::Ready(Some(secret));
     Ok(())
 }
 
 async fn clear_session(state: &Arc<AppState>) -> Result<(), Problem> {
     let account = state.backend_api.base_url().to_owned();
     tokio::task::spawn_blocking(move || {
-        let entry = keyring::Entry::new("chatcmd.client.auth", &account)
+        let entry = keyring::Entry::new(AUTH_KEYRING_SERVICE, &account)
             .map_err(|error| error.to_string())?;
         match entry.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
@@ -351,6 +386,7 @@ async fn clear_session(state: &Arc<AppState>) -> Result<(), Problem> {
         tracing::warn!(error, "delete auth session from OS credential vault failed");
         secure_store_problem()
     })?;
+    *state.auth_credential_cache.lock().await = AuthCredentialCache::Ready(None);
     state.backend_api.reset_session().await;
     Ok(())
 }
