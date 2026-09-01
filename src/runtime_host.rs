@@ -12,6 +12,7 @@ mod identity;
 mod inputs;
 mod persistence;
 mod plan_prompt;
+mod queued_messages;
 mod subagents;
 mod turn_file_changes;
 mod user_message;

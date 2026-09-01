@@ -1,6 +1,6 @@
 import { decodeEncryptedApiResponse, encryptedApiFetch } from './apiCrypto';
 import { tr } from './i18n';
-import type { Agent, AgentInput, AuthInfo, AuthResult, ChatGptBridge, ChatGptRequest, CommandExecutionMode, LiveTerminalOutput, LocalSettings, ManagedTunnelStatus, McpStatus, Overview, PlanQuestion, PluginLink, ProblemDetails, SecretResult, Session, SessionDetail, Skill, SkillInstallPreview, SkillInstallResult, SkillOptionValue, Task, TaskActivityDetail, TaskDetail, TaskPage, Tool, ToolPreset, Tunnel, TunnelTestResult, UserSkill, WorkspaceProject } from './types';
+import type { Agent, AgentInput, AuthInfo, AuthResult, ChatGptBridge, ChatGptQueuedMessage, ChatGptRequest, CommandExecutionMode, LiveTerminalOutput, LocalSettings, ManagedTunnelStatus, McpStatus, Overview, PlanQuestion, PluginLink, ProblemDetails, SecretResult, Session, SessionDetail, Skill, SkillInstallPreview, SkillInstallResult, SkillOptionValue, Task, TaskActivityDetail, TaskDetail, TaskPage, Tool, ToolPreset, Tunnel, TunnelTestResult, UserSkill, WorkspaceProject } from './types';
 import type { UpdateStatus } from './updates/types';
 
 export class ApiError extends Error {
@@ -142,6 +142,11 @@ export const api = {
   chatGptBridge: (taskId: string) => request<ChatGptBridge>(`/api/local/chatgpt/tasks/${item(taskId)}`),
   sendChatGptMessage: (taskId: string, input: { model?: string; content: string }) => request<ChatGptRequest>(`/api/local/chatgpt/tasks/${item(taskId)}/messages`, { method: 'POST', body: json(input) }),
   stopChatGptMessage: (taskId: string) => request<ChatGptRequest>(`/api/local/chatgpt/tasks/${item(taskId)}/stop`, { method: 'POST', body: '{}' }),
+  chatGptQueue: (taskId: string) => request<ChatGptQueuedMessage[]>(`/api/local/chatgpt/tasks/${item(taskId)}/queue`),
+  createChatGptQueuedMessage: (taskId: string, input: { content: string; mode: 'queued' | 'immediate' }) => request<ChatGptQueuedMessage>(`/api/local/chatgpt/tasks/${item(taskId)}/queue`, { method: 'POST', body: json(input) }),
+  updateChatGptQueuedMessage: (taskId: string, messageId: string, input: { content?: string; mode?: 'queued' | 'immediate' }) => request<ChatGptQueuedMessage>(`/api/local/chatgpt/tasks/${item(taskId)}/queue/${item(messageId)}`, { method: 'PATCH', body: json(input) }),
+  deleteChatGptQueuedMessage: (taskId: string, messageId: string) => request<void>(`/api/local/chatgpt/tasks/${item(taskId)}/queue/${item(messageId)}`, { method: 'DELETE' }),
+  reorderChatGptQueue: (taskId: string, messageIds: string[]) => request<void>(`/api/local/chatgpt/tasks/${item(taskId)}/queue/order`, { method: 'PUT', body: json({ messageIds }) }),
   tasks: (cursor?: string, limit = 10, projectFolder?: string) => request<TaskPage>(`/api/local/tasks?limit=${limit}${cursor ? `&cursor=${item(cursor)}` : ''}${projectFolder ? `&projectFolder=${item(projectFolder)}` : ''}`),
   pendingConversationApprovals: () => request<Task[]>('/api/local/tasks/approvals/pending'),
   pendingPlanQuestions: () => request<PlanQuestion[]>('/api/local/plan/questions/pending'),

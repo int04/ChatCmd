@@ -12,9 +12,9 @@ use axum::{
 use crate::websocket::AppState;
 
 use super::{
-    Problem, agents::*, auth, backend, chatgpt::*, chatgpt_completion::*, crypto, data::*,
-    folders::*, overview::*, payment::*, plan_questions::*, sessions::*, settings::*, skills::*,
-    system::*, task_controls::*, task_delete::*, task_views::*, tunnels::*, updates::*,
+    Problem, agents::*, auth, backend, chatgpt::*, chatgpt_completion::*, chatgpt_queue::*, crypto,
+    data::*, folders::*, overview::*, payment::*, plan_questions::*, sessions::*, settings::*,
+    skills::*, system::*, task_controls::*, task_delete::*, task_views::*, tunnels::*, updates::*,
     workspaces::*,
 };
 
@@ -63,6 +63,18 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/chatgpt/tasks/{task_id}", get(task_bridge))
         .route("/chatgpt/tasks/{task_id}/messages", post(continue_message))
         .route("/chatgpt/tasks/{task_id}/stop", post(stop_message))
+        .route(
+            "/chatgpt/tasks/{task_id}/queue",
+            get(queue_messages).post(create_queue_message),
+        )
+        .route(
+            "/chatgpt/tasks/{task_id}/queue/order",
+            axum::routing::put(reorder_queue_messages),
+        )
+        .route(
+            "/chatgpt/tasks/{task_id}/queue/{message_id}",
+            patch(update_queue_message).delete(delete_queue_message),
+        )
         .route("/chatgpt/bridge/{request_id}/started", post(bridge_started))
         .route(
             "/chatgpt/bridge/{request_id}/identity",

@@ -82,6 +82,18 @@ pub(super) async fn bridge_browser_completed(
         },
     )
     .await?;
+    let demoted =
+        crate::chatgpt_queue::demote_all_immediate(&state.repository, &events.task_id, now_ms())
+            .await
+            .map_err(db_problem)?;
+    if demoted > 0 {
+        super::chatgpt_queue::publish_queue_event(
+            &state,
+            &events.task_id,
+            "demoted_after_browser_completion",
+            None,
+        );
+    }
     if let Some((id, payload)) = events.user {
         publish(
             &state,

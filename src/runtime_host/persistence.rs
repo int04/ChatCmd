@@ -52,6 +52,9 @@ impl RuntimeHost {
             Ok(output) => {
                 self.append_call_event(&context, tool, "succeeded", None, Some(&output), None)
                     .await?;
+                let output = self
+                    .attach_immediate_messages(&context, tool, output)
+                    .await?;
                 Ok(enrich_tool_result(output, &context, tool))
             }
             Err(error) => {

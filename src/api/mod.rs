@@ -3,6 +3,7 @@ mod auth;
 mod backend;
 mod chatgpt;
 mod chatgpt_completion;
+mod chatgpt_queue;
 mod chatgpt_support;
 #[cfg(test)]
 mod chatgpt_tests;

@@ -31,6 +31,7 @@ export interface TaskPage { items: Task[]; nextCursor?: string }
 export interface WorkspaceProject { id: Id; name: string; path: string; createdAtUtc?: string; updatedAtUtc?: string }
 export interface ChatGptRequest { id: Id; taskId?: Id; turnId: Id; agentId: Id; model: string; userContent: string; submittedContent: string; projectFolder?: string | null; status: string; conversationId?: string; conversationUrl?: string; assistantContent?: string; errorMessage?: string; hasFinalResponse?: boolean }
 export interface ChatGptBridge { taskId: Id; conversationId: string; conversationUrl: string; model: string; taskStatus?: string; activeRequestId?: Id; activeStatus?: string; activeSubmittedContent?: string }
+export interface ChatGptQueuedMessage { id: Id; taskId: Id; content: string; mode: 'queued' | 'immediate'; sortOrder: number; createdAtMs: number; updatedAtMs: number }
 export interface SubagentRun { id: Id; parentTurnId: Id; taskId?: Id; name: string; request: string; status: string; createdAtUtc: string; updatedAtUtc: string; completedAtUtc?: string }
 export interface SubagentApproval { activityId: Id; childTaskId: Id; subagentId: Id; agentName: string; parentTurnId: Id; childTurnId?: Id; tool?: string; input?: unknown; createdAtUtc: string }
 export interface TaskDetail { task: Task; turns?: TaskTurn[]; events?: TimelineEvent[]; nextCursor?: string; subagents?: SubagentRun[]; subagentApprovals?: SubagentApproval[]; executionMode?: CommandExecutionMode; executionModeSourceTaskId?: Id }

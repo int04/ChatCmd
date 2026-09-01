@@ -65,6 +65,18 @@ pub(super) async fn request_json(state: &Arc<AppState>, id: &str) -> Result<Json
                 .execute(state.repository.pool())
                 .await
                 .map_err(db_problem)?;
+            let demoted =
+                crate::chatgpt_queue::demote_all_immediate(&state.repository, task_id, now)
+                    .await
+                    .map_err(db_problem)?;
+            if demoted > 0 {
+                super::chatgpt_queue::publish_queue_event(
+                    state,
+                    task_id,
+                    "demoted_after_final_detection",
+                    None,
+                );
+            }
         }
         row = bridge_request_row(state, id).await?;
     }

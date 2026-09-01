@@ -27,12 +27,15 @@ impl RuntimeHost {
             ));
         }
         self.ensure_subagents_finished(context).await?;
-        self.save_agent_event(
-            context,
-            "completed",
-            &input.content,
-            input.suggested_title.as_deref(),
-        )
-        .await
+        let result = self
+            .save_agent_event(
+                context,
+                "completed",
+                &input.content,
+                input.suggested_title.as_deref(),
+            )
+            .await?;
+        self.demote_immediate_messages(context).await?;
+        Ok(result)
     }
 }
