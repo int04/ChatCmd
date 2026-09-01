@@ -61,7 +61,7 @@ function AdminElevationPrompt() {
     }
   };
 
-  return <div className="admin-elevation-banner" role="status"><ShieldAlert /><div><strong>{tr('Run ChatCMD as administrator')}</strong><span>{tr('Administrator access is recommended so local tools can run with full system permissions.')}</span>{error && <span className="admin-elevation-error">{error}</span>}</div><button className="button primary" type="button" disabled={busy} onClick={() => void restart()}>{busy ? tr('Restarting…') : tr('Run as administrator')}</button></div>;
+  return <div className="admin-elevation-banner" role="status"><ShieldAlert /><div><strong>{tr('Run ChatCMD as administrator')}</strong><span>{tr('Administrator access is recommended so local tools can run with full system permissions.')}</span>{error && <span className="admin-elevation-error">{error}</span>}</div><div className="admin-elevation-actions"><button className="button secondary" type="button" disabled={busy} onClick={() => setVisible(false)}>{tr('Close')}</button><button className="button primary" type="button" disabled={busy} onClick={() => void restart()}>{busy ? tr('Restarting…') : tr('Run as administrator')}</button></div></div>;
 }
 
 function GlobalDocumentTitleBridge() {

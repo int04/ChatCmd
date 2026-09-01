@@ -216,15 +216,24 @@ fn resolve_install_destinations(
                     .is_some_and(|ext| ext.to_string_lossy().eq_ignore_ascii_case("app"))
             })
             .map(Path::to_path_buf);
-        let distribution_root = current_app
-            .as_deref()
-            .and_then(Path::parent)
-            .or_else(|| current_exe.parent())
-            .ok_or_else(|| anyhow!("current executable has no parent directory"))?
-            .to_path_buf();
+        let is_translocated = is_macos_app_translocation(current_exe);
+        let distribution_root = if is_translocated {
+            PathBuf::from("/Applications")
+        } else {
+            current_app
+                .as_deref()
+                .and_then(Path::parent)
+                .or_else(|| current_exe.parent())
+                .ok_or_else(|| anyhow!("current executable has no parent directory"))?
+                .to_path_buf()
+        };
         let extension_destination = distribution_root.join("chatgpt-extension");
         if let Some(source) = find_child(payload_root, "ChatCMD.app", true) {
-            let destination = current_app.unwrap_or_else(|| distribution_root.join("ChatCMD.app"));
+            let destination = if is_translocated {
+                distribution_root.join("ChatCMD.app")
+            } else {
+                current_app.unwrap_or_else(|| distribution_root.join("ChatCMD.app"))
+            };
             return Ok((
                 InstallPayload::AppBundle {
                     source,
@@ -236,10 +245,15 @@ fn resolve_install_destinations(
         }
         let source = find_child(payload_root, "ChatCMD", false)
             .ok_or_else(|| anyhow!("update package does not contain ChatCMD or ChatCMD.app"))?;
+        let destination = if is_translocated {
+            distribution_root.join("ChatCMD")
+        } else {
+            current_exe.to_path_buf()
+        };
         return Ok((
             InstallPayload::Executable {
                 source,
-                destination: current_exe.to_path_buf(),
+                destination,
             },
             distribution_root,
             extension_destination,
@@ -250,6 +264,13 @@ fn resolve_install_destinations(
         let _ = (payload_root, current_exe);
         bail!("automatic installation is supported only on Windows and macOS");
     }
+}
+
+fn is_macos_app_translocation(path: &Path) -> bool {
+    path.to_string_lossy()
+        .replace('\\', "/")
+        .split('/')
+        .any(|component| component == "AppTranslocation")
 }
 
 fn locate_payload_root(extract_dir: &Path) -> Result<PathBuf> {
@@ -359,4 +380,24 @@ fn sh_quote(path: &Path) -> String {
 #[cfg(target_os = "macos")]
 fn sh_quote_text(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_macos_app_translocation_path() {
+        let path = Path::new(
+            "/private/var/folders/p8/example/T/AppTranslocation/8031994B-F982-4F55-9303-FD19AC8E86D0/d/ChatCMD.app/Contents/MacOS/ChatCMD",
+        );
+        assert!(is_macos_app_translocation(path));
+    }
+
+    #[test]
+    fn normal_macos_application_path_is_not_translocated() {
+        assert!(!is_macos_app_translocation(Path::new(
+            "/Applications/ChatCMD.app/Contents/MacOS/ChatCMD"
+        )));
+    }
 }
