@@ -103,7 +103,7 @@ export function SettingsPage() {
 
         <div className="settings-workspace-body">
           {activeTab === 'account' && <AccountSettings />}
-          {activeTab === 'execution' && <>
+          {activeTab === 'execution' && <div className="execution-settings">
             <SettingsIntro icon={<ShieldCheck />} title={tr('Execution safety and limits')} description={tr('These settings control how much access Agents receive and how many tasks can run at the same time. Use restrictive values when you are unsure.')} />
             <div className="settings-section-block">
               <SectionHeading title={tr('Approval and permissions')} description={tr('Choose when the Agent must stop and ask you before performing local actions.')} />
@@ -120,8 +120,8 @@ export function SettingsPage() {
                 <SettingField label={tr('Session concurrency')} hint={tr('Maximum terminal sessions allowed at once.')} detail={tr('Limits how many terminal processes can remain active simultaneously. Too many sessions may consume memory even when they are idle.')}><input type="number" min="1" max="64" value={value.sessionConcurrency} onChange={(event) => update('sessionConcurrency', Number(event.target.value))} /></SettingField>
               </div>
             </div>
-          </>}
-          {activeTab === 'display' && <>
+          </div>}
+          {activeTab === 'display' && <div className="display-settings">
             <SettingsIntro icon={<MonitorCog />} title={tr('Appearance and language')} description={tr('Personalize how ChatCMD looks and which language is used in the management interface. These choices do not change Agent permissions.')} />
             <div className="settings-section-block"><div className="settings-control-grid">
               <SettingField label={tr('Theme')} hint={tr('Controls the appearance of the management UI.')} detail={tr('System follows your operating system. Light and Dark keep a fixed appearance until you change this setting again.')}><select value={value.theme} onChange={(event) => update('theme', event.target.value as LocalSettings['theme'])}><option value="system">{tr('System')}</option><option value="light">{tr('Light')}</option><option value="dark">{tr('Dark')}</option></select></SettingField>
@@ -129,14 +129,14 @@ export function SettingsPage() {
               <SettingField wide label={tr('Task page font size')} hint={tr('Adjust text size only inside task conversation pages.')} detail={tr('ChatCMD scales typography together with key spacing, controls, icons, and side panels so larger or smaller text keeps the task UI balanced.')}><div className="settings-task-font-scale"><input type="range" min="90" max="130" step="5" value={value.taskFontScale} onChange={(event) => updateTaskFontScale(Number(event.target.value))} aria-label={tr('Task page font size')} /><div className="settings-font-presets">{TASK_FONT_SCALE_PRESETS.map((scale) => <button key={scale} type="button" className={`settings-font-chip ${value.taskFontScale === scale ? 'active' : ''}`} onClick={() => updateTaskFontScale(scale)}>{scale}%</button>)}</div><div className="settings-task-font-preview" style={{ '--preview-title-size': `${13 * value.taskFontScale / 100}px`, '--preview-body-size': `${11 * value.taskFontScale / 100}px` } as React.CSSProperties}><strong>{tr('Task conversation preview')}</strong><span>{tr('Messages, status, tools, sidebar, and composer resize together.')}</span></div></div></SettingField>
               <SettingField label={tr('Language')} hint={tr('Applied immediately to the current browser.')} detail={tr('Changes interface labels and descriptions. Technical output from tools, terminals, or external services may still use its original language.')}><select value={value.language} onChange={(event) => updateLanguage(event.target.value as LocalSettings['language'])}><option value="en">English</option><option value="vi">Tiếng Việt</option></select></SettingField>
             </div></div>
-          </>}
-          {activeTab === 'sound' && <>
+          </div>}
+          {activeTab === 'sound' && <div className="sound-settings">
             <SettingsIntro icon={<Volume2 />} title={tr('Notification sounds')} description={tr('Use sounds to notice important Agent events when ChatCMD is open in the background or another browser tab.')} />
             <div className="settings-section-block"><div className="settings-control-grid one-column">
               <ToggleSetting checked={value.newAgentSound} onChange={(checked) => update('newAgentSound', checked)} label={tr('Sound when a new Agent becomes active')} hint={tr('Play a sound when a new task appears.')} detail={tr('Useful when approval is enabled so you can notice a newly waiting conversation without constantly watching the page.')} />
               <ToggleSetting checked={value.finishedTaskSound} onChange={(checked) => update('finishedTaskSound', checked)} label={tr('Sound when a task finishes')} hint={tr('Play a sound when the Agent sends the final response.')} detail={tr('Useful for long-running tasks so you can switch to other work and return after the Agent finishes.')} />
             </div></div>
-          </>}
+          </div>}
           {activeTab === 'data' && <DataSettings />}
           {activeTab === 'update' && <UpdateSettings />}
         </div>
