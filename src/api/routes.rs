@@ -48,6 +48,7 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
             post(copy_plugin_link),
         )
         .route("/system/folder-picker", post(pick_project_folder))
+        .route("/system/exit", post(exit_application))
         .route(
             "/workspaces/projects",
             get(workspace_projects).post(save_workspace_project),

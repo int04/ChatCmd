@@ -1,4 +1,4 @@
-import { AlertTriangle, Bot, ChevronDown, ChevronUp, FolderOpen, LayoutDashboard, LoaderCircle, LogOut, Plus, Search, Settings, TerminalSquare, Trash2, UserRound, Wrench } from 'lucide-react';
+import { AlertTriangle, Bot, ChevronDown, ChevronUp, FolderOpen, LayoutDashboard, LoaderCircle, LogOut, Plus, Power, Search, Settings, TerminalSquare, Trash2, UserRound, Wrench } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type MouseEventHandler } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 
@@ -26,17 +26,30 @@ const menuItems = [
 
 export function FunctionRail() {
   const navigate = useNavigate();
+  const [confirmExit, setConfirmExit] = useState(false);
+  const [exiting, setExiting] = useState(false);
+  const [exitError, setExitError] = useState('');
   useEffect(() => {
     const openLogs = () => navigate('/settings?tab=data&section=extension');
     window.addEventListener('chatcmd:open-extension-logs', openLogs);
     return () => window.removeEventListener('chatcmd:open-extension-logs', openLogs);
   }, [navigate]);
-  return <nav className="function-rail" aria-label={tr('Application navigation')}>
-    <Link className="function-rail-brand" to="/" aria-label="ChatCMD"><img src="/icons/logo-icon-master-1024.png" alt="" /></Link>
-    <div className="function-rail-items">
-      {menuItems.map(({ to, end, label, icon: Icon }) => <NavLink to={to} end={end} key={to} aria-label={tr(label)} title={tr(label)}><Icon /><span className="sr-only">{tr(label)}</span></NavLink>)}
-    </div>
-  </nav>;
+  const exitApplication = async () => {
+    if (exiting) return;
+    setExiting(true); setExitError('');
+    try { await api.exitApplication(); }
+    catch (reason) { setExitError(reason instanceof Error ? reason.message : 'Không thể dừng ứng dụng.'); setExiting(false); }
+  };
+  return <>
+    <nav className="function-rail" aria-label={tr('Application navigation')}>
+      <Link className="function-rail-brand" to="/" aria-label="ChatCMD"><img src="/icons/logo-icon-master-1024.png" alt="" /></Link>
+      <div className="function-rail-items">
+        {menuItems.map(({ to, end, label, icon: Icon }) => <NavLink to={to} end={end} key={to} aria-label={tr(label)} title={tr(label)}><Icon /><span className="sr-only">{tr(label)}</span></NavLink>)}
+        <button className="function-rail-action function-rail-exit" type="button" aria-label="Dừng ứng dụng" title="Dừng ứng dụng" onClick={() => { setExitError(''); setConfirmExit(true); }}><Power /><span className="sr-only">Dừng ứng dụng</span></button>
+      </div>
+    </nav>
+    {confirmExit && <Modal title="Bạn có chắc chắn muốn dừng chạy ứng dụng không?" close={() => !exiting && setConfirmExit(false)} dangerous><div className="task-delete-warning"><AlertTriangle /><div><strong>Dừng ChatCMD</strong><p>Ứng dụng local sẽ được đóng ngay sau khi bạn xác nhận.</p></div></div>{exitError && <p className="task-delete-error" role="alert">{exitError}</p>}<div className="modal-actions"><button className="button secondary" type="button" disabled={exiting} onClick={() => setConfirmExit(false)}>Hủy</button><button className="button danger" type="button" disabled={exiting} onClick={() => void exitApplication()}>{exiting ? 'Đang dừng…' : 'Dừng ứng dụng'}</button></div></Modal>}
+  </>;
 }
 
 export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void }) {

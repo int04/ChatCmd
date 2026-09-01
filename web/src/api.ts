@@ -133,6 +133,7 @@ export const api = {
   pickProjectFolder: () => request<{ path: string | null }>('/api/local/system/folder-picker', { method: 'POST', body: '{}' }),
   elevationStatus: () => request<ElevationStatus>('/api/local/system/elevation'),
   restartElevated: () => request<ElevationStatus>('/api/local/system/elevation/restart', { method: 'POST', body: '{}' }),
+  exitApplication: () => request<{ closing: boolean }>('/api/local/system/exit', { method: 'POST', body: '{}' }),
   workspaceProjects: () => request<WorkspaceProject[]>('/api/local/workspaces/projects'),
   saveWorkspaceProject: (input: { name: string; path: string }) => request<WorkspaceProject>('/api/local/workspaces/projects', { method: 'POST', body: json(input) }),
   reorderWorkspaceProjects: (projectIds: string[]) => request<void>('/api/local/workspaces/projects/order', { method: 'PUT', body: json({ projectIds }) }),

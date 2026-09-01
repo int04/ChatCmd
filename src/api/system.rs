@@ -1,8 +1,9 @@
+use std::time::Duration;
+
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use std::{
     path::Path,
     process::{Command, Stdio},
-    time::Duration,
 };
 
 #[cfg(target_os = "macos")]
@@ -31,6 +32,21 @@ pub(super) async fn elevation_status() -> Json<ElevationStatus> {
         supported: cfg!(any(target_os = "windows", target_os = "macos")),
         elevated: is_elevated(),
     })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct ExitApplicationResponse {
+    closing: bool,
+}
+
+pub(super) async fn exit_application() -> Json<ExitApplicationResponse> {
+    std::thread::spawn(|| {
+        std::thread::sleep(Duration::from_millis(300));
+        std::process::exit(0);
+    });
+
+    Json(ExitApplicationResponse { closing: true })
 }
 
 pub(super) async fn restart_elevated() -> Result<Json<ElevationStatus>, Problem> {
