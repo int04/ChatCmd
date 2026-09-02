@@ -65,7 +65,6 @@ export function AgentsPage() {
       if (editor === 'new') {
         const created = await api.createAgent(input);
         if (created.agent) updateList(created.agent);
-        setSecret(created);
       } else if (editor) {
         updateList(await api.updateAgent(editor.id, input));
       }
@@ -212,15 +211,25 @@ function AddTunnelModal({ port, close, added }: { port?: number; close: () => vo
   const [error, setError] = useState('');
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    setBusy(true);
     setError('');
-    try { added(await api.createTunnel(baseUrl)); }
+    const value = baseUrl.trim();
+    try {
+      const parsed = new URL(value.includes('://') ? value : `https://${value}`);
+      if (parsed.hostname.toLowerCase() === 'localhost' || parsed.hostname === '127.0.0.1') {
+        setError(tr('localhost and 127.0.0.1 cannot be added as public addresses'));
+        return;
+      }
+    } catch {
+      // Let the backend return the existing validation message for malformed addresses.
+    }
+    setBusy(true);
+    try { added(await api.createTunnel(value)); }
     catch (reason) { setError(reason instanceof Error ? reason.message : tr('Tunnel could not be added')); }
     finally { setBusy(false); }
   };
   return <Modal title={tr('Add public address')} description={tr('ChatCMD will verify that this address reaches the current device before saving it.')} close={close}>
     <form className="form-stack" onSubmit={submit}>
-      <div className="tunnel-guide"><span><Cloud /></span><div><strong>{tr('Use an address you control')}</strong><div className="tunnel-port-highlight"><small>{tr('Rust server port')}</small><strong>{port ?? '—'}</strong></div><p>{tr('Point your domain, reverse proxy, Cloudflare Tunnel, or router port forwarding to the ChatCMD Rust server running on this device. The current local server port is {port}.', { port: port ?? '—' })}</p><p>{tr('For Cloudflare Tunnel, use a service target such as http://127.0.0.1:{port}. For router/NAT forwarding, forward an external TCP port to this computer on port {port}, then enter the public domain or IP here.', { port: port ?? '—' })}</p><div className="tunnel-guide-examples"><code>https://mcp.example.com</code><code>{`http://203.0.113.10:${port ?? 'PORT'}`}</code><code>{`http://127.0.0.1:${port ?? 'PORT'}`}</code></div></div></div>
+      <div className="tunnel-guide"><span><Cloud /></span><div><strong>{tr('Use an address you control')}</strong><div className="tunnel-port-highlight"><small>{tr('Rust server port')}</small><strong>{port ?? '—'}</strong></div><p>{tr('Point your domain, reverse proxy, Cloudflare Tunnel, or router port forwarding to the ChatCMD Rust server running on this device. The current local server port is {port}.', { port: port ?? '—' })}</p><p>{tr('For Cloudflare Tunnel, use a service target such as http://127.0.0.1:{port}. For router/NAT forwarding, forward an external TCP port to this computer on port {port}, then enter the public domain or IP here.', { port: port ?? '—' })}</p><div className="tunnel-guide-examples"><code>https://mcp.example.com</code><code>{`http://203.0.113.10:${port ?? 'PORT'}`}</code></div></div></div>
       <label>{tr('Public address')}<input required autoFocus maxLength={512} placeholder="https://mcp.example.com" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} /><small>{tr('Enter a domain, IP:port, or full URL. If no protocol is provided, ChatCMD will try HTTPS and verify the connection before saving.')}</small></label>
       {error && <div className="tunnel-form-error">{error}</div>}
       <div className="modal-actions"><button className="button secondary" type="button" onClick={close}>{tr('Cancel')}</button><button className="button primary" disabled={busy || !baseUrl.trim()}>{busy ? <LoaderCircle className="spin" /> : <Wifi />}{busy ? tr('Testing & saving…') : tr('Verify & add')}</button></div>

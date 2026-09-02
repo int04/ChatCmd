@@ -295,6 +295,7 @@ const vi: Record<string, string> = {
   'Test': 'Kiểm tra',
   'Tunnel test failed': 'Kiểm tra kết nối thất bại',
   'Tunnel could not be added': 'Không thể thêm địa chỉ kết nối',
+  'localhost and 127.0.0.1 cannot be added as public addresses': 'Không thể thêm localhost hoặc 127.0.0.1 làm địa chỉ công khai',
   'Tunnel could not be deleted': 'Không thể xóa địa chỉ kết nối',
   'Delete public address': 'Xóa địa chỉ công khai',
   'Delete public address?': 'Xóa địa chỉ công khai?',
