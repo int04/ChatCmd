@@ -32,6 +32,7 @@ export function TopUpModal({ userId, onClose }: Props) {
   const [amountText, setAmountText] = useState('');
   const [preparing, setPreparing] = useState(false);
   const [problem, setProblem] = useState('');
+  const [paymentUrl, setPaymentUrl] = useState('');
   const transferContent = `CHATCMD${userId}`;
 
   const amount = useMemo(() => Number(amountText.replace(/\D/g, '')) || 0, [amountText]);
@@ -49,10 +50,8 @@ export function TopUpModal({ userId, onClose }: Props) {
       const payUrl = payment.data?.payUrl?.trim();
       if (!payUrl) throw new Error('payment payUrl is missing');
 
-      const opened = window.open(payUrl, '_blank', 'noopener,noreferrer');
-      if (!opened) {
-        setProblem(billingTr('Could not open payment page. Please allow pop-ups and try again.'));
-      }
+      setPaymentUrl(payUrl);
+      window.open(payUrl, '_blank', 'noopener,noreferrer');
     } catch (error) {
       setProblem(paymentErrorMessage(error));
     } finally {
@@ -72,6 +71,7 @@ export function TopUpModal({ userId, onClose }: Props) {
         </div>
         <label className="billing-field"><span>{billingTr('Custom amount')}</span><input inputMode="numeric" value={amountText} placeholder={billingTr('Enter amount')} onChange={(event) => { setAmountText(event.target.value.replace(/\D/g, '')); setProblem(''); }} /></label>
         {problem && <div className="billing-error" role="alert">{problem}</div>}
+        {paymentUrl && <div className="deal-success"><ExternalLink /><div><strong>{billingTr('Payment order created successfully.')}</strong><span>{billingTr('Click the button below if your browser does not open the payment page automatically.')}</span><a className="button secondary" href={paymentUrl} target="_blank" rel="noreferrer">{billingTr('Open payment page')}</a></div></div>}
         <div className="billing-actions"><button type="button" className="button primary" disabled={preparing || amount <= 0} onClick={() => void startPayment()}>{preparing ? <LoaderCircle className="spin" /> : <ExternalLink />}{preparing ? billingTr('Preparing payment information...') : billingTr('Continue')}</button></div>
       </section>
     </div>
