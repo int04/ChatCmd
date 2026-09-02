@@ -55,6 +55,10 @@ pub(crate) use routes::router;
 pub(crate) use system::signal_elevated_restart_ready;
 pub(crate) use task_delete::start_data_cleanup_scheduler;
 
+pub(crate) async fn warm_auth_runtime_cache(state: &Arc<AppState>) {
+    auth::warm_runtime_cache(state).await;
+}
+
 pub(crate) fn iso_now() -> String {
     iso_ms(now_ms())
 }

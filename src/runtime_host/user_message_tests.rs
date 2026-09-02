@@ -78,6 +78,7 @@ pub(crate) async fn test_host() -> (RuntimeHost, String, TempDir) {
         RuntimeHost::new(
             repository,
             bootstrap.device,
+            0,
             shell,
             workspace,
             git,

@@ -81,6 +81,14 @@ impl AppEvent {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct AuthUsageCache {
+    pub authenticated: bool,
+    pub use_next_time: Option<String>,
+    pub use_next_reset: Option<String>,
+    pub plan_type: Option<i64>,
+}
+
 pub(crate) struct AppState {
     pub repository: SqliteRepository,
     pub database_path: String,
@@ -97,6 +105,7 @@ pub(crate) struct AppState {
     pub updater: Arc<crate::updater::UpdateManager>,
     pub auth_refresh_lock: Mutex<()>,
     pub auth_credential_cache: Mutex<AuthCredentialCache>,
+    pub auth_usage_cache: Arc<RwLock<AuthUsageCache>>,
     events: broadcast::Sender<AppEvent>,
     connected_clients: AtomicUsize,
     api_crypto_sessions: RwLock<HashMap<String, Arc<Aes256Gcm>>>,
@@ -115,6 +124,7 @@ impl AppState {
         activities: crate::runtime_host::ActivityRegistry,
         plan_prompts: crate::runtime_host::PlanPromptRegistry,
         backend_api: crate::backend_api::BackendApiClient,
+        auth_usage_cache: Arc<RwLock<AuthUsageCache>>,
         events: broadcast::Sender<AppEvent>,
     ) -> Self {
         let tunnel = crate::tunnel_client::TunnelClientManager::new(
@@ -138,6 +148,7 @@ impl AppState {
             updater: crate::updater::UpdateManager::new(),
             auth_refresh_lock: Mutex::new(()),
             auth_credential_cache: Mutex::new(AuthCredentialCache::Uninitialized),
+            auth_usage_cache,
             events,
             connected_clients: AtomicUsize::new(0),
             api_crypto_sessions: RwLock::new(HashMap::new()),

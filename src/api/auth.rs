@@ -91,6 +91,20 @@ pub(super) struct StoredAuthSession {
     refresh_token: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AuthUsageResponse {
+    use_next_time: Option<String>,
+    use_next_reset: Option<String>,
+    plan: AuthPlanResponse,
+}
+
+#[derive(Debug, Deserialize)]
+struct AuthPlanResponse {
+    #[serde(rename = "type")]
+    plan_type: i64,
+}
+
 pub(super) async fn register(
     State(state): State<Arc<AppState>>,
     body: Bytes,
@@ -316,11 +330,27 @@ async fn send_authorized(
     accept_language: Option<&str>,
 ) -> Result<BackendApiResponse, Problem> {
     let authorization = format!("Bearer {access_token}");
-    state
+    let response = state
         .backend_api
         .request(method, path, body, Some(&authorization), accept_language)
         .await
-        .map_err(|_| backend_unavailable())
+        .map_err(|_| backend_unavailable())?;
+
+    if path == "/api/auth/info" && (200..300).contains(&response.status)
+        && let Ok(info) = serde_json::from_slice::<AuthUsageResponse>(&response.body)
+    {
+        let mut cache = state.auth_usage_cache.write().await;
+        cache.authenticated = true;
+        cache.use_next_time = info.use_next_time;
+        cache.use_next_reset = info.use_next_reset;
+        cache.plan_type = Some(info.plan.plan_type);
+    }
+
+    Ok(response)
+}
+
+pub(super) async fn warm_runtime_cache(state: &Arc<AppState>) {
+    let _ = authorized_request(state, Method::GET, "/api/auth/info", &[], None).await;
 }
 
 pub(super) async fn load_session(
@@ -361,10 +391,12 @@ pub(super) async fn load_session(
         }
     };
     let Some(secret) = secret else {
+        state.auth_usage_cache.write().await.authenticated = false;
         return Ok(None);
     };
     let tokens: TokenResponse =
         serde_json::from_str(&secret).map_err(|_| secure_store_problem())?;
+    state.auth_usage_cache.write().await.authenticated = true;
     Ok(Some(StoredAuthSession {
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
@@ -389,6 +421,7 @@ async fn save_session(state: &Arc<AppState>, tokens: &TokenResponse) -> Result<(
         secure_store_problem()
     })?;
     *state.auth_credential_cache.lock().await = AuthCredentialCache::Ready(Some(secret));
+    state.auth_usage_cache.write().await.authenticated = true;
     Ok(())
 }
 
@@ -408,6 +441,7 @@ async fn clear_session(state: &Arc<AppState>) -> Result<(), Problem> {
         secure_store_problem()
     })?;
     *state.auth_credential_cache.lock().await = AuthCredentialCache::Ready(None);
+    *state.auth_usage_cache.write().await = Default::default();
     state.backend_api.reset_session().await;
     Ok(())
 }

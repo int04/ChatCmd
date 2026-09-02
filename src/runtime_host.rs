@@ -37,9 +37,10 @@ use chatcmd_storage::SqliteRepository;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::sync::Arc;
-use tokio::sync::{Mutex, broadcast};
+use tokio::sync::{Mutex, RwLock, broadcast};
+use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
 
-use crate::websocket::AppEvent;
+use crate::websocket::{AppEvent, AuthUsageCache};
 pub(crate) use activity_control::{ActivityRegistry, StopActivityResult};
 pub(crate) use plan_prompt::{
     PlanPromptRegistry, PlanPromptResolution, PlanPromptResolveError, PlanPromptView,
@@ -50,6 +51,7 @@ use turn_file_changes::TurnFileChangeTracker;
 pub(crate) struct RuntimeHost {
     repository: SqliteRepository,
     device: LocalDevice,
+    port: u16,
     shell: ShellRuntime,
     workspace: WorkspaceService,
     git: GitService,
@@ -60,12 +62,14 @@ pub(crate) struct RuntimeHost {
     plan_prompts: PlanPromptRegistry,
     file_changes: TurnFileChangeTracker,
     subagent_registration_gate: Arc<Mutex<()>>,
+    auth_usage_cache: Arc<RwLock<AuthUsageCache>>,
 }
 
 impl RuntimeHost {
     pub(crate) fn new(
         repository: SqliteRepository,
         device: LocalDevice,
+        port: u16,
         shell: ShellRuntime,
         workspace: WorkspaceService,
         git: GitService,
@@ -73,9 +77,14 @@ impl RuntimeHost {
         skills: SkillService,
         events: broadcast::Sender<AppEvent>,
     ) -> Self {
+        let auth_usage_cache = Arc::new(RwLock::new(AuthUsageCache {
+            authenticated: cfg!(test),
+            ..AuthUsageCache::default()
+        }));
         Self {
             repository,
             device,
+            port,
             shell,
             workspace,
             git,
@@ -86,6 +95,7 @@ impl RuntimeHost {
             plan_prompts: PlanPromptRegistry::default(),
             file_changes: TurnFileChangeTracker::default(),
             subagent_registration_gate: Arc::new(Mutex::new(())),
+            auth_usage_cache,
         }
     }
 
@@ -95,6 +105,10 @@ impl RuntimeHost {
 
     pub(crate) fn plan_prompt_registry(&self) -> PlanPromptRegistry {
         self.plan_prompts.clone()
+    }
+
+    pub(crate) fn auth_usage_cache(&self) -> Arc<RwLock<AuthUsageCache>> {
+        self.auth_usage_cache.clone()
     }
 
     #[cfg(test)]
@@ -110,6 +124,7 @@ impl RuntimeHost {
             self.activity_registry(),
             self.plan_prompt_registry(),
             crate::backend_api::BackendApiClient::new().expect("configure test backend API"),
+            self.auth_usage_cache(),
             self.events.clone(),
         )
     }
@@ -129,6 +144,51 @@ impl RuntimeHost {
         event.session_id = session_id;
         event.turn_id = turn_id;
         let _ = self.events.send(event);
+    }
+
+    pub(super) async fn authorize_plugin_access(&self, tool: &str) -> RuntimeResult<()> {
+        let cache = self.auth_usage_cache.read().await.clone();
+        if !cache.authenticated {
+            return Err(RuntimeError::new(
+                "plugin_login_required",
+                format!(
+                    "Reply to the user in the same language currently used in the conversation: You cannot use this Plugin to perform the request yet. Please visit http://localhost:{} to sign in. Do not call more ChatCMD tools until the user signs in.",
+                    self.port
+                ),
+            ));
+        }
+        if tool != "agent_user_message" || cache.plan_type != Some(0) {
+            return Ok(());
+        }
+        let Some(use_next_time) = cache
+            .use_next_time
+            .as_deref()
+            .and_then(|value| OffsetDateTime::parse(value, &Rfc3339).ok())
+        else {
+            return Ok(());
+        };
+        if use_next_time.to_offset(UtcOffset::UTC) >= OffsetDateTime::now_utc() {
+            return Ok(());
+        }
+        let reset_local = cache
+            .use_next_reset
+            .as_deref()
+            .and_then(|value| OffsetDateTime::parse(value, &Rfc3339).ok())
+            .map(|value| {
+                let offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
+                value
+                    .to_offset(offset)
+                    .format(&Rfc3339)
+                    .unwrap_or_else(|_| value.to_string())
+            })
+            .unwrap_or_else(|| "the next reset time".to_owned());
+        Err(RuntimeError::new(
+            "free_usage_exhausted",
+            format!(
+                "Reply to the user in the same language currently used in the conversation: You have used all free usage hours. You can continue using it at {reset_local}. Or upgrade your plan for unlimited usage. See details at http://localhost:{}/settings. Do not start this new turn or call more ChatCMD tools for it.",
+                self.port
+            ),
+        ))
     }
 }
 

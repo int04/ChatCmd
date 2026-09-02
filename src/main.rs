@@ -189,6 +189,7 @@ async fn run_server(ready: Option<std::sync::mpsc::Sender<()>>) -> Result<()> {
     let runtime = Arc::new(RuntimeHost::new(
         repository.clone(),
         bootstrap.device.clone(),
+        port,
         shell.clone(),
         workspace,
         git,
@@ -207,7 +208,7 @@ async fn run_server(ready: Option<std::sync::mpsc::Sender<()>>) -> Result<()> {
         }),
     );
     let mcp = chatcmd_mcp::axum_router_with_host_validation(
-        McpServer::new(runtime),
+        McpServer::new(runtime.clone()),
         security,
         !ip.is_loopback(),
     );
@@ -224,8 +225,10 @@ async fn run_server(ready: Option<std::sync::mpsc::Sender<()>>) -> Result<()> {
         activity_registry,
         plan_prompt_registry,
         backend_api,
+        runtime.auth_usage_cache(),
         event_tx,
     ));
+    api::warm_auth_runtime_cache(&state).await;
     api::start_data_cleanup_scheduler(state.clone());
     let tunnel_manager = state.tunnel.clone();
     let management = Router::new()

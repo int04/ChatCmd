@@ -17,6 +17,7 @@ impl RuntimeHost {
         mut context: OperationContext,
         arguments: Value,
     ) -> RuntimeResult<Value> {
+        self.authorize_plugin_access(tool).await?;
         self.authorize_tool(&context.agent_id, tool).await?;
         let first_user_message = (tool == "agent_user_message")
             .then(|| arguments.get("content").and_then(Value::as_str))
