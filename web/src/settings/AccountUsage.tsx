@@ -7,11 +7,11 @@ import { tr } from '../i18n';
 type Metric = 'countTurn' | 'countConversion' | 'countAgent' | 'countToolUse' | 'countSkill';
 
 const METRICS: Array<{ key: Metric; label: string }> = [
-  { key: 'countTurn', label: 'count_turn' },
-  { key: 'countConversion', label: 'count_conversion' },
-  { key: 'countAgent', label: 'count_agent' },
-  { key: 'countToolUse', label: 'count_tool_use' },
-  { key: 'countSkill', label: 'count_skill' },
+  { key: 'countTurn', label: 'Turns' },
+  { key: 'countConversion', label: 'Conversations' },
+  { key: 'countAgent', label: 'Agents created' },
+  { key: 'countToolUse', label: 'Tool uses' },
+  { key: 'countSkill', label: 'Skills used' },
 ];
 
 export function AccountUsage() {
@@ -49,7 +49,7 @@ export function AccountUsage() {
     </div>
 
     <div className="account-usage-metrics" role="radiogroup" aria-label={tr('Usage metric')}>
-      {METRICS.map((item) => <button key={item.key} type="button" role="radio" aria-checked={metric === item.key} className={metric === item.key ? 'active' : ''} onClick={() => setMetric(item.key)}>{item.label}</button>)}
+      {METRICS.map((item) => <button key={item.key} type="button" role="radio" aria-checked={metric === item.key} className={metric === item.key ? 'active' : ''} onClick={() => setMetric(item.key)}>{tr(item.label)}</button>)}
     </div>
 
     {problem ? <div className="account-usage-error" role="alert">{problem}</div> : <>
