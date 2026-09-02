@@ -37,8 +37,8 @@ use chatcmd_storage::SqliteRepository;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock, broadcast};
 use time::{OffsetDateTime, UtcOffset, format_description::well_known::Rfc3339};
+use tokio::sync::{Mutex, RwLock, broadcast};
 
 use crate::websocket::{AppEvent, AuthUsageCache};
 pub(crate) use activity_control::{ActivityRegistry, StopActivityResult};
@@ -199,7 +199,18 @@ impl RuntimeApi for RuntimeHost {
         context: OperationContext,
         arguments: Value,
     ) -> BoxFuture<'a, RuntimeResult<Value>> {
-        Box::pin(async move { self.call_persisted(tool, context, arguments).await })
+        Box::pin(async move {
+            let request_id = context.request_id.clone();
+            let telemetry_arguments = arguments.clone();
+            let output = self.call_persisted(tool, context, arguments).await?;
+            crate::api::statistics::record_mcp_success(
+                &request_id,
+                tool,
+                &telemetry_arguments,
+                &output,
+            );
+            Ok(output)
+        })
     }
 
     fn local_device(&self) -> DeviceDescriptor {

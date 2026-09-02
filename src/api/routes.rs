@@ -152,7 +152,7 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/updates/restart", post(restart_update))
         .route("/auth/info", get(auth::info))
         .route("/auth/change-password", post(auth::change_password))
-        .route("/auth/logout", post(auth::logout))
+        .route("/auth/logout", post(super::statistics::logout))
         .route("/backend/{*path}", any(backend::proxy))
         .layer(middleware::from_fn_with_state(
             state.clone(),

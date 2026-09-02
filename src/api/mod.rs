@@ -17,6 +17,7 @@ mod routes;
 mod sessions;
 mod settings;
 mod skills;
+pub(crate) mod statistics;
 mod subagent_fallback;
 mod subagents;
 mod system;
@@ -57,6 +58,7 @@ pub(crate) use task_delete::start_data_cleanup_scheduler;
 
 pub(crate) async fn warm_auth_runtime_cache(state: &Arc<AppState>) {
     auth::warm_runtime_cache(state).await;
+    statistics::start_flush_scheduler(state.clone());
 }
 
 pub(crate) fn iso_now() -> String {
