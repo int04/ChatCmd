@@ -29,6 +29,7 @@ export function useLoad<T>(loader: () => Promise<T>, dependencies: unknown[] = [
       const result = await loader();
       if (generation !== requestGenerationRef.current) return;
       setData(result);
+      setLoading(false);
       setError('');
     } catch {
       // Background refresh must preserve the currently visible data and error state.
