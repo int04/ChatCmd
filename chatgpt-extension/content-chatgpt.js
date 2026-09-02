@@ -1,3 +1,4 @@
+const AUTO_RETRY_ENABLED = false;
 const MAX_AUTO_RETRIES = 2;
 const RAW_BUBBLE_STABILITY_MS = 1_200;
 const SILENT_RETRY_GRACE_MS = 8_000;
@@ -398,7 +399,7 @@ async function waitForAssistant(previousCount, requestId, submittedContent) {
         : idleMs >= SILENT_RETRY_GRACE_MS && !hasNewAssistantText
           ? 'send_ready_without_final'
           : null;
-      if (reason) {
+      if (reason && AUTO_RETRY_ENABLED) {
         lastRequestState = await requestState(requestId);
         if (!lastRequestState.known || lastRequestState.hasFinalResponse || !lastRequestState.active) {
           await delay(350);

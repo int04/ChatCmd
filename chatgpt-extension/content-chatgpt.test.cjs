@@ -121,37 +121,35 @@ test('a superseded request monitor exits instead of touching the newer request',
   assert.equal(context.__submitCalls, 0);
 });
 
-test('automatic retry resubmits the original prompt when no progress was observed', async () => {
+test('automatic retry is temporarily disabled when no progress was observed', async () => {
   const context = loadBridge();
   prepareMonitor(context, { known: true, running: true, stopRequested: false, hasFinalResponse: false, active: true }, { text: '' });
-  await assert.rejects(vm.runInContext("waitForAssistant(0, 'request-1', 'ORIGINAL PROMPT')", context), /2 lần tự động gửi lại/i);
-  assert.equal(context.__submitCalls, 2);
-  assert.deepEqual(Array.from(context.__composerWrites), ['ORIGINAL PROMPT', 'ORIGINAL PROMPT']);
+  await assert.rejects(vm.runInContext("waitForAssistant(0, 'request-1', 'ORIGINAL PROMPT')", context), /Quá lâu/i);
+  assert.equal(context.__submitCalls, 0);
+  assert.deepEqual(Array.from(context.__composerWrites), []);
 });
 
-test('an interruption after execution progress asks ChatGPT to continue without redoing work', async () => {
+test('an interruption after execution progress does not send a continuation prompt while retry is disabled', async () => {
   const context = loadBridge();
   prepareMonitor(context, { known: true, running: true, stopRequested: false, hasFinalResponse: false, active: true }, { text: '', threadError: true });
   context.__stopButton = () => context.__now < 3_000 ? {} : null;
-  await assert.rejects(vm.runInContext("waitForAssistant(0, 'request-1', 'ORIGINAL PROMPT')", context), /2 lần tự động gửi lại/i);
-  assert.equal(context.__submitCalls, 2);
-  assert.equal(context.__composerWrites.length, 2);
-  assert.match(context.__composerWrites[0], /Tôi vừa bị gián đoạn kết nối/);
-  assert.doesNotMatch(context.__composerWrites[0], /ORIGINAL PROMPT/);
+  await assert.rejects(vm.runInContext("waitForAssistant(0, 'request-1', 'ORIGINAL PROMPT')", context), /Quá lâu/i);
+  assert.equal(context.__submitCalls, 0);
+  assert.equal(context.__composerWrites.length, 0);
 });
 
-test('partial assistant text followed by an error also uses the continuation prompt', async () => {
+test('partial assistant text followed by an error does not send the continuation prompt while retry is disabled', async () => {
   const context = loadBridge();
   prepareMonitor(context, { known: true, running: true, stopRequested: false, hasFinalResponse: false, active: true }, { text: 'Đã sửa một phần', threadError: true });
-  await assert.rejects(vm.runInContext("waitForAssistant(0, 'request-1', 'ORIGINAL PROMPT')", context), /2 lần tự động gửi lại/i);
-  assert.match(context.__composerWrites[0], /không làm lại những phần đã xong/);
+  await assert.rejects(vm.runInContext("waitForAssistant(0, 'request-1', 'ORIGINAL PROMPT')", context), /Quá lâu/i);
+  assert.equal(context.__composerWrites.length, 0);
 });
 
-test('a ChatGPT error retries while the request is active and send is ready', async () => {
+test('a ChatGPT error does not retry while automatic retry is disabled', async () => {
   const context = loadBridge();
   prepareMonitor(context, { known: true, running: true, stopRequested: false, hasFinalResponse: false, active: true }, { text: '', threadError: true });
-  await assert.rejects(vm.runInContext("waitForAssistant(0, 'request-1', 'RETRY ME')", context), /2 lần tự động gửi lại/i);
-  assert.equal(context.__submitCalls, 2);
+  await assert.rejects(vm.runInContext("waitForAssistant(0, 'request-1', 'RETRY ME')", context), /Quá lâu/i);
+  assert.equal(context.__submitCalls, 0);
 });
 
 test('unknown backend state never authorizes an automatic resend', async () => {
