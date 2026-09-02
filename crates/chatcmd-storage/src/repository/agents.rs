@@ -111,15 +111,42 @@ impl McpAgentStore for SqliteRepository {
     }
 
     async fn delete_agent(&self, id: &AgentId) -> Result<(), StorageError> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .map_err(|error| backend("begin MCP agent deletion", error))?;
+        let active_bridge_requests: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM chatgpt_bridge_requests WHERE agent_id=? AND status IN ('queued','running','stop_requested')",
+        )
+        .bind(id.as_str())
+        .fetch_one(&mut *transaction)
+        .await
+        .map_err(|error| backend("check active ChatGPT requests for MCP agent", error))?;
+        if active_bridge_requests > 0 {
+            return Err(StorageError::Conflict(format!(
+                "delete MCP agent: agent {id} still has active ChatGPT requests"
+            )));
+        }
+
+        sqlx::query("DELETE FROM chatgpt_bridge_requests WHERE agent_id=?")
+            .bind(id.as_str())
+            .execute(&mut *transaction)
+            .await
+            .map_err(|error| backend("delete ChatGPT request history for MCP agent", error))?;
         let affected = sqlx::query("DELETE FROM mcp_agents WHERE id=?")
             .bind(id.as_str())
-            .execute(&self.pool)
+            .execute(&mut *transaction)
             .await
             .map_err(|error| map_sqlx_conflict("delete MCP agent", error))?
             .rows_affected();
         if affected == 0 {
             return Err(StorageError::NotFound(format!("MCP agent {id}")));
         }
+        transaction
+            .commit()
+            .await
+            .map_err(|error| backend("commit MCP agent deletion", error))?;
         Ok(())
     }
 }

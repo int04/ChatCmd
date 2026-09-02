@@ -159,8 +159,28 @@ async fn agent_update_allowlist_and_delete_are_complete() {
             .expect("read allowlist"),
         vec!["tool-device-list"]
     );
+    sqlx::query("INSERT INTO chatgpt_bridge_requests(id,task_id,turn_id,agent_id,model,user_content,submitted_content,status,created_at_ms,updated_at_ms,completed_at_ms) VALUES(?,NULL,?,?,?,?,?,'completed',?,?,?)")
+        .bind("bridge-delete-agent")
+        .bind("turn-delete-agent")
+        .bind(id.as_str())
+        .bind("gpt-test")
+        .bind("hello")
+        .bind("hello")
+        .bind(1_i64)
+        .bind(2_i64)
+        .bind(2_i64)
+        .execute(repository.pool())
+        .await
+        .expect("insert completed bridge request");
     repository.delete_agent(&id).await.expect("delete agent");
     assert!(repository.agent(&id).await.expect("read deleted").is_none());
+    let bridge_requests: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM chatgpt_bridge_requests WHERE id='bridge-delete-agent'",
+    )
+    .fetch_one(repository.pool())
+    .await
+    .expect("count bridge requests");
+    assert_eq!(bridge_requests, 0);
 }
 
 #[tokio::test]
