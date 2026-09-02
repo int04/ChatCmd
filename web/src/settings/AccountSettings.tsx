@@ -5,6 +5,7 @@ import { useAuth } from '../auth';
 import { tr } from '../i18n';
 import { billingTr, formatVnd } from './billingI18n';
 import { PlanPurchaseModal } from './PlanPurchaseModal';
+import { AccountUsage } from './AccountUsage';
 import { TopUpModal } from './TopUpModal';
 
 type AccountTab = 'info' | 'giftcode' | 'password';
@@ -147,6 +148,7 @@ export function AccountSettings() {
       {!isFree && user.plan.expriAt && <AccountValue label={tr('Plan time remaining')} value={planRemaining ?? formatDate(user.plan.expriAt)} hint={formatDate(user.plan.expriAt)} />}
       {isFree && <AccountValue label={tr('Use until')} value={formatDate(user.useNextTime)} />}
       {isFree && <AccountValue label={tr('Next reset')} value={formatDate(user.useNextReset)} />}
+      <div className="account-info-usage"><AccountUsage /></div>
     </div>}
 
     {activeTab === 'giftcode' && <div className="account-giftcode-panel" role="tabpanel">

@@ -19,6 +19,23 @@ export interface GiftCodeRedeemResult {
 }
 
 export interface BillingBalance { vnd: number }
+export interface StatisticRow {
+  id: number;
+  createdAt: string;
+  updatedAt: string;
+  countTurn: number;
+  countConversion: number;
+  countAgent: number;
+  countToolUse: number;
+  countSkill: number;
+}
+export interface SkillUsageRow {
+  id: number;
+  createdAt: string;
+  updatedAt: string;
+  skillName: string;
+  countUse: number;
+}
 export interface ElevationStatus { supported: boolean; elevated: boolean }
 export interface PaymentCreateResult {
   success: true;
@@ -126,6 +143,8 @@ export const api = {
   register: (email: string, password: string) => request<AuthResult>('/api/local/auth/register', { method: 'POST', body: json({ email, password }) }),
   authInfo: () => request<AuthInfo>('/api/local/auth/info'),
   billingBalance: () => request<BillingBalance>(backendPath('billing/balance')),
+  currentMonthStatistics: () => request<StatisticRow[]>(backendPath('statistics/statistic')),
+  skillUsage: () => request<SkillUsageRow[]>(backendPath('statistics/skill-use')),
   createPayment: (amount: number, content: string) => request<PaymentCreateResult>('/api/local/payment/create', { method: 'POST', body: json({ amount, content }) }),
   servicePlans: () => request<ServicePlan[]>(backendPath('plans')),
   checkDeal: (code: string, planId: number) => request<DealCheckResult>(backendPath('deals/check'), { method: 'POST', body: json({ code, planId }) }),
