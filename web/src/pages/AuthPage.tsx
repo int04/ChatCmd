@@ -51,7 +51,6 @@ export function AuthPage({ mode }: { mode: Mode }) {
         <button className="button primary auth-submit" disabled={submitting || loading} type="submit">{submitting ? 'Đang xử lý…' : mode === 'login' ? 'Đăng nhập' : 'Đăng ký'}</button>
       </form>
       <p className="auth-switch">{mode === 'login' ? <>Chưa có tài khoản? <Link to="/register">Đăng ký</Link></> : <>Đã có tài khoản? <Link to="/login">Đăng nhập</Link></>}</p>
-      <p className="auth-security-note">Access token và refresh token chỉ được lưu ở tiến trình Rust cục bộ, không được lưu trong trình duyệt.</p>
     </section>
   </main>;
 }
