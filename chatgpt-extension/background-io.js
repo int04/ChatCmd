@@ -123,6 +123,9 @@ async function bridgeRequestState(requestId, tabId) {
   if (!context?.localBaseUrl || !context?.tabId || context.tabId !== tabId) {
     return { known: false, running: null, stopRequested: false, hasFinalResponse: false, active: null };
   }
+  if (context.mode === 'subagent') {
+    return { known: true, running: true, stopRequested: false, hasFinalResponse: false, active: true };
+  }
   const request = await getJson(context.localBaseUrl, `/api/local/chatgpt/requests/${encodeURIComponent(requestId)}`);
   const running = request?.status === 'running';
   const stopRequested = request?.status === 'stop_requested';
@@ -144,7 +147,36 @@ async function handleProgress(message, tabId) {
     await bindConversationTab(identity.conversationId, context.tabId, {
       requestId: message.requestId,
       localBaseUrl: context.localBaseUrl,
+      mode: context.mode,
+      subagentId: context.subagentId,
+      attempt: context.attempt,
     });
+  }
+  if (context.mode === 'subagent') {
+    if (message.stage === 'started') {
+      await postJson(context.localBaseUrl, `/api/local/subagents/${encodeURIComponent(context.subagentId)}/fallback/started`, {
+        attempt: context.attempt,
+        conversationId: identity.conversationId,
+        conversationUrl: identity.conversationUrl,
+      });
+      return { stage: 'started' };
+    }
+    if (message.stage === 'browser-completed' || message.stage === 'result') {
+      const status = message.stage === 'browser-completed' ? 'completed' : (message.status || 'failed');
+      const result = await postJson(context.localBaseUrl, `/api/local/subagents/${encodeURIComponent(context.subagentId)}/fallback/result`, {
+        attempt: context.attempt,
+        status,
+        conversationId: identity.conversationId,
+        conversationUrl: identity.conversationUrl,
+        assistantContent: message.assistantContent,
+        errorMessage: message.errorMessage,
+      });
+      await releaseRequest(message.requestId);
+      await chrome.storage.session.remove(`${SUBAGENT_PREFIX}${context.subagentId}`);
+      if (context.tabId) setTimeout(() => void safeTab(context.tabId).then((tab) => tab?.id && chrome.tabs.remove(tab.id).catch(() => undefined)), 100);
+      return { stage: message.stage, completed: result?.completed === true, retryScheduled: result?.retryScheduled === true };
+    }
+    throw new Error(`ChatGPT sub-agent progress stage không được hỗ trợ: ${message.stage || 'missing'}.`);
   }
   if (message.stage === 'started') {
     await postJson(context.localBaseUrl, `/api/local/chatgpt/bridge/${encodeURIComponent(message.requestId)}/started`, {

@@ -21,7 +21,7 @@ impl ApprovalDecision for AllowApproval {
     }
 }
 
-pub(super) async fn test_host() -> (RuntimeHost, String, TempDir) {
+pub(crate) async fn test_host() -> (RuntimeHost, String, TempDir) {
     let directory = TempDir::new().expect("temporary directory");
     let (repository, bootstrap) = SqliteRepository::open(&directory.path().join("chatcmd.db"), 2)
         .await

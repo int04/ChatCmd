@@ -108,6 +108,25 @@ impl crate::RuntimeApi for FakeRuntime {
             Ok(())
         })
     }
+
+    fn request_subagent_fallback<'a>(
+        &'a self,
+        parent_context: &'a OperationContext,
+        registration: &'a Value,
+        delegated_prompt: &'a str,
+    ) -> chatcmd_runtime::BoxFuture<'a, RuntimeResult<Value>> {
+        Box::pin(async move {
+            self.calls.lock().expect("calls").push((
+                "request_subagent_fallback".to_owned(),
+                parent_context.clone(),
+                json!({
+                    "registration": registration,
+                    "delegatedPrompt": delegated_prompt,
+                }),
+            ));
+            Ok(json!({ "attempt": 1, "maxAttempts": 3 }))
+        })
+    }
 }
 
 #[derive(Clone, Default)]
@@ -493,7 +512,7 @@ async fn no_sampling_prefers_parent_task_project_folder_for_shell_workdir() {
 }
 
 #[tokio::test]
-async fn no_sampling_client_never_starts_local_executor() {
+async fn no_sampling_client_queues_extension_fallback_without_failing_child() {
     use rmcp::{ServiceExt as _, model::CallToolRequestParams};
 
     let runtime = FakeRuntime::default();
@@ -537,15 +556,16 @@ async fn no_sampling_client_never_starts_local_executor() {
     let structured = result.structured_content.expect("structured result");
     assert_eq!(
         structured.get("dispatchMode"),
-        Some(&json!("samplingUnavailable"))
+        Some(&json!("extensionFallback"))
     );
     assert_eq!(
         structured.get("nativeDelegationRequired"),
-        Some(&json!(true))
+        Some(&json!(false))
     );
-    assert_eq!(structured.get("status"), Some(&json!("failed")));
+    assert_eq!(structured.get("status"), Some(&json!("pending")));
     assert_eq!(structured.get("workerStarted"), Some(&json!(false)));
-    assert!(structured.get("executor").is_none());
+    assert_eq!(structured.get("fallbackRequested"), Some(&json!(true)));
+    assert_eq!(structured.get("fallbackAttempt"), Some(&json!(1)));
 
     let calls = recorded.lock().expect("recorded");
     let names = calls
@@ -553,7 +573,18 @@ async fn no_sampling_client_never_starts_local_executor() {
         .map(|(name, _, _)| name.as_str())
         .collect::<Vec<_>>();
     assert!(names.contains(&"agent_subagent_start"));
-    assert!(names.contains(&"fail_subagent"));
+    assert!(names.contains(&"request_subagent_fallback"));
+    assert!(!names.contains(&"fail_subagent"));
+    let fallback = calls
+        .iter()
+        .find(|(name, _, _)| name == "request_subagent_fallback")
+        .expect("fallback request");
+    assert_eq!(fallback.1.task_id.as_deref(), Some("task-parent"));
+    assert_eq!(fallback.1.turn_id.as_deref(), Some("turn-parent"));
+    assert_eq!(
+        fallback.2.pointer("/delegatedPrompt"),
+        Some(&json!("Read native.rs\n\nCMDGPT_SUBAGENT_ID=subagent-test"))
+    );
     for forbidden in [
         "agent_user_message",
         "workspace_roots",

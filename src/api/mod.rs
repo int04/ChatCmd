@@ -17,6 +17,7 @@ mod routes;
 mod sessions;
 mod settings;
 mod skills;
+mod subagent_fallback;
 mod subagents;
 mod system;
 mod task_controls;

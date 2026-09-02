@@ -70,6 +70,13 @@ pub trait RuntimeApi: Send + Sync {
         child_task_id: &'a str,
         message: &'a str,
     ) -> BoxFuture<'a, RuntimeResult<()>>;
+
+    fn request_subagent_fallback<'a>(
+        &'a self,
+        parent_context: &'a OperationContext,
+        registration: &'a Value,
+        delegated_prompt: &'a str,
+    ) -> BoxFuture<'a, RuntimeResult<Value>>;
 }
 
 /// Shared typed argument envelope. Unknown fields remain structured and never become shell text.

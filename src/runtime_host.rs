@@ -13,6 +13,9 @@ mod inputs;
 mod persistence;
 mod plan_prompt;
 mod queued_messages;
+mod subagent_fallback;
+#[cfg(test)]
+mod subagent_tests;
 mod subagents;
 mod turn_file_changes;
 mod user_message;
@@ -21,7 +24,7 @@ mod user_message_path_tests;
 #[cfg(test)]
 mod user_message_project_tests;
 #[cfg(test)]
-mod user_message_tests;
+pub(crate) mod user_message_tests;
 
 use chatcmd_core::{LocalDevice, Task, TaskId, TaskStore as _};
 use chatcmd_mcp::RuntimeApi;
@@ -90,6 +93,23 @@ impl RuntimeHost {
         self.plan_prompts.clone()
     }
 
+    #[cfg(test)]
+    pub(crate) fn test_app_state(&self, database_path: String) -> crate::websocket::AppState {
+        crate::websocket::AppState::new(
+            self.repository.clone(),
+            database_path,
+            "127.0.0.1".to_owned(),
+            0,
+            self.device.clone(),
+            self.shell.clone(),
+            self.skills.clone(),
+            self.activity_registry(),
+            self.plan_prompt_registry(),
+            crate::backend_api::BackendApiClient::new().expect("configure test backend API"),
+            self.events.clone(),
+        )
+    }
+
     pub(super) fn publish_event(
         &self,
         id: String,
@@ -153,6 +173,18 @@ impl RuntimeApi for RuntimeHost {
         message: &'a str,
     ) -> BoxFuture<'a, RuntimeResult<()>> {
         Box::pin(async move { self.fail_subagent_worker(child_task_id, message).await })
+    }
+
+    fn request_subagent_fallback<'a>(
+        &'a self,
+        parent_context: &'a OperationContext,
+        registration: &'a Value,
+        delegated_prompt: &'a str,
+    ) -> BoxFuture<'a, RuntimeResult<Value>> {
+        Box::pin(async move {
+            self.request_subagent_extension_fallback(parent_context, registration, delegated_prompt)
+                .await
+        })
     }
 }
 

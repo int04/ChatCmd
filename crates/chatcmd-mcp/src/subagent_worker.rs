@@ -66,17 +66,19 @@ pub(super) async fn dispatch_registered_subagent(
         .is_some_and(|info| info.capabilities.sampling.is_some());
 
     if !sampling {
-        let message = "ChatGPT/MCP host does not advertise model sampling; ChatCMD will not start any local Codex fallback. Sub-agent delegation is available only when the connected ChatGPT host supports sampling or provides its own native delegation.";
-        let _ = runtime.fail_subagent(&child_task_id, message).await;
+        let fallback = runtime
+            .request_subagent_fallback(&parent_context, &registration, &delegated_prompt)
+            .await?;
         return Ok(enrich_registration(
             registration,
             json!({
-                "dispatchMode": "samplingUnavailable",
-                "nativeDelegationRequired": true,
-                "status": "failed",
+                "dispatchMode": "extensionFallback",
+                "nativeDelegationRequired": false,
+                "status": "pending",
                 "workerStarted": false,
-                "startupError": message,
-                "instruction": "Do not start a local executor. Continue in the parent agent unless the ChatGPT host can delegate natively."
+                "fallbackRequested": true,
+                "fallbackAttempt": fallback.get("attempt").cloned().unwrap_or(Value::Null),
+                "instruction": "ChatCMD queued this child for the ChatGPT browser extension. Do not duplicate the delegated work in the parent. Call agent_subagent_wait until the child finishes or the fallback exhausts its retries."
             }),
         ));
     }

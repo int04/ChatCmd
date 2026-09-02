@@ -63,6 +63,20 @@ impl RuntimeApi for CatalogRuntime {
             ))
         })
     }
+
+    fn request_subagent_fallback<'a>(
+        &'a self,
+        _parent_context: &'a OperationContext,
+        _registration: &'a Value,
+        _delegated_prompt: &'a str,
+    ) -> BoxFuture<'a, RuntimeResult<Value>> {
+        Box::pin(async {
+            Err(RuntimeError::new(
+                "unexpected_subagent_fallback",
+                "catalog test must only list tools",
+            ))
+        })
+    }
 }
 
 async fn list_tools_from_fresh_connection() -> Vec<String> {

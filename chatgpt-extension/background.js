@@ -3,6 +3,7 @@ const CONVERSATION_PREFIX = 'chatcmd-conversation:';
 const CONVERSATION_ALIAS_PREFIX = 'chatcmd-conversation-alias:';
 const RETURN_TAB_PREFIX = 'chatcmd-return-tab:';
 const PREPARED_TAB_PREFIX = 'chatcmd-prepared-tab:';
+const SUBAGENT_PREFIX = 'chatcmd-subagent:';
 const LOG_KEY = 'chatcmd-extension-logs';
 const MAX_LOGS = 200;
 const CHATGPT_HOME = 'https://chatgpt.com/';
@@ -31,6 +32,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: true });
       } catch (error) { sendResponse({ ok: false, error: errorMessage(error) }); }
       return false;
+    }
+    if (message.action === 'subagent-send') {
+      try {
+        const localBaseUrl = localOrigin(message.localBaseUrl);
+        void startSubagentRequest({ ...message, localBaseUrl })
+          .then(() => sendResponse({ ok: true }))
+          .catch(async (error) => {
+            await reportSubagentFailure(message.subagentId, message.attempt, localBaseUrl, error);
+            sendResponse({ ok: false, error: errorMessage(error) });
+          });
+      } catch (error) { sendResponse({ ok: false, error: errorMessage(error) }); }
+      return true;
+    }
+    if (message.action === 'subagent-close') {
+      void closeSubagentRequest(message.subagentId)
+        .then(() => sendResponse({ ok: true }))
+        .catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
+      return true;
     }
     if (message.action === 'open-tab') {
       void openConversationTab(message.conversationUrl, sender.tab?.id).then(() => sendResponse({ ok: true })).catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
@@ -119,6 +138,87 @@ async function startRequest(message) {
   });
 }
 
+async function startSubagentRequest(message) {
+  if (!message.subagentId || !message.childTaskId || !message.submittedContent || !Number.isInteger(Number(message.attempt))) {
+    throw new Error('Yêu cầu fallback sub-agent không hợp lệ.');
+  }
+  const attempt = Number(message.attempt);
+  const subagentKey = `${SUBAGENT_PREFIX}${message.subagentId}`;
+  const stored = await chrome.storage.session.get(subagentKey);
+  const existing = stored[subagentKey];
+  if (existing?.attempt === attempt && existing?.tabId && await safeTab(existing.tabId)) return;
+  if (existing) await closeSubagentRequest(message.subagentId);
+
+  const tab = await chrome.tabs.create({ url: CHATGPT_HOME, active: false });
+  if (!tab?.id) throw new Error('Không thể mở tab ChatGPT cho sub-agent.');
+  await waitForTab(tab.id);
+  const requestId = `subagent:${message.subagentId}:${attempt}`;
+  await chrome.storage.session.set({
+    [requestKey(requestId)]: {
+      mode: 'subagent',
+      localBaseUrl: message.localBaseUrl,
+      tabId: tab.id,
+      subagentId: message.subagentId,
+      childTaskId: message.childTaskId,
+      attempt,
+      conversationUrl: null,
+    },
+    [subagentKey]: { requestId, tabId: tab.id, attempt },
+  });
+  await sendToChatGpt(tab.id, {
+    type: 'chatcmd-chatgpt-run',
+    requestId,
+    submittedContent: message.submittedContent,
+    model: message.model || 'Auto',
+  });
+}
+
+async function closeSubagentRequest(subagentId) {
+  if (!subagentId) return;
+  const key = `${SUBAGENT_PREFIX}${subagentId}`;
+  const stored = await chrome.storage.session.get(key);
+  const binding = stored[key];
+  if (!binding) return;
+  const context = binding.requestId ? await requestContext(binding.requestId) : null;
+  const tab = binding.tabId ? await safeTab(binding.tabId) : null;
+  const conversationUrl = tab?.url || '';
+  const conversationId = conversationIdFromUrl(conversationUrl);
+  if (conversationId && context?.mode === 'subagent' && context.localBaseUrl && context.attempt) {
+    try {
+      await postJson(context.localBaseUrl, `/api/local/subagents/${encodeURIComponent(subagentId)}/fallback/started`, {
+        attempt: Number(context.attempt),
+        conversationId,
+        conversationUrl,
+      });
+    } catch { /* the MCP claim already owns completion; identity sync is best effort */ }
+  }
+  if (binding.requestId) await releaseRequest(binding.requestId);
+  await chrome.storage.session.remove(key);
+  if (tab?.id) {
+    try { await chrome.tabs.remove(tab.id); } catch { /* tab already closed */ }
+  }
+}
+
+async function reportSubagentFailure(subagentId, attempt, localBaseUrl, error) {
+  if (!subagentId || !attempt || !localBaseUrl) return;
+  const key = `${SUBAGENT_PREFIX}${subagentId}`;
+  const stored = await chrome.storage.session.get(key);
+  const binding = stored[key];
+  const requestId = binding?.requestId || `subagent:${subagentId}:${Number(attempt)}`;
+  await releaseRequest(requestId);
+  await chrome.storage.session.remove(key);
+  if (binding?.tabId && await safeTab(binding.tabId)) {
+    try { await chrome.tabs.remove(binding.tabId); } catch { /* tab already closed */ }
+  }
+  try {
+    await postJson(localBaseUrl, `/api/local/subagents/${encodeURIComponent(subagentId)}/fallback/result`, {
+      attempt: Number(attempt),
+      status: 'failed',
+      errorMessage: errorMessage(error),
+    });
+  } catch { /* the local app may already be closed */ }
+}
+
 async function stopRequest(message) {
   localOrigin(message.localBaseUrl);
   if (!message.requestId) throw new Error('Thiếu request ID cần dừng.');
@@ -145,6 +245,11 @@ async function reconcileRequest(requestId) {
 
 async function reportFailure(requestId, localBaseUrl, error) {
   if (!requestId) return;
+  const context = await requestContext(requestId);
+  if (context?.mode === 'subagent') {
+    await reportSubagentFailure(context.subagentId, context.attempt, context.localBaseUrl || localBaseUrl, error);
+    return;
+  }
   try {
     await postJson(localBaseUrl, `/api/local/chatgpt/bridge/${encodeURIComponent(requestId)}/result`, {
       status: 'failed',
@@ -170,6 +275,7 @@ async function handleClosedTab(tabId) {
     if (!value || typeof value !== 'object' || value.tabId !== tabId) continue;
     if (key.startsWith(PREPARED_TAB_PREFIX)) removals.push(key);
     if (key.startsWith(CONVERSATION_PREFIX)) removals.push(key);
+    if (key.startsWith(SUBAGENT_PREFIX)) removals.push(key);
     if (key.startsWith(REQUEST_PREFIX) && value.localBaseUrl) {
       const requestId = key.slice(REQUEST_PREFIX.length);
       failures.push(reportFailure(requestId, value.localBaseUrl, new Error('Tab ChatGPT liên kết với cuộc trò chuyện đã bị đóng. Mở lại cuộc trò chuyện ChatGPT để tiếp tục.')));
@@ -249,10 +355,18 @@ async function refreshConversationAliases(tabId, tabUrl) {
     });
     if (binding.requestId && binding.localBaseUrl) {
       try {
-        await postJson(binding.localBaseUrl, `/api/local/chatgpt/bridge/${encodeURIComponent(binding.requestId)}/identity`, {
-          conversationId: liveId,
-          conversationUrl: tabUrl,
-        });
+        if (binding.mode === 'subagent' && binding.subagentId && binding.attempt) {
+          await postJson(binding.localBaseUrl, `/api/local/subagents/${encodeURIComponent(binding.subagentId)}/fallback/started`, {
+            attempt: Number(binding.attempt),
+            conversationId: liveId,
+            conversationUrl: tabUrl,
+          });
+        } else {
+          await postJson(binding.localBaseUrl, `/api/local/chatgpt/bridge/${encodeURIComponent(binding.requestId)}/identity`, {
+            conversationId: liveId,
+            conversationUrl: tabUrl,
+          });
+        }
         await logExtension('info', 'background', `Đã nâng conversation ${boundId} thành ID thật ${liveId}.`);
       } catch (error) {
         await logExtension('warn', 'background', `Chưa đồng bộ được ChatGPT conversation ID thật ${liveId}: ${errorMessage(error)}`);
@@ -388,7 +502,7 @@ async function findAvailableNewConversationTab() {
   const stored = await chrome.storage.session.get(null);
   const reservedTabIds = new Set(
     Object.entries(stored)
-      .filter(([key]) => key.startsWith(CONVERSATION_PREFIX) || key.startsWith(PREPARED_TAB_PREFIX))
+      .filter(([key]) => key.startsWith(CONVERSATION_PREFIX) || key.startsWith(PREPARED_TAB_PREFIX) || key.startsWith(SUBAGENT_PREFIX))
       .map(([, value]) => value?.tabId)
       .filter(Boolean),
   );

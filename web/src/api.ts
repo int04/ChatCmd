@@ -47,6 +47,29 @@ export interface DealCheckResult {
   discountAmount: number;
   finalPrice: number;
 }
+export interface SubagentFallbackRequest {
+  subagentId: string;
+  parentTaskId?: string;
+  parentTurnId?: string;
+  childTaskId: string;
+  name: string;
+  submittedContent: string;
+  attempt: number;
+  maxAttempts: number;
+  conversationId?: string | null;
+  conversationUrl?: string | null;
+}
+
+export interface SubagentFallbackResult {
+  accepted: boolean;
+  completed?: boolean;
+  retryScheduled?: boolean;
+  exhausted?: boolean;
+  attempt?: number;
+  maxAttempts?: number;
+  reason?: string;
+}
+
 export interface PlanPurchaseResult {
   success: boolean;
   planId: number;
@@ -149,6 +172,8 @@ export const api = {
   reorderChatGptQueue: (taskId: string, messageIds: string[]) => request<void>(`/api/local/chatgpt/tasks/${item(taskId)}/queue/order`, { method: 'PUT', body: json({ messageIds }) }),
   tasks: (cursor?: string, limit = 10, projectFolder?: string) => request<TaskPage>(`/api/local/tasks?limit=${limit}${cursor ? `&cursor=${item(cursor)}` : ''}${projectFolder ? `&projectFolder=${item(projectFolder)}` : ''}`),
   pendingConversationApprovals: () => request<Task[]>('/api/local/tasks/approvals/pending'),
+  pendingSubagentFallbacks: () => request<SubagentFallbackRequest[]>('/api/local/subagents/fallback/pending'),
+  reportSubagentFallbackResult: (id: string, input: { attempt: number; status: 'failed' | 'stopped' | 'completed'; errorMessage?: string; assistantContent?: string; conversationId?: string; conversationUrl?: string }) => request<SubagentFallbackResult>(`/api/local/subagents/${item(id)}/fallback/result`, { method: 'POST', body: json(input) }),
   pendingPlanQuestions: () => request<PlanQuestion[]>('/api/local/plan/questions/pending'),
   answerPlanQuestion: (id: string, answer: { kind: 'option'; optionIndex: 1 | 2 } | { kind: 'custom'; text: string }) => request<{ accepted: boolean; questionId: string; taskId: string; turnId: string }>(`/api/local/plan/questions/${item(id)}/answer`, { method: 'POST', body: json(answer) }),
   task: (id: string, cursor?: string, limit = 2) => request<TaskDetail>(`/api/local/tasks/${item(id)}?limit=${limit}${cursor ? `&cursor=${item(cursor)}` : ''}`),

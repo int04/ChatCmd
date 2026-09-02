@@ -14,8 +14,8 @@ use crate::websocket::AppState;
 use super::{
     Problem, agents::*, auth, backend, chatgpt::*, chatgpt_completion::*, chatgpt_queue::*, crypto,
     data::*, folders::*, overview::*, payment::*, plan_questions::*, sessions::*, settings::*,
-    skills::*, system::*, task_controls::*, task_delete::*, task_views::*, tunnels::*, updates::*,
-    workspaces::*,
+    skills::*, subagent_fallback::*, system::*, task_controls::*, task_delete::*, task_views::*,
+    tunnels::*, updates::*, workspaces::*,
 };
 
 pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
@@ -84,6 +84,18 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route(
             "/chatgpt/bridge/{request_id}/browser-completed",
             post(bridge_browser_completed),
+        )
+        .route(
+            "/subagents/fallback/pending",
+            get(pending_subagent_fallbacks),
+        )
+        .route(
+            "/subagents/{id}/fallback/started",
+            post(subagent_fallback_started),
+        )
+        .route(
+            "/subagents/{id}/fallback/result",
+            post(subagent_fallback_result),
         )
         .route("/tasks", get(tasks))
         .route(

@@ -12,6 +12,7 @@ const SUBAGENT_MARKER_PREFIX: &str = "CMDGPT_SUBAGENT_ID=";
 const MAX_SUBAGENT_NAME_CHARS: usize = 120;
 const MAX_SUBAGENT_REQUEST_CHARS: usize = 20_000;
 const UNCLAIMED_SUBAGENT_TIMEOUT_MS: i64 = 60_000;
+const EXTENSION_UNCLAIMED_SUBAGENT_TIMEOUT_MS: i64 = 180_000;
 
 impl RuntimeHost {
     pub(super) async fn register_subagent(
@@ -154,7 +155,7 @@ impl RuntimeHost {
         let Some(subagent_id) = first_user_message.and_then(extract_subagent_id) else {
             return Ok(());
         };
-        let row = sqlx::query("SELECT r.parent_task_id,r.parent_turn_id,r.name,r.child_task_id,r.status AS registered_status FROM subagent_runs r JOIN tasks parent ON parent.id=r.parent_task_id WHERE r.id=? AND parent.agent_id=? LIMIT 1")
+        let row = sqlx::query("SELECT r.parent_task_id,r.parent_turn_id,r.name,r.child_task_id,r.status AS registered_status,r.fallback_state FROM subagent_runs r JOIN tasks parent ON parent.id=r.parent_task_id WHERE r.id=? AND parent.agent_id=? LIMIT 1")
             .bind(&subagent_id)
             .bind(&context.agent_id)
             .fetch_optional(self.repository.pool())
@@ -190,16 +191,47 @@ impl RuntimeHost {
                 format!("delegated sub-agent is already {registered_status}"),
             ));
         }
+        if registered_status == "running" {
+            return Ok(());
+        }
         let parent_turn_id = row.get::<String, _>("parent_turn_id");
         let name = row.get::<String, _>("name");
+        let fallback_state = row.get::<String, _>("fallback_state");
+        let fallback_claim = matches!(fallback_state.as_str(), "requested" | "started");
         let now = now_ms();
-        sqlx::query("UPDATE subagent_runs SET child_task_id=?,status='running',updated_at_ms=?,completed_at_ms=NULL WHERE id=?")
+        let claimed = sqlx::query("UPDATE subagent_runs SET child_task_id=?,status='running',fallback_state=CASE WHEN fallback_state IN ('requested','started') THEN 'claimed' ELSE fallback_state END,updated_at_ms=?,completed_at_ms=NULL WHERE id=? AND status='pending' AND (child_task_id IS NULL OR child_task_id=?)")
             .bind(child_task_id)
             .bind(now)
             .bind(&subagent_id)
+            .bind(child_task_id)
             .execute(self.repository.pool())
             .await
             .map_err(|_| RuntimeError::new("storage_error", "sub-agent claim failed"))?;
+        if claimed.rows_affected() != 1 {
+            let current =
+                sqlx::query("SELECT child_task_id,status FROM subagent_runs WHERE id=? LIMIT 1")
+                    .bind(&subagent_id)
+                    .fetch_optional(self.repository.pool())
+                    .await
+                    .map_err(|_| {
+                        RuntimeError::new("storage_error", "sub-agent claim refresh failed")
+                    })?;
+            if current.as_ref().is_some_and(|current| {
+                current.get::<String, _>("status") == "running"
+                    && current.get::<Option<String>, _>("child_task_id").as_deref()
+                        == Some(child_task_id)
+            }) {
+                return Ok(());
+            }
+            let current_status = current
+                .as_ref()
+                .map(|current| current.get::<String, _>("status"))
+                .unwrap_or_else(|| "missing".to_owned());
+            return Err(RuntimeError::new(
+                "subagent_not_active",
+                format!("delegated sub-agent is already {current_status}"),
+            ));
+        }
         self.publish_subagent_status(
             &parent_task_id,
             &parent_turn_id,
@@ -208,6 +240,20 @@ impl RuntimeHost {
             &name,
             "running",
         );
+        if fallback_claim {
+            self.publish_event(
+                format!("subagent-fallback-claimed-{subagent_id}-{now}"),
+                "subagent.fallback_claimed",
+                Some(parent_task_id),
+                None,
+                Some(parent_turn_id),
+                json!({
+                    "subagentId": subagent_id,
+                    "childTaskId": child_task_id,
+                    "name": name
+                }),
+            );
+        }
         Ok(())
     }
 
@@ -363,21 +409,26 @@ impl RuntimeHost {
         parent_task_id: &str,
         parent_turn_id: &str,
     ) -> RuntimeResult<()> {
-        let cutoff = now_ms().saturating_sub(UNCLAIMED_SUBAGENT_TIMEOUT_MS);
-        let rows = sqlx::query("SELECT child_task_id FROM subagent_runs WHERE parent_task_id=? AND parent_turn_id=? AND status='pending' AND created_at_ms<=? AND child_task_id IS NOT NULL")
+        let now = now_ms();
+        let native_cutoff = now.saturating_sub(UNCLAIMED_SUBAGENT_TIMEOUT_MS);
+        let extension_cutoff = now.saturating_sub(EXTENSION_UNCLAIMED_SUBAGENT_TIMEOUT_MS);
+        let rows = sqlx::query("SELECT child_task_id,fallback_state FROM subagent_runs WHERE parent_task_id=? AND parent_turn_id=? AND status='pending' AND child_task_id IS NOT NULL AND ((fallback_state='none' AND created_at_ms<=?) OR (fallback_state IN ('requested','started') AND updated_at_ms<=?))")
             .bind(parent_task_id)
             .bind(parent_turn_id)
-            .bind(cutoff)
+            .bind(native_cutoff)
+            .bind(extension_cutoff)
             .fetch_all(self.repository.pool())
             .await
             .map_err(|_| RuntimeError::new("storage_error", "stale sub-agent lookup failed"))?;
         for row in rows {
             let child_task_id = row.get::<String, _>("child_task_id");
-            self.fail_subagent_worker(
-                &child_task_id,
-                "Child agent was registered but no worker claimed it within 60 seconds. The sampling worker or local fallback executor failed to start or claim the reserved child task.",
-            )
-            .await?;
+            let fallback_state = row.get::<String, _>("fallback_state");
+            let message = if matches!(fallback_state.as_str(), "requested" | "started") {
+                "Child agent browser fallback did not claim MCP or return a final response before the fallback timeout."
+            } else {
+                "Child agent was registered but no worker claimed it within 60 seconds."
+            };
+            self.fail_subagent_worker(&child_task_id, message).await?;
         }
         Ok(())
     }
