@@ -104,10 +104,37 @@ impl BackendApiClient {
         authorization: Option<&str>,
         accept_language: Option<&str>,
     ) -> Result<BackendApiResponse> {
-        const MAX_SESSION_RESETS: usize = 3;
-
         let _request_guard = self.request_lock.lock().await;
-        for reset_count in 0..=MAX_SESSION_RESETS {
+        self.request_locked(method, path_and_query, body, authorization, accept_language)
+            .await
+    }
+
+    pub(crate) async fn request_with_fresh_session(
+        &self,
+        method: Method,
+        path_and_query: &str,
+        body: &[u8],
+        authorization: Option<&str>,
+        accept_language: Option<&str>,
+    ) -> Result<BackendApiResponse> {
+        let _request_guard = self.request_lock.lock().await;
+        *self.session.write().await = None;
+        self.request_locked(method, path_and_query, body, authorization, accept_language)
+            .await
+    }
+
+    async fn request_locked(
+        &self,
+        method: Method,
+        path_and_query: &str,
+        body: &[u8],
+        authorization: Option<&str>,
+        accept_language: Option<&str>,
+    ) -> Result<BackendApiResponse> {
+        const MAX_ATTEMPTS: usize = 5;
+        let mut last_error = None;
+
+        for attempt in 1..=MAX_ATTEMPTS {
             match self
                 .request_once(
                     method.clone(),
@@ -116,23 +143,32 @@ impl BackendApiClient {
                     authorization,
                     accept_language,
                 )
-                .await?
+                .await
             {
-                RequestAttempt::Complete(response) => return Ok(response),
-                RequestAttempt::Reset if reset_count < MAX_SESSION_RESETS => {
-                    tracing::warn!(
-                        path = path_and_query,
-                        reset_count = reset_count + 1,
-                        "backend API crypto session was reset; handshaking again"
-                    );
-                    *self.session.write().await = None;
+                Ok(RequestAttempt::Complete(response)) => return Ok(response),
+                Ok(RequestAttempt::Reset) => {
+                    last_error = Some(anyhow!("backend API requested crypto session reset"));
                 }
-                RequestAttempt::Reset => {
-                    bail!("backend API crypto session reset too many times")
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        path = path_and_query,
+                        attempt,
+                        "encrypted backend API attempt failed; rebuilding crypto session"
+                    );
+                    last_error = Some(error);
                 }
             }
+
+            *self.session.write().await = None;
+            if attempt < MAX_ATTEMPTS {
+                let delay_ms = 100_u64 << (attempt - 1).min(3);
+                tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+            }
         }
-        unreachable!("bounded backend API reset loop must return")
+
+        Err(last_error.unwrap_or_else(|| anyhow!("encrypted backend API request failed")))
+            .context("encrypted backend API request failed after retries")
     }
 
     async fn request_once(

@@ -271,10 +271,9 @@ async fn authenticate(
         app_version: Some(state.device.app_version.as_str()),
     };
     let body = serde_json::to_vec(&payload).map_err(|_| internal_problem())?;
-    state.backend_api.reset_session().await;
     let backend = state
         .backend_api
-        .request(Method::POST, path, &body, None, None)
+        .request_with_fresh_session(Method::POST, path, &body, None, None)
         .await
         .map_err(|error| {
             tracing::warn!(error = %error, path, "encrypted backend authentication request failed");
@@ -336,7 +335,8 @@ async fn send_authorized(
         .await
         .map_err(|_| backend_unavailable())?;
 
-    if path == "/api/auth/info" && (200..300).contains(&response.status)
+    if path == "/api/auth/info"
+        && (200..300).contains(&response.status)
         && let Ok(info) = serde_json::from_slice::<AuthUsageResponse>(&response.body)
     {
         let mut cache = state.auth_usage_cache.write().await;

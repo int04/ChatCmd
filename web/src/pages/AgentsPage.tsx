@@ -261,7 +261,7 @@ function PluginLinksModal({ agent, close, onTestTunnel, testingTunnelId }: { age
 }
 
 function AgentEditor({ agent, tools, presets, close, save }: { agent?: Agent; tools: Awaited<ReturnType<typeof api.tools>>; presets: Awaited<ReturnType<typeof api.presets>>; close: () => void; save: (input: AgentInput) => Promise<void> }) {
-  const [value, setValue] = useState<AgentInput>(agent ? { name: agent.name, enabled: agent.enabled, presetId: agent.presetId, toolIds: agent.toolIds } : blank);
+  const [value, setValue] = useState<AgentInput>(() => agent ? { name: agent.name, enabled: agent.enabled, presetId: agent.presetId, toolIds: agent.toolIds } : { ...blank, toolIds: tools.map((tool) => tool.id) });
   const [busy, setBusy] = useState(false);
   const groups = useMemo(() => {
     const map = new Map<string, Tool[]>();
@@ -273,7 +273,7 @@ function AgentEditor({ agent, tools, presets, close, save }: { agent?: Agent; to
   const toggleGroup = (groupTools: Tool[], checked: boolean) => { const groupIds = new Set(groupTools.map((tool) => tool.id)); setTools(checked ? [...value.toolIds, ...groupIds] : value.toolIds.filter((id) => !groupIds.has(id))); };
   const submit = async (event: FormEvent) => { event.preventDefault(); setBusy(true); await save(value); setBusy(false); };
   const allSelected = tools.length > 0 && tools.every((tool) => value.toolIds.includes(tool.id));
-  return <Modal title={agent ? tr('Edit {name}', { name: agent.name }) : tr('Create access profile')} description={tr('These permissions apply only to the AI client that uses this profile.')} close={close}>
+  return <Modal title={agent ? tr('Edit {name}', { name: agent.name }) : tr('Create new Plugin connection')} description={tr('These permissions apply only to the AI client that uses this profile.')} close={close}>
     <form className="form-stack" onSubmit={submit}>
       <label>{tr('Name')}<input required maxLength={100} value={value.name} onChange={(event) => setValue({ ...value, name: event.target.value })} /></label>
       <label>{tr('Permission preset')}<select value={value.presetId ?? ''} onChange={(event) => { const presetId = event.target.value || undefined; const preset = presets.find((item) => item.id === presetId); setValue({ ...value, presetId, toolIds: preset ? preset.toolIds : value.toolIds }); }}><option value="">{tr('Custom permissions')}</option>{presets.map((preset) => <option value={preset.id} key={preset.id}>{preset.name}</option>)}</select></label>
