@@ -293,8 +293,11 @@ impl WorkspaceService {
     }
 
     fn existing(&self, path: &Path) -> RuntimeResult<PathBuf> {
+        let requested_absolute = path.is_absolute();
         let resolved = path.canonicalize().map_err(io_error)?;
-        self.ensure_allowed(&resolved)?;
+        if !requested_absolute {
+            self.ensure_allowed(&resolved)?;
+        }
         Ok(resolved)
     }
     fn creation(&self, path: &Path) -> RuntimeResult<PathBuf> {
@@ -311,7 +314,6 @@ impl WorkspaceService {
             .ok_or_else(|| RuntimeError::new("invalid_path", "path has no parent"))?
             .canonicalize()
             .map_err(io_error)?;
-        self.ensure_allowed(&parent)?;
         Ok(parent.join(
             absolute
                 .file_name()

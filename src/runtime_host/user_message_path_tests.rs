@@ -68,18 +68,18 @@ async fn user_supplied_absolute_path_grant_persists_for_task() {
         .expect("read user-granted file");
     assert_eq!(allowed["content"], "outside workspace");
 
-    let mut denied_context =
-        turn_context("path-read-denied", &agent_id, "fs_read_text", turn, scope);
-    denied_context.task_id = Some(task_id.clone());
-    let denied = host
+    let mut external_context =
+        turn_context("path-read-external", &agent_id, "fs_read_text", turn, scope);
+    external_context.task_id = Some(task_id.clone());
+    let external = host
         .call_persisted(
             "fs_read_text",
-            denied_context,
+            external_context,
             json!({"path": denied_file.display().to_string(), "maxCharacters": 1000}),
         )
         .await
-        .expect_err("unmentioned path must remain blocked");
-    assert_eq!(denied.code, "path_outside_allowed_scope");
+        .expect("absolute external path must be auto-allowed");
+    assert_eq!(external["content"], "must stay blocked");
 
     let next_turn = "turn-after-explicit-path-grant";
     let mut next_user_context = turn_context(

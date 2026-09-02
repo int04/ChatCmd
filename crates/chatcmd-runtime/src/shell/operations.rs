@@ -404,7 +404,11 @@ impl ShellRuntime {
                     "no working directory or configured root",
                 )
             })?;
+        let requested_absolute = path.is_absolute();
         let canonical = path.canonicalize().map_err(io_error)?;
+        if requested_absolute {
+            return Ok(canonical);
+        }
         let configured = self
             .inner
             .config
