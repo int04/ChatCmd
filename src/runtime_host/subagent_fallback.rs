@@ -73,6 +73,20 @@ impl RuntimeHost {
         let parent_task_id = row.get::<String, _>("parent_task_id");
         let parent_turn_id = row.get::<String, _>("parent_turn_id");
         let name = row.get::<String, _>("name");
+        let agent_name = sqlx::query_scalar::<_, String>(
+            "SELECT name FROM mcp_agents WHERE id=? LIMIT 1",
+        )
+        .bind(&parent_context.agent_id)
+        .fetch_optional(self.repository.pool())
+        .await
+        .ok()
+        .flatten();
+        let submitted_content = match agent_name.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+            Some(agent_name) => format!(
+                "Sử dụng plugin @{agent_name} để thực hiện yêu cầu sau:\n\n{delegated_prompt}"
+            ),
+            None => delegated_prompt.to_owned(),
+        };
         self.publish_event(
             format!("subagent-fallback-requested-{subagent_id}-{attempt}"),
             "subagent.fallback_requested",
@@ -85,7 +99,7 @@ impl RuntimeHost {
                 "parentTurnId": parent_turn_id,
                 "childTaskId": child_task_id,
                 "name": name,
-                "submittedContent": delegated_prompt,
+                "submittedContent": submitted_content,
                 "attempt": attempt,
                 "maxAttempts": MAX_EXTENSION_FALLBACK_ATTEMPTS,
                 "parentRequestId": parent_context.request_id

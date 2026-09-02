@@ -66,6 +66,11 @@ async fn pending_api_returns_queued_child_with_marker_and_parent_identity() {
     assert!(
         item["submittedContent"]
             .as_str()
+            .is_some_and(|value| value.starts_with("Sử dụng plugin @User message sync test để thực hiện yêu cầu sau:"))
+    );
+    assert!(
+        item["submittedContent"]
+            .as_str()
             .is_some_and(|value| value.contains("CMDGPT_SUBAGENT_ID=subagent-fallback-api"))
     );
 }

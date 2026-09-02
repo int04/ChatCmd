@@ -38,7 +38,7 @@ pub(super) async fn pending_subagent_fallbacks(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<Value>>, Problem> {
     let rows = sqlx::query(
-        "SELECT id,parent_task_id,parent_turn_id,child_task_id,name,request,fallback_attempts,fallback_conversation_id,fallback_conversation_url FROM subagent_runs WHERE status='pending' AND fallback_state IN ('requested','started') AND fallback_attempts BETWEEN 1 AND ? ORDER BY updated_at_ms,id",
+        "SELECT r.id,r.parent_task_id,r.parent_turn_id,r.child_task_id,r.name,r.request,r.fallback_attempts,r.fallback_conversation_id,r.fallback_conversation_url,a.name AS agent_name FROM subagent_runs r LEFT JOIN tasks t ON t.id=r.child_task_id LEFT JOIN mcp_agents a ON a.id=t.agent_id WHERE r.status='pending' AND r.fallback_state IN ('requested','started') AND r.fallback_attempts BETWEEN 1 AND ? ORDER BY r.updated_at_ms,r.id",
     )
     .bind(MAX_EXTENSION_FALLBACK_ATTEMPTS)
     .fetch_all(state.repository.pool())
@@ -272,7 +272,11 @@ async fn append_browser_only_completion(
     let turn_id = format!("turn-{subagent_id}");
     let request_id = format!("subagent-fallback-{subagent_id}-{attempt}");
     let request = row.get::<String, _>("request");
-    let submitted = format!("{request}\n\nCMDGPT_SUBAGENT_ID={subagent_id}");
+    let submitted = fallback_submitted_content(
+        row.get::<Option<String>, _>("agent_name").as_deref(),
+        &request,
+        subagent_id,
+    );
     super::chatgpt_support::append_user_message(
         state,
         child_task_id,
@@ -322,7 +326,7 @@ async fn fallback_row(
     state: &Arc<AppState>,
     subagent_id: &str,
 ) -> Result<sqlx::sqlite::SqliteRow, Problem> {
-    sqlx::query("SELECT id,parent_task_id,parent_turn_id,child_task_id,name,request,status,fallback_state,fallback_attempts,fallback_conversation_id,fallback_conversation_url FROM subagent_runs WHERE id=? LIMIT 1")
+    sqlx::query("SELECT r.id,r.parent_task_id,r.parent_turn_id,r.child_task_id,r.name,r.request,r.status,r.fallback_state,r.fallback_attempts,r.fallback_conversation_id,r.fallback_conversation_url,a.name AS agent_name FROM subagent_runs r LEFT JOIN tasks t ON t.id=r.child_task_id LEFT JOIN mcp_agents a ON a.id=t.agent_id WHERE r.id=? LIMIT 1")
         .bind(subagent_id)
         .fetch_optional(state.repository.pool())
         .await
@@ -380,18 +384,34 @@ async fn state_changed_response(
 
 fn fallback_request_value(row: &sqlx::sqlite::SqliteRow, attempt: i64) -> Value {
     let subagent_id = row.get::<String, _>("id");
+    let request = row.get::<String, _>("request");
+    let submitted_content = fallback_submitted_content(
+        row.get::<Option<String>, _>("agent_name").as_deref(),
+        &request,
+        &subagent_id,
+    );
     json!({
         "subagentId": subagent_id,
         "parentTaskId": row.get::<String, _>("parent_task_id"),
         "parentTurnId": row.get::<String, _>("parent_turn_id"),
         "childTaskId": row.get::<Option<String>, _>("child_task_id"),
         "name": row.get::<String, _>("name"),
-        "submittedContent": format!("{}\n\nCMDGPT_SUBAGENT_ID={}", row.get::<String, _>("request"), subagent_id),
+        "submittedContent": submitted_content,
         "attempt": attempt,
         "maxAttempts": MAX_EXTENSION_FALLBACK_ATTEMPTS,
         "conversationId": row.get::<Option<String>, _>("fallback_conversation_id"),
         "conversationUrl": row.get::<Option<String>, _>("fallback_conversation_url")
     })
+}
+
+fn fallback_submitted_content(agent_name: Option<&str>, request: &str, subagent_id: &str) -> String {
+    let delegated_prompt = format!("{request}\n\nCMDGPT_SUBAGENT_ID={subagent_id}");
+    match agent_name.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(agent_name) => format!(
+            "Sử dụng plugin @{agent_name} để thực hiện yêu cầu sau:\n\n{delegated_prompt}"
+        ),
+        None => delegated_prompt,
+    }
 }
 
 fn publish_fallback_requested(state: &Arc<AppState>, row: &sqlx::sqlite::SqliteRow, attempt: i64) {

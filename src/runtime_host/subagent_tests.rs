@@ -101,6 +101,13 @@ async fn extension_fallback_stays_pending_and_parent_wait_remains_active() {
             .and_then(Value::as_str),
         Some(PARENT_TURN_ID)
     );
+    assert!(
+        requested
+            .payload
+            .get("submittedContent")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value.starts_with("Sử dụng plugin @User message sync test để thực hiện yêu cầu sau:"))
+    );
 }
 
 #[tokio::test]
