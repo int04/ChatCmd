@@ -140,6 +140,12 @@ export function UpdateSettings() {
       </section>
     </div>
 
+    <p className="update-settings-manual-download">
+      {copy.manualDownload.split('https://chatcmd.net/download')[0]}
+      <a href="https://chatcmd.net/download" target="_blank" rel="noreferrer">https://chatcmd.net/download</a>
+      {copy.manualDownload.split('https://chatcmd.net/download')[1]}
+    </p>
+
     {confirming && <Modal title={copy.confirmTitle} description={copy.confirmDescription} close={() => setConfirming(false)} dangerous>
       <div className="warning-block"><AlertTriangle /><p>{copy.confirmWarning}</p></div>
       <div className="modal-actions"><button type="button" className="button secondary" onClick={() => setConfirming(false)}>{copy.cancel}</button><button type="button" className="button primary" onClick={() => void beginUpdate()}><Download />{copy.confirmUpdate}</button></div>

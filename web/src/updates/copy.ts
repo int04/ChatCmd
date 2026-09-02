@@ -42,6 +42,7 @@ const vi = {
   prepareStep: 'Chuẩn bị',
   restartStep: 'Khởi động lại',
   waitingForRestart: 'Đang chờ ChatCMD khởi động lại…',
+  manualDownload: 'Nếu không thể cập nhật tự động, xin vui lòng vào https://chatcmd.net/download để tải thủ công về.',
 };
 
 const en: typeof vi = {
@@ -86,6 +87,7 @@ const en: typeof vi = {
   prepareStep: 'Prepare',
   restartStep: 'Restart',
   waitingForRestart: 'Waiting for ChatCMD to restart…',
+  manualDownload: 'If automatic update is unavailable, please visit https://chatcmd.net/download to download ChatCMD manually.',
 };
 
 export type UpdateCopy = typeof vi;
