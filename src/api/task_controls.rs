@@ -164,6 +164,16 @@ pub(super) async fn resolve_task_approval(
             "This approval request was resolved by another action.",
         ));
     }
+    let mut event = AppEvent::new(
+        "approval.resolved",
+        json!({ "activityId": &activity_id, "decision": &request.decision }),
+    );
+    event.task_id = Some(task_id.clone());
+    event.turn_id = approval_request
+        .get("turnId")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    state.publish(event);
     publish_subagent_approval_resolved(&state, &task_id, &activity_id, &request.decision).await?;
     Ok(Json(
         json!({ "accepted": true, "decision": request.decision }),

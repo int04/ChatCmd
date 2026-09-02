@@ -57,6 +57,7 @@ impl RuntimeHost {
             "similarityKey": similarity_key,
         })
         .to_string();
+        let created_at_ms = now_ms();
         self.repository
             .save_approval(&Approval {
                 id: approval_id.clone(),
@@ -67,11 +68,26 @@ impl RuntimeHost {
                 state: ApprovalState::Pending,
                 request_json,
                 decision_json: None,
-                created_at_ms: now_ms(),
+                created_at_ms,
                 resolved_at_ms: None,
             })
             .await
             .map_err(storage_error)?;
+        self.publish_event(
+            format!("approval-pending:{approval_id}:{created_at_ms}"),
+            "approval.pending",
+            Some(task_id.as_str().to_owned()),
+            None,
+            Some(turn_id.to_owned()),
+            json!({
+                "activityId": approval_id,
+                "tool": tool,
+                "input": arguments,
+                "approvalDeadlineUtc": time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(created_at_ms.saturating_add(120_000)) * 1_000_000)
+                    .ok()
+                    .and_then(|value| value.format(&time::format_description::well_known::Rfc3339).ok()),
+            }),
+        );
         self.append_call_event(
             context,
             tool,

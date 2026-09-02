@@ -125,6 +125,37 @@ pub(super) async fn pending_conversation_approvals(
     Ok(Json(Value::Array(items)))
 }
 
+pub(super) async fn pending_activity_approvals(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<Value>, Problem> {
+    let rows = sqlx::query(
+        "SELECT id,task_id,request_json,created_at_ms FROM approvals WHERE state='pending' ORDER BY created_at_ms ASC,id ASC",
+    )
+    .fetch_all(state.repository.pool())
+    .await
+    .map_err(db_problem)?;
+    let items = rows
+        .into_iter()
+        .map(|row| {
+            let activity_id = row.get::<String, _>("id");
+            let task_id = row.get::<String, _>("task_id");
+            let created_at_ms = row.get::<i64, _>("created_at_ms");
+            let request = serde_json::from_str::<Value>(&row.get::<String, _>("request_json"))
+                .unwrap_or(Value::Null);
+            json!({
+                "activityId": activity_id,
+                "taskId": task_id,
+                "turnId": request.get("turnId").and_then(Value::as_str),
+                "tool": request.get("tool").and_then(Value::as_str).unwrap_or("tool"),
+                "input": request.get("input").cloned().unwrap_or(Value::Null),
+                "createdAtUtc": iso_ms(created_at_ms),
+                "approvalDeadlineUtc": iso_ms(created_at_ms.saturating_add(120_000)),
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(Value::Array(items)))
+}
+
 #[derive(Debug, Deserialize)]
 pub(super) struct TaskDetailQuery {
     cursor: Option<String>,

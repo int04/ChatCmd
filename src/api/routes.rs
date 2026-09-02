@@ -102,6 +102,10 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
             "/tasks/approvals/pending",
             get(pending_conversation_approvals),
         )
+        .route(
+            "/tasks/activity-approvals/pending",
+            get(pending_activity_approvals),
+        )
         .route("/plan/questions/pending", get(pending_plan_questions))
         .route("/plan/questions/{id}/answer", post(answer_plan_question))
         .route("/tasks/{id}", get(task).delete(delete_task))

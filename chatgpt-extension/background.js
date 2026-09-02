@@ -8,11 +8,24 @@ const LOG_KEY = 'chatcmd-extension-logs';
 const MAX_LOGS = 200;
 const CHATGPT_HOME = 'https://chatgpt.com/';
 
-importScripts('background-io.js');
+importScripts('background-io.js', 'approval-bridge.js');
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message !== 'object') return false;
+  if (message.type === 'chatcmd-approval-state-request') {
+    void approvalBridgeState()
+      .then((state) => sendResponse({ ok: true, ...state }))
+      .catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
+    return true;
+  }
+  if (message.type === 'chatcmd-approval-decision') {
+    void resolveGlobalApproval(message)
+      .then((result) => sendResponse({ ok: true, ...result }))
+      .catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
+    return true;
+  }
   if (message.type === 'chatcmd-local-command') {
+    if (message.localBaseUrl) void configureApprovalBridge(message.localBaseUrl).catch(() => undefined);
     if (message.action === 'ping') {
       void chatGptTabStatus(message.conversationUrl, sender.tab?.id)
         .then((status) => sendResponse({ ok: true, ...status }))

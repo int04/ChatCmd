@@ -42,7 +42,7 @@ async function sendToChatGpt(tabId, payload, options = {}) {
         reinjected = true;
         try {
           await logExtension('info', 'background', `Inject lại các ChatGPT content scripts vào tab ${tabId}.`);
-          await chrome.scripting.executeScript({ target: { tabId }, files: ['content-chatgpt-ui.js', 'content-chatgpt-dom.js', 'content-chatgpt.js'] });
+          await chrome.scripting.executeScript({ target: { tabId }, files: ['content-chatgpt-ui.js', 'content-chatgpt-dom.js', 'content-chatgpt-approval-ui.js', 'content-chatgpt.js'] });
           await logExtension('info', 'background', `Inject ChatGPT content scripts vào tab ${tabId} thành công.`);
           await delay(150);
           continue;

@@ -251,7 +251,7 @@ test('a stop-like button outside the unified composer does not mark ChatGPT as g
 
 test('content scripts load helpers before the request runner', () => {
   const entry = manifest.content_scripts.find((item) => item.matches.includes('https://chatgpt.com/*'));
-  assert.deepEqual(entry.js, ['content-chatgpt-ui.js', 'content-chatgpt-dom.js', 'content-chatgpt.js']);
+  assert.deepEqual(entry.js, ['content-chatgpt-ui.js', 'content-chatgpt-dom.js', 'content-chatgpt-approval-ui.js', 'content-chatgpt.js']);
 });
 
 test('all extension sources stay within the 500-line maintenance limit', () => {

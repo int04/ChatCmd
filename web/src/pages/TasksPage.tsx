@@ -33,7 +33,24 @@ function TasksWorkspace() {
       const childTaskId = subagentChildTaskId(event); if (childTaskId) hideSubagentTask(childTaskId); if (event.taskId === taskId) setDetailVersion((value) => value + 1); return;
     }
     if (!event.taskId) return;
-    if (event.taskId === taskId && (event.type === 'conversation.approval_pending' || event.type === 'conversation.title_updated')) { setDetailVersion((value) => value + 1); return; }
+    if (event.taskId === taskId && event.type === 'approval.resolved') {
+      const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload) ? event.payload as Record<string, unknown> : {};
+      const activityId = typeof payload.activityId === 'string' ? payload.activityId : '';
+      const decision = typeof payload.decision === 'string' ? payload.decision : '';
+      if (activityId) {
+        setLiveEvents((current) => [...current, {
+          id: `approval-resolved:${event.id}`,
+          type: 'tool_call',
+          taskId: event.taskId,
+          turnId: event.turnId,
+          occurredAt: event.occurredAt,
+          payload: { activityId, status: decision === 'reject' ? 'rejected' : 'approved' },
+        }]);
+      }
+      setDetailVersion((value) => value + 1);
+      return;
+    }
+    if (event.taskId === taskId && (event.type === 'approval.pending' || event.type === 'conversation.approval_pending' || event.type === 'conversation.title_updated')) { setDetailVersion((value) => value + 1); return; }
     if (event.taskId === taskId) {
       const compactEvent = compactLiveToolEvent(event);
       setLiveEvents((current) => current.some((item) => item.id === compactEvent.id) ? current : [...current, compactEvent]);
