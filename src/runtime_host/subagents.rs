@@ -28,6 +28,16 @@ impl RuntimeHost {
         let deterministic_id =
             subagent_id_for_registration(parent_task_id, parent_turn_id, name, request);
         let deterministic_task_id = child_task_id_for_subagent(&deterministic_id);
+        let _slot_guard = loop {
+            let guard = self.subagent_registration_gate.lock().await;
+            let active = self.active_subagent_count().await?;
+            let limit = self.subagent_concurrency_limit().await?;
+            if active < limit {
+                break guard;
+            }
+            drop(guard);
+            self.wait_before_retrying_subagent_slot().await;
+        };
         let now = now_ms();
         let mut transaction = self
             .repository

@@ -13,6 +13,7 @@ mod inputs;
 mod persistence;
 mod plan_prompt;
 mod queued_messages;
+mod subagent_concurrency;
 mod subagent_fallback;
 #[cfg(test)]
 mod subagent_tests;
@@ -35,7 +36,8 @@ use chatcmd_runtime::{
 use chatcmd_storage::SqliteRepository;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
-use tokio::sync::broadcast;
+use std::sync::Arc;
+use tokio::sync::{Mutex, broadcast};
 
 use crate::websocket::AppEvent;
 pub(crate) use activity_control::{ActivityRegistry, StopActivityResult};
@@ -57,6 +59,7 @@ pub(crate) struct RuntimeHost {
     activities: ActivityRegistry,
     plan_prompts: PlanPromptRegistry,
     file_changes: TurnFileChangeTracker,
+    subagent_registration_gate: Arc<Mutex<()>>,
 }
 
 impl RuntimeHost {
@@ -82,6 +85,7 @@ impl RuntimeHost {
             activities: ActivityRegistry::default(),
             plan_prompts: PlanPromptRegistry::default(),
             file_changes: TurnFileChangeTracker::default(),
+            subagent_registration_gate: Arc::new(Mutex::new(())),
         }
     }
 

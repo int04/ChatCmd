@@ -49,6 +49,22 @@ pub(super) async fn save_settings(
             "taskFontScale must be between 90 and 130.",
         ));
     }
+    if let Some(limit) = object.get("subagentConcurrency") {
+        let limit = limit.as_u64().ok_or_else(|| {
+            Problem::new(
+                StatusCode::BAD_REQUEST,
+                "Invalid sub-agent concurrency",
+                "subagentConcurrency must be an integer between 1 and 5.",
+            )
+        })?;
+        if !(1..=5).contains(&limit) {
+            return Err(Problem::new(
+                StatusCode::BAD_REQUEST,
+                "Invalid sub-agent concurrency",
+                "subagentConcurrency must be between 1 and 5.",
+            ));
+        }
+    }
     if let Some(mode) = object.get("executionMode").and_then(Value::as_str) {
         let persisted = match mode {
             "approval" => "approval",
@@ -95,7 +111,7 @@ pub(super) fn mcp_endpoint(state: &AppState, token: &str) -> String {
 }
 
 pub(super) async fn settings_value(state: &Arc<AppState>) -> Result<Value, Problem> {
-    let defaults = json!({ "bindAddress": state.bind_address, "port": state.port, "mcpEndpoint": mcp_endpoint_template(state), "databasePath": state.database_path, "databaseState": "ready", "executionMode": "allowAll", "approveNewConversations": true, "terminalExecutable": default_shell(), "taskConcurrency": 4, "sessionConcurrency": 8, "theme": "dark", "fontFamily": "Inter", "taskFontScale": 100, "language": "en", "sound": true, "newAgentSound": true, "finishedTaskSound": true, "dataRetention": "1d" });
+    let defaults = json!({ "bindAddress": state.bind_address, "port": state.port, "mcpEndpoint": mcp_endpoint_template(state), "databasePath": state.database_path, "databaseState": "ready", "executionMode": "allowAll", "approveNewConversations": true, "terminalExecutable": default_shell(), "taskConcurrency": 4, "sessionConcurrency": 8, "subagentConcurrency": 2, "theme": "dark", "fontFamily": "Inter", "taskFontScale": 100, "language": "en", "sound": true, "newAgentSound": true, "finishedTaskSound": true, "dataRetention": "1d" });
     let mut object = defaults.as_object().cloned().unwrap_or_default();
     for key in [
         "executionMode",
@@ -103,6 +119,7 @@ pub(super) async fn settings_value(state: &Arc<AppState>) -> Result<Value, Probl
         "terminalExecutable",
         "taskConcurrency",
         "sessionConcurrency",
+        "subagentConcurrency",
         "theme",
         "fontFamily",
         "taskFontScale",
