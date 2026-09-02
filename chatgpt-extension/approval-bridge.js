@@ -131,7 +131,7 @@ async function handleApprovalEvent(event) {
     await resyncApprovalQueue();
     return;
   }
-  if (event.type === 'conversation.approval_pending' || event.type === 'approval.pending') {
+  if (event.type === 'conversation.approval_pending' || event.type === 'approval.pending' || event.type === 'plan.question_pending') {
     await resyncApprovalQueue();
     return;
   }
@@ -144,14 +144,21 @@ async function handleApprovalEvent(event) {
     const activityId = event.payload?.activityId;
     if (activityId) approvalItems.delete(activityApprovalKey(event.taskId, activityId));
     await broadcastApprovalState();
+    return;
+  }
+  if (event.type === 'plan.question_resolved') {
+    const questionId = event.payload?.questionId;
+    if (questionId) approvalItems.delete(planQuestionKey(questionId));
+    await broadcastApprovalState();
   }
 }
 
 async function resyncApprovalQueue() {
   try {
-    const [conversations, activities] = await Promise.all([
+    const [conversations, activities, planQuestions] = await Promise.all([
       getJson(approvalBaseUrl, '/api/local/tasks/approvals/pending'),
       getJson(approvalBaseUrl, '/api/local/tasks/activity-approvals/pending'),
+      getJson(approvalBaseUrl, '/api/local/plan/questions/pending'),
     ]);
     const next = new Map();
     for (const task of Array.isArray(conversations) ? conversations : []) {
@@ -178,6 +185,21 @@ async function resyncApprovalQueue() {
         input: approval.input ?? null,
         deadlineUtc: approval.approvalDeadlineUtc || null,
         createdAtUtc: approval.createdAtUtc || null,
+      };
+      next.set(item.key, item);
+    }
+    for (const question of Array.isArray(planQuestions) ? planQuestions : []) {
+      if (!question?.id || !question?.taskId || !Array.isArray(question.options) || question.options.length !== 2) continue;
+      const item = {
+        key: planQuestionKey(question.id),
+        kind: 'plan',
+        questionId: question.id,
+        taskId: question.taskId,
+        turnId: question.turnId || undefined,
+        question: question.question || '',
+        options: question.options,
+        createdAtMs: Number(question.createdAtMs) || Date.now(),
+        deadlineAtMs: Number(question.deadlineAtMs) || 0,
       };
       next.set(item.key, item);
     }
@@ -213,6 +235,22 @@ async function resolveGlobalApproval(message) {
       if (!String(errorMessage(error)).toLowerCase().includes('no longer pending') && !String(errorMessage(error)).toLowerCase().includes('resolved')) throw error;
     }
     approvalItems.delete(activityApprovalKey(item.taskId, item.activityId));
+  } else if (item.kind === 'plan') {
+    if (!item.questionId) throw new Error('Thiếu question ID của Plan Mode.');
+    let body;
+    if (message.answerKind === 'option') {
+      const optionIndex = Number(message.optionIndex);
+      if (optionIndex !== 1 && optionIndex !== 2) throw new Error('Lựa chọn Plan Mode không hợp lệ.');
+      body = { kind: 'option', optionIndex };
+    } else if (message.answerKind === 'custom') {
+      const text = String(message.answerText || '').trim();
+      if (!text) throw new Error('Câu trả lời tùy chỉnh không được để trống.');
+      body = { kind: 'custom', text };
+    } else {
+      throw new Error('Kiểu câu trả lời Plan Mode không hợp lệ.');
+    }
+    await postJson(approvalBaseUrl, `/api/local/plan/questions/${encodeURIComponent(item.questionId)}/answer`, body);
+    approvalItems.delete(planQuestionKey(item.questionId));
   } else {
     throw new Error('Loại phê duyệt không được hỗ trợ.');
   }
@@ -230,14 +268,15 @@ async function broadcastApprovalState() {
 
 function sortedApprovalItems() {
   return [...approvalItems.values()].sort((left, right) => {
-    const leftTime = Date.parse(left.createdAtUtc || '') || 0;
-    const rightTime = Date.parse(right.createdAtUtc || '') || 0;
+    const leftTime = left.kind === 'plan' ? Number(left.createdAtMs) || 0 : Date.parse(left.createdAtUtc || '') || 0;
+    const rightTime = right.kind === 'plan' ? Number(right.createdAtMs) || 0 : Date.parse(right.createdAtUtc || '') || 0;
     return leftTime - rightTime || left.key.localeCompare(right.key);
   });
 }
 
 function conversationApprovalKey(taskId) { return `conversation:${taskId}`; }
 function activityApprovalKey(taskId, activityId) { return `activity:${taskId}:${activityId}`; }
+function planQuestionKey(questionId) { return `plan:${questionId}`; }
 
 async function approvalHandshakeKey() {
   const keyBytes = new Uint8Array(32);

@@ -44,7 +44,7 @@
     }
 
     if (previousTitle === null) previousTitle = document.title;
-    document.title = 'Xin phê duyệt · ChatCMD';
+    document.title = current.kind === 'plan' ? 'AI cần thêm thông tin · ChatCMD' : 'Xin phê duyệt · ChatCMD';
     if (lastSoundKey !== current.key) {
       lastSoundKey = current.key;
       playApprovalSound();
@@ -84,24 +84,27 @@
         .danger { background: #7f1d1d; color: #fee2e2; }
         .similar { background: #4c1d95; color: #ede9fe; }
         .primary { background: #2563eb; color: #eff6ff; }
+        .plan-question { padding: 14px; border-radius: 14px; background: rgba(30,41,59,.62); border: 1px solid rgba(148,163,184,.12); font-size: 15px; line-height: 1.5; font-weight: 750; }
+        .plan-options { display: grid; gap: 10px; }
+        .plan-option { width: 100%; min-height: 48px; text-align: left; background: rgba(37,99,235,.14); color: #dbeafe; box-shadow: 0 0 0 1px rgba(96,165,250,.2) inset; }
         @media (max-width: 640px) { .backdrop { padding: 12px; } .card { width: 100%; border-radius: 18px; } .header, .body, .actions { padding-left: 16px; padding-right: 16px; } .count { display: none; } }
         @media (prefers-reduced-motion: no-preference) { .card { animation: pop .22s cubic-bezier(.16,1,.3,1); } @keyframes pop { from { opacity: 0; transform: translateY(10px) scale(.985); } } }
       </style>
       <div class="backdrop" role="alertdialog" aria-modal="true" aria-labelledby="chatcmd-approval-title" aria-describedby="chatcmd-approval-description">
         <section class="card">
           <header class="header">
-            <div class="icon" aria-hidden="true">${current.kind === 'conversation' ? '✦' : '›_'}</div>
-            <div class="copy"><div class="eyebrow">ChatCMD · Global approval</div><h2 id="chatcmd-approval-title">Xin phê duyệt</h2><p class="desc" id="chatcmd-approval-description">${escapeHtml(current.kind === 'conversation' ? 'Một đoạn trò chuyện mới đang chờ quyền chạy lệnh.' : 'Agent đang chờ quyền thực thi một thao tác trên máy của bạn.')}</p></div>
+            <div class="icon" aria-hidden="true">${current.kind === 'plan' ? '✦' : current.kind === 'conversation' ? '✦' : '›_'}</div>
+            <div class="copy"><div class="eyebrow">ChatCMD · ${current.kind === 'plan' ? 'Planning mode' : 'Global approval'}</div><h2 id="chatcmd-approval-title">${current.kind === 'plan' ? 'AI cần thêm thông tin' : 'Xin phê duyệt'}</h2><p class="desc" id="chatcmd-approval-description">${escapeHtml(current.kind === 'plan' ? 'AI đang chờ câu trả lời trong lượt lập kế hoạch hiện tại.' : current.kind === 'conversation' ? 'Một đoạn trò chuyện mới đang chờ quyền chạy lệnh.' : 'Agent đang chờ quyền thực thi một thao tác trên máy của bạn.')}</p></div>
             <span class="count">${items.length} đang chờ</span>
           </header>
           <div class="body">
-            <div class="meta"><div><strong>${escapeHtml(current.title || current.tool || current.taskId)}</strong><small>Task #${escapeHtml(shortId(current.taskId))}</small></div><span class="timer" data-timer></span></div>
+            <div class="meta"><div><strong>${escapeHtml(current.kind === 'plan' ? 'Planning mode' : current.title || current.tool || current.taskId)}</strong><small>Task #${escapeHtml(shortId(current.taskId))}</small></div><span class="timer" data-timer></span></div>
             ${current.kind === 'activity' ? `<div class="tool">Tool <code>${escapeHtml(current.tool || 'tool')}</code></div><pre>${escapeHtml(formatInput(current.input))}</pre>` : ''}
-            ${rejecting ? `<div class="reject"><label for="chatcmd-reject-reason">Lý do từ chối (không bắt buộc)</label><textarea id="chatcmd-reject-reason" maxlength="2000" placeholder="Ví dụ: Không chạy lệnh này, hãy dùng cách chỉ đọc.">${escapeHtml(reason)}</textarea></div>` : ''}
+            ${current.kind === 'plan' ? `<div class="plan-question">${escapeHtml(current.question || '')}</div><div class="plan-options"><button class="plan-option" data-action="plan-option-1">1 · ${escapeHtml(current.options?.[0] || '')}</button><button class="plan-option" data-action="plan-option-2">2 · ${escapeHtml(current.options?.[1] || '')}</button></div><div class="reject"><label for="chatcmd-plan-custom">Câu trả lời khác</label><textarea id="chatcmd-plan-custom" maxlength="2000" placeholder="Nhập đề xuất khác cho AI…">${escapeHtml(reason)}</textarea></div>` : rejecting ? `<div class="reject"><label for="chatcmd-reject-reason">Lý do từ chối (không bắt buộc)</label><textarea id="chatcmd-reject-reason" maxlength="2000" placeholder="Ví dụ: Không chạy lệnh này, hãy dùng cách chỉ đọc.">${escapeHtml(reason)}</textarea></div>` : ''}
             ${error ? `<p class="error" role="alert">${escapeHtml(error)}</p>` : ''}
           </div>
           <footer class="actions">
-            ${rejecting ? '<button class="secondary" data-action="cancel-reject">Quay lại</button><button class="danger" data-action="confirm-reject">Xác nhận từ chối</button>' : `<button class="danger" data-action="reject">Từ chối</button>${current.kind === 'activity' ? '<button class="similar" data-action="allowSimilar">Cho phép tương tự</button>' : ''}<button class="primary" data-action="allow">Phê duyệt</button>`}
+            ${current.kind === 'plan' ? '<button class="primary" data-action="plan-custom">Gửi câu trả lời khác</button>' : rejecting ? '<button class="secondary" data-action="cancel-reject">Quay lại</button><button class="danger" data-action="confirm-reject">Xác nhận từ chối</button>' : `<button class="danger" data-action="reject">Từ chối</button>${current.kind === 'activity' ? '<button class="similar" data-action="allowSimilar">Cho phép tương tự</button>' : ''}<button class="primary" data-action="allow">Phê duyệt</button>`}
           </footer>
         </section>
       </div>
@@ -141,7 +144,16 @@
     error = '';
     render(items);
     try {
-      const response = await chrome.runtime.sendMessage({ type: 'chatcmd-approval-decision', item: current, decision, reason: decision === 'reject' ? reason : undefined });
+      let payload = { type: 'chatcmd-approval-decision', item: current, decision, reason: decision === 'reject' ? reason : undefined };
+      if (current.kind === 'plan') {
+        if (action === 'plan-option-1' || action === 'plan-option-2') {
+          payload = { type: 'chatcmd-approval-decision', item: current, answerKind: 'option', optionIndex: action.endsWith('1') ? 1 : 2 };
+        } else if (action === 'plan-custom') {
+          if (!reason.trim()) throw new Error('Nhập câu trả lời khác trước khi gửi.');
+          payload = { type: 'chatcmd-approval-decision', item: current, answerKind: 'custom', answerText: reason.trim() };
+        }
+      }
+      const response = await chrome.runtime.sendMessage(payload);
       if (!response?.ok) throw new Error(response?.error || 'Không thể gửi quyết định phê duyệt tới ChatCMD.');
       items = items.filter((item) => item.key !== current.key);
       rejecting = false;
@@ -157,8 +169,8 @@
   function updateTimer(shadow, current) {
     const target = shadow.querySelector('[data-timer]');
     if (!target) return;
-    const deadline = Date.parse(current.deadlineUtc || '');
-    if (!Number.isFinite(deadline)) { target.textContent = 'Đang chờ'; return; }
+    const deadline = current.kind === 'plan' ? Number(current.deadlineAtMs) : Date.parse(current.deadlineUtc || '');
+    if (!Number.isFinite(deadline) || deadline <= 0) { target.textContent = 'Đang chờ'; return; }
     const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
     target.textContent = `${remaining}s`;
   }
