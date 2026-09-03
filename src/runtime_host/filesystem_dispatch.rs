@@ -8,7 +8,8 @@ use std::{
 };
 
 use chatcmd_runtime::{
-    OperationContext, RuntimeError, RuntimeResult, SearchProgress, WorkspaceService,
+    OperationContext, RuntimeError, RuntimeResult, SearchProgress, TextReadBudget, TextReadRange,
+    TextReadRequestV2, WorkspaceService,
 };
 use serde_json::{Value, json};
 
@@ -156,9 +157,27 @@ pub(super) async fn delete(
     ))
 }
 
+fn snapshot_request(path: &std::path::Path) -> TextReadRequestV2 {
+    TextReadRequestV2 {
+        path: path.to_path_buf(),
+        range: TextReadRange::Byte {
+            start: 0,
+            limit: 1_000_000,
+        },
+        max_bytes: 1_000_000,
+        include_line_endings: true,
+        expected_version: None,
+        budget: TextReadBudget {
+            timeout_ms: 10_000,
+            max_bytes_read: 1_000_003,
+        },
+    }
+}
+
 async fn snapshot(workspace: &WorkspaceService, path: &std::path::Path) -> Option<String> {
+    let request = snapshot_request(path);
     workspace
-        .read_text(path, 1_000_000)
+        .read_text_v2(None, &request)
         .await
         .ok()
         .map(|value| value.content)
@@ -166,9 +185,24 @@ async fn snapshot(workspace: &WorkspaceService, path: &std::path::Path) -> Optio
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_relative_paths;
+    use super::{resolve_relative_paths, snapshot_request};
+    use chatcmd_runtime::TextReadRange;
     use serde_json::json;
     use std::path::Path;
+
+    #[test]
+    fn snapshot_request_is_bounded_to_one_megabyte() {
+        let request = snapshot_request(Path::new("large.txt"));
+        assert_eq!(request.max_bytes, 1_000_000);
+        assert_eq!(request.budget.max_bytes_read, 1_000_003);
+        assert!(matches!(
+            request.range,
+            TextReadRange::Byte {
+                start: 0,
+                limit: 1_000_000
+            }
+        ));
+    }
 
     #[test]
     fn relative_filesystem_paths_are_anchored_to_project_folder() {

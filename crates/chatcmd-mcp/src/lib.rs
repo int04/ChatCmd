@@ -327,6 +327,33 @@ tool_args!(ReadArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     line_count: Option<usize>
 });
+#[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct ReadRangeArgs {
+    unit: String,
+    start: u64,
+    limit: usize,
+}
+#[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct ReadBudgetArgs {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timeout_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_bytes_read: Option<u64>,
+}
+tool_args!(ReadV2Args {
+    path: String,
+    range: ReadRangeArgs,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_bytes: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    include_line_endings: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    expected_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    budget: Option<ReadBudgetArgs>
+});
 tool_args!(WriteTextArgs {
     path: String,
     content: String,
@@ -619,7 +646,12 @@ tool_methods!(
     (
         fs_read_text,
         ReadArgs,
-        "Read UTF-8 workspace text. Required field: path; optional maxCharacters, startLine (1-based), lineCount. Prefer line ranges for large files. If a path is uncertain, use fs_find first instead of guessing."
+        "Read UTF-8 workspace text through the compatibility adapter. Required field: path; optional maxCharacters, startLine (1-based), lineCount. Prefer fs_read_text_v2 for large files and resumable reads."
+    ),
+    (
+        fs_read_text_v2,
+        ReadV2Args,
+        "Stream bounded UTF-8 workspace text without loading the whole file. Required fields: path and range {unit: line|byte, start, limit}. Optional maxBytes, includeLineEndings (default true), expectedVersion, and budget {timeoutMs,maxBytesRead}. Results include continuation offsets, truncation reason, bytesRead, sizeBytes, versionToken, encoding/BOM and newline metadata."
     ),
     (
         fs_write_text,

@@ -120,6 +120,7 @@ fn catalog_names_are_sorted_stable_and_unique() {
     assert!(TOOL_NAMES.iter().any(|name| name == "agent_user_message"));
     assert!(TOOL_NAMES.iter().any(|name| name == "fs_replace_text"));
     assert!(TOOL_NAMES.iter().any(|name| name == "fs_list_v2"));
+    assert!(TOOL_NAMES.iter().any(|name| name == "fs_read_text_v2"));
 }
 
 #[tokio::test]
@@ -177,6 +178,45 @@ fn fs_list_v2_advertises_versioned_result_schema_without_changing_legacy_input()
     assert!(v2["resultSchema"]["properties"].get("page").is_some());
     assert!(v2["resultSchema"]["properties"].get("truncation").is_some());
     assert!(v2["resultSchema"]["properties"].get("contentRef").is_some());
+}
+
+#[test]
+fn fs_read_text_v2_advertises_streaming_range_contract_and_result_metadata() {
+    let manifest = canonical_manifest();
+    let tools = manifest["tools"].as_array().expect("manifest tools");
+    let legacy = tools
+        .iter()
+        .find(|tool| tool["name"] == "fs_read_text")
+        .expect("legacy fs_read_text");
+    let v2 = tools
+        .iter()
+        .find(|tool| tool["name"] == "fs_read_text_v2")
+        .expect("fs_read_text_v2");
+
+    assert!(legacy["schema"]["properties"].get("startLine").is_some());
+    assert!(legacy["schema"]["properties"].get("range").is_none());
+    assert!(legacy["resultSchema"].is_null());
+
+    assert!(v2["schema"]["properties"].get("range").is_some());
+    assert!(v2["schema"]["properties"].get("maxBytes").is_some());
+    assert!(v2["schema"]["properties"].get("expectedVersion").is_some());
+    assert_eq!(v2["capabilities"]["streaming"], true);
+    assert!(
+        v2["resultSchema"]["properties"]
+            .get("nextStartLine")
+            .is_some()
+    );
+    assert!(
+        v2["resultSchema"]["properties"]
+            .get("nextByteOffset")
+            .is_some()
+    );
+    assert!(
+        v2["resultSchema"]["properties"]
+            .get("versionToken")
+            .is_some()
+    );
+    assert!(v2["resultSchema"]["properties"].get("lineEnding").is_some());
 }
 
 #[test]

@@ -67,7 +67,8 @@ Các method `fs_*` thao tác trực tiếp trong canonical workspace scope và t
 | `fs_list_v2` | `path`, `cursor?`, `limit?` | Bản envelope v1: trả `schemaVersion`, typed `data`, `page`, `usage` và các metadata chung khi có. `cursor` là opaque, chỉ dùng lại `page.nextCursor` cho đúng cùng tool/path. |
 | `fs_search` | `path`, `query`, `caseSensitive?`, `maxResults?`, `maxFileBytes?`, `includeIgnored?`, `exclude?` | Tìm kiếm **nội dung text** trong workspace. Khi tìm từ root nên dùng `path: "."`. |
 | `fs_find` | `path`, `pattern`, `maxResults?`, `maxDepth?` | Tìm **đường dẫn/tên file hoặc thư mục** theo pattern. Nên dùng khi chưa chắc relative path thay vì đoán path. |
-| `fs_read_text` | `path`, `startLine?`, `lineCount?`, `maxCharacters?` | Đọc file text UTF-8; hỗ trợ đọc theo range để tránh tải file lớn toàn bộ. |
+| `fs_read_text` | `path`, `startLine?`, `lineCount?`, `maxCharacters?` | Adapter tương thích cho contract cũ; nội bộ dùng reader streaming/range, không còn tải toàn file vào RAM. Với file lớn/resumable nên dùng `fs_read_text_v2`. |
+| `fs_read_text_v2` | `path`, `range { unit: line\|byte, start, limit }`, `maxBytes?`, `includeLineEndings?`, `expectedVersion?`, `budget { timeoutMs?, maxBytesRead? }?` | Reader streaming/range bounded-memory. Trả `range`, `nextStartLine`/`nextByteOffset`, `truncated` + `truncationReason`, `bytesRead`, `sizeBytes`, `versionToken`, UTF-8/BOM và newline metadata; `expectedVersion` chặn continuation stale khi file đã đổi. |
 | `fs_write_text` | `path`, `content`, `overwrite?` | Ghi nguyên tử nội dung UTF-8 vào file; dùng cho tạo mới hoặc thay toàn bộ file. |
 | `fs_replace_text` | `path`, `oldText`, `newText`, `expectedOccurrences?` | Chỉnh sửa an toàn bằng exact text replacement. `oldText` phải khớp nội dung hiện tại. |
 | `fs_write_raw` | `path`, `base64`, `overwrite?` | Decode Base64 và ghi atomically dữ liệu binary/raw vào workspace. |

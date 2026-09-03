@@ -1,6 +1,6 @@
 use crate::{
     FsEntry, OperationContext, PolicyContext, PolicyEngine, RuntimeError, RuntimeResult,
-    TextReadResult,
+    TextReadBudget, TextReadRange, TextReadRequestV2, TextReadResult, TextReadResultV2,
 };
 use std::{
     fs,
@@ -9,6 +9,8 @@ use std::{
 
 #[path = "filesystem_mutations.rs"]
 mod mutations;
+#[path = "filesystem_read.rs"]
+mod read;
 #[path = "filesystem_search.rs"]
 mod search;
 pub use search::SearchProgress;
@@ -156,58 +158,58 @@ impl WorkspaceService {
         start_line: usize,
         line_count: Option<usize>,
     ) -> RuntimeResult<TextReadResult> {
-        if start_line == 0 {
+        if start_line == 0 || line_count == Some(0) {
             return Err(RuntimeError::new(
                 "invalid_line_range",
-                "startLine must be at least 1",
+                "startLine and lineCount must be at least 1",
             ));
         }
-        if line_count == Some(0) {
-            return Err(RuntimeError::new(
-                "invalid_line_range",
-                "lineCount must be at least 1 when provided",
-            ));
-        }
-        let resolved = self.existing(path)?;
-        let bytes = tokio::fs::read(&resolved).await.map_err(io_error)?;
-        let content = String::from_utf8(bytes)
-            .map_err(|_| RuntimeError::new("invalid_utf8", "file is not valid UTF-8"))?;
-        let total_lines = content.lines().count();
-        let limit = max_characters.clamp(1, 1_000_000);
-        if start_line == 1 && line_count.is_none() {
-            let truncated = content.chars().count() > limit;
-            return Ok(TextReadResult {
-                path: resolved,
-                content: content.chars().take(limit).collect(),
-                truncated,
-                start_line: 1,
-                end_line: total_lines,
-                total_lines,
-            });
-        }
-        let lines: Vec<&str> = content.lines().collect();
-        let selected = lines
-            .iter()
-            .skip(start_line.saturating_sub(1))
-            .take(line_count.unwrap_or(usize::MAX))
-            .copied()
-            .collect::<Vec<_>>();
-        let selected_content = selected.join("\n");
-        let end_line = if selected.is_empty() {
-            start_line.saturating_sub(1)
-        } else {
-            start_line + selected.len() - 1
+        let character_limit = max_characters.clamp(1, 1_000_000);
+        let request = TextReadRequestV2 {
+            path: path.to_path_buf(),
+            range: TextReadRange::Line {
+                start: start_line,
+                limit: line_count.unwrap_or(usize::MAX),
+            },
+            max_bytes: character_limit.saturating_mul(4),
+            include_line_endings: start_line == 1 && line_count.is_none(),
+            expected_version: None,
+            budget: TextReadBudget {
+                timeout_ms: 60_000,
+                max_bytes_read: u64::MAX,
+            },
         };
-        let character_truncated = selected_content.chars().count() > limit;
-        let line_truncated = end_line < total_lines;
+        let result = self.read_text_v2(None, &request).await?;
+        let character_truncated = result.content.chars().count() > character_limit;
+        let content = result.content.chars().take(character_limit).collect();
+        let mut end_line = result
+            .range
+            .end_line
+            .unwrap_or(start_line.saturating_sub(1));
+        if !result.content.is_empty() && end_line < start_line {
+            end_line = start_line;
+        }
+        let total_lines = match result.total_lines {
+            Some(total) => total,
+            None => read::legacy_text_total_lines(&result.path).await?,
+        };
         Ok(TextReadResult {
-            path: resolved,
-            content: selected_content.chars().take(limit).collect(),
-            truncated: character_truncated || line_truncated,
+            path: result.path,
+            content,
+            truncated: result.truncated || character_truncated,
             start_line,
             end_line,
             total_lines,
         })
+    }
+
+    pub async fn read_text_v2(
+        &self,
+        context: Option<&OperationContext>,
+        request: &TextReadRequestV2,
+    ) -> RuntimeResult<TextReadResultV2> {
+        let resolved = self.existing(&request.path)?;
+        read::read_text_v2(resolved, context, request).await
     }
 
     pub async fn replace_text(

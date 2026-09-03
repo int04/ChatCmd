@@ -310,6 +310,10 @@ impl RuntimeHost {
                         .await?,
                 )
             }
+            "fs_read_text_v2" => {
+                let input: chatcmd_runtime::TextReadRequestV2 = parse(arguments)?;
+                value(workspace.read_text_v2(Some(&context), &input).await?)
+            }
             "fs_write_text" => {
                 filesystem_dispatch::write_text(workspace, &context, parse(arguments)?).await
             }
