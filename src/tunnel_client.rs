@@ -580,12 +580,15 @@ impl TunnelClientManager {
         server_url: &str,
         persisted: Option<&PersistedTunnelConnection>,
     ) -> Result<TunnelRegistrationResponse> {
-        let device_key = self
-            .device
-            .machine_id
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-            .unwrap_or(&self.device.installation_id);
+        let device_key = if persisted.is_some() {
+            self.device
+                .machine_id
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or(&self.device.installation_id)
+        } else {
+            &self.device.installation_id
+        };
         let response = self
             .http
             .post(format!("{server_url}/api/tunnel/register"))
