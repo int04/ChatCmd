@@ -1,69 +1,14 @@
 import { decodeEncryptedApiResponse, encryptedApiFetch } from './apiCrypto';
 import { tr } from './i18n';
-import type { Agent, AgentInput, AuthInfo, AuthResult, ChatGptBridge, ChatGptQueuedMessage, ChatGptRequest, CommandExecutionMode, LiveTerminalOutput, LocalSettings, ManagedTunnelStatus, McpStatus, Overview, PlanQuestion, PluginLink, ProblemDetails, SecretResult, Session, SessionDetail, Skill, SkillInstallPreview, SkillInstallResult, SkillOptionValue, Task, TaskActivityDetail, TaskDetail, TaskPage, Tool, ToolPreset, Tunnel, TunnelTestResult, UserSkill, WorkspaceProject } from './types';
-import type { UpdateStatus } from './updates/types';
+import type { Agent, AgentInput, ChatGptBridge, ChatGptQueuedMessage, ChatGptRequest, CommandExecutionMode, LiveTerminalOutput, LocalSettings, McpStatus, Overview, PlanQuestion, PluginLink, ProblemDetails, SecretResult, Session, SessionDetail, Skill, SkillInstallPreview, SkillInstallResult, SkillOptionValue, Task, TaskActivityDetail, TaskDetail, TaskPage, Tool, ToolPreset, Tunnel, TunnelTestResult, UserSkill, WorkspaceProject } from './types';
 
 export class ApiError extends Error {
   constructor(message: string, public status?: number, public problem?: ProblemDetails) { super(message); this.name = 'ApiError'; }
 }
 
-export interface GiftCodeRedeemResult {
-  success: boolean;
-  giftCodeId: number;
-  planId: number;
-  planType: number;
-  planName: string;
-  days: number;
-  remainingUses: number;
-  expiresAt: string;
-}
-
-export interface BillingBalance { vnd: number }
-export interface StatisticRow {
-  id: number;
-  createdAt: string;
-  updatedAt: string;
-  countTurn: number;
-  countConversion: number;
-  countAgent: number;
-  countToolUse: number;
-  countSkill: number;
-}
-export interface SkillUsageRow {
-  id: number;
-  createdAt: string;
-  updatedAt: string;
-  skillName: string;
-  countUse: number;
-}
 export interface ElevationStatus { supported: boolean; elevated: boolean }
-export interface PaymentCreateResult {
-  success: true;
-  data: {
-    publicId: string;
-    payUrl: string;
-    qrUrl: string | null;
-    accountName: string;
-    accountNumber: string;
-    amount: number;
-    content: string;
-  };
-}
 export interface DatabaseDiagnostics { path: string; tableCount: number; totalRows: number; fileSizeBytes: number; pageCount: number; pageSizeBytes: number; freePageCount: number; usedSizeBytes: number; tables: Array<{ name: string; rowCount: number }> }
 export interface DiagnosticLogs { path: string; lineCount: number; lines: string[] }
-export interface ServicePlan { id: number; name: string; price: number; type: number; days: number }
-export interface DealCheckResult {
-  valid: boolean;
-  dealId: number;
-  code: string;
-  value: number;
-  remainingCount: number;
-  planId: number;
-  planName: string;
-  originalPrice: number;
-  discountAmount: number;
-  finalPrice: number;
-}
 export interface SubagentFallbackRequest {
   subagentId: string;
   parentTaskId?: string;
@@ -87,22 +32,6 @@ export interface SubagentFallbackResult {
   reason?: string;
 }
 
-export interface PlanPurchaseResult {
-  success: boolean;
-  planId: number;
-  planName: string;
-  planType: number;
-  days: number;
-  extended: boolean;
-  originalPrice: number;
-  discountAmount: number;
-  finalPrice: number;
-  remainingBalance: number;
-  dealCode?: string | null;
-  remainingDealCount?: number | null;
-  expiresAt: string;
-}
-
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const method = (init.method ?? 'GET').toUpperCase();
   let response: Response;
@@ -115,7 +44,6 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   catch { /* malformed or non-JSON upstream error */ }
   if (!response.ok) {
     const problem = payload as ProblemDetails | undefined;
-    if (response.status === 401 && problem?.code !== 'invalid_current_password' && typeof window !== 'undefined') window.dispatchEvent(new Event('chatcmd:auth-required'));
     const fieldErrors = problem?.errors ? Object.values(problem.errors).flat().join(' ') : '';
     throw new ApiError(fieldErrors || problem?.message || problem?.detail || problem?.title || tr('Request failed ({status})', { status: response.status }), response.status, problem);
   }
@@ -124,34 +52,8 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 const json = (value: unknown) => JSON.stringify(value);
 const item = (value: string) => encodeURIComponent(value);
-const backendPath = (path: string) => {
-  const normalized = path.trim().replace(/^\/+/, '');
-  if (!normalized || normalized.includes('://') || normalized.startsWith('crypto/')) throw new ApiError('Invalid backend API path.');
-  return `/api/local/backend/${normalized}`;
-};
-
-export const backendApi = {
-  get: <T>(path: string, init: RequestInit = {}) => request<T>(backendPath(path), { ...init, method: 'GET' }),
-  post: <T>(path: string, body?: unknown, init: RequestInit = {}) => request<T>(backendPath(path), { ...init, method: 'POST', body: body === undefined ? undefined : json(body) }),
-  put: <T>(path: string, body?: unknown, init: RequestInit = {}) => request<T>(backendPath(path), { ...init, method: 'PUT', body: body === undefined ? undefined : json(body) }),
-  patch: <T>(path: string, body?: unknown, init: RequestInit = {}) => request<T>(backendPath(path), { ...init, method: 'PATCH', body: body === undefined ? undefined : json(body) }),
-  delete: <T>(path: string, init: RequestInit = {}) => request<T>(backendPath(path), { ...init, method: 'DELETE' }),
-};
 
 export const api = {
-  login: (email: string, password: string) => request<AuthResult>('/api/local/auth/login', { method: 'POST', body: json({ email, password }) }),
-  register: (email: string, password: string) => request<AuthResult>('/api/local/auth/register', { method: 'POST', body: json({ email, password }) }),
-  authInfo: () => request<AuthInfo>('/api/local/auth/info'),
-  billingBalance: () => request<BillingBalance>(backendPath('billing/balance')),
-  currentMonthStatistics: () => request<StatisticRow[]>(backendPath('statistics/statistic')),
-  skillUsage: () => request<SkillUsageRow[]>(backendPath('statistics/skill-use')),
-  createPayment: (amount: number, content: string) => request<PaymentCreateResult>('/api/local/payment/create', { method: 'POST', body: json({ amount, content }) }),
-  servicePlans: () => request<ServicePlan[]>(backendPath('plans')),
-  checkDeal: (code: string, planId: number) => request<DealCheckResult>(backendPath('deals/check'), { method: 'POST', body: json({ code, planId }) }),
-  purchasePlan: (planId: number, dealCode: string | null) => request<PlanPurchaseResult>(backendPath('plans/purchase'), { method: 'POST', body: json({ planId, dealCode }) }),
-  redeemGiftCode: (code: string) => request<GiftCodeRedeemResult>(backendPath('giftcode/redeem'), { method: 'POST', body: json({ code }) }),
-  changePassword: (currentPassword: string, newPassword: string) => request<{ success: boolean; message: string }>('/api/local/auth/change-password', { method: 'POST', body: json({ currentPassword, newPassword }) }),
-  logout: () => request<AuthResult>('/api/local/auth/logout', { method: 'POST', body: '{}' }),
   overview: () => request<Overview>('/api/local/overview'),
   mcpStatus: () => request<McpStatus>('/api/local/mcp/status'),
   agents: () => request<Agent[]>('/api/local/mcp/agents'),
@@ -165,9 +67,6 @@ export const api = {
   createTunnel: (baseUrl: string) => request<Tunnel>('/api/local/mcp/tunnels', { method: 'POST', body: json({ baseUrl }) }),
   deleteTunnel: (id: number) => request<{ deleted: boolean; id: number }>(`/api/local/mcp/tunnels/${id}`, { method: 'DELETE' }),
   testTunnel: (id: number) => request<TunnelTestResult>(`/api/local/mcp/tunnels/${id}/test`, { method: 'POST', body: '{}' }),
-  managedTunnelStatus: () => request<ManagedTunnelStatus>('/api/local/mcp/tunnel-connection'),
-  connectManagedTunnel: () => request<ManagedTunnelStatus>('/api/local/mcp/tunnel-connection/connect', { method: 'POST', body: '{}' }),
-  disconnectManagedTunnel: () => request<ManagedTunnelStatus>('/api/local/mcp/tunnel-connection/disconnect', { method: 'POST', body: '{}' }),
   pluginLinks: (agentId: string) => request<PluginLink[]>(`/api/local/mcp/agents/${item(agentId)}/plugin-links`),
   copyPluginLink: (agentId: string, tunnelId: number) => request<{ endpoint: string }>(`/api/local/mcp/agents/${item(agentId)}/plugin-links/${tunnelId}`, { method: 'POST', body: '{}' }),
   tools: () => request<Tool[]>('/api/local/mcp/tools'),
@@ -224,8 +123,4 @@ export const api = {
   databaseDiagnostics: () => request<DatabaseDiagnostics>('/api/local/diagnostics/database'),
   diagnosticLogs: () => request<DiagnosticLogs>('/api/local/diagnostics/logs'),
   deleteAllUserData: () => request<void>('/api/local/diagnostics/user-data', { method: 'DELETE' }),
-  updateStatus: () => request<UpdateStatus>('/api/local/updates/status'),
-  checkForUpdate: () => request<UpdateStatus>('/api/local/updates/check', { method: 'POST', body: '{}' }),
-  startUpdate: () => request<UpdateStatus>('/api/local/updates/start', { method: 'POST', body: '{}' }),
-  restartForUpdate: () => request<UpdateStatus>('/api/local/updates/restart', { method: 'POST', body: '{}' }),
 };

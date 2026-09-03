@@ -13,36 +13,6 @@ pub(super) async fn ping() -> Json<Value> {
     Json(json!({ "pong": true, "service": "ChatCMD" }))
 }
 
-pub(super) async fn managed_tunnel_status(
-    State(state): State<Arc<AppState>>,
-) -> Json<crate::tunnel_client::TunnelConnectionStatus> {
-    Json(state.tunnel.status().await)
-}
-
-pub(super) async fn connect_managed_tunnel(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<crate::tunnel_client::TunnelConnectionStatus>, Problem> {
-    state.tunnel.connect().await.map(Json).map_err(|error| {
-        Problem::new(
-            StatusCode::BAD_GATEWAY,
-            "Tunnel connection failed",
-            error.to_string(),
-        )
-    })
-}
-
-pub(super) async fn disconnect_managed_tunnel(
-    State(state): State<Arc<AppState>>,
-) -> Result<Json<crate::tunnel_client::TunnelConnectionStatus>, Problem> {
-    state.tunnel.disconnect().await.map(Json).map_err(|error| {
-        Problem::new(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Tunnel disconnect failed",
-            error.to_string(),
-        )
-    })
-}
-
 pub(super) async fn list_tunnels(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Value>, Problem> {
