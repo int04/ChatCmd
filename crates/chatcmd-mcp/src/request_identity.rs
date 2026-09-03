@@ -1,98 +1,75 @@
-use axum::{
-    body::{Body, to_bytes},
-    extract::Request,
-    http::{Method, StatusCode},
-};
-use serde_json::{Map, Value};
+use axum::{body::Body, extract::Request};
+use rmcp::{RoleServer, service::RequestContext};
 
-const MAX_MCP_BODY_BYTES: usize = 4 * 1024 * 1024;
+pub(crate) const MCP_CONTROL_BODY_BYTES: usize = 4 * 1024 * 1024;
 const OPENAI_SESSION_META_KEY: &str = "openai/session";
 const MAX_CONVERSATION_IDENTITY_BYTES: usize = 4096;
-const PRIVATE_SCOPE_ARGUMENT: &str = "__chatcmdConversationScopeId";
 
-pub(crate) async fn bind_authenticated_agent(
-    request: Request<Body>,
-    agent_id: &str,
-    session_id: &str,
-) -> Result<Request<Body>, StatusCode> {
-    if request.method() != Method::POST {
-        return Ok(request);
-    }
-
-    let (parts, body) = request.into_parts();
-    let bytes = to_bytes(body, MAX_MCP_BODY_BYTES)
-        .await
-        .map_err(|_| StatusCode::PAYLOAD_TOO_LARGE)?;
-    if bytes.is_empty() {
-        return Ok(Request::from_parts(parts, Body::empty()));
-    }
-
-    let mut payload: Value = serde_json::from_slice(&bytes).map_err(|_| StatusCode::BAD_REQUEST)?;
-    bind_identity_value(&mut payload, agent_id, session_id);
-    let encoded = serde_json::to_vec(&payload).map_err(|_| StatusCode::BAD_REQUEST)?;
-    Ok(Request::from_parts(parts, Body::from(encoded)))
+/// Server-owned identity propagated by rmcp from HTTP request extensions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AuthenticatedMcpContext {
+    pub(crate) agent_id: String,
+    pub(crate) local_session_id: String,
+    pub(crate) conversation_scope_id: Option<String>,
 }
 
-fn bind_identity_value(value: &mut Value, agent_id: &str, session_id: &str) {
-    match value {
-        Value::Array(items) => {
-            for item in items {
-                bind_identity_value(item, agent_id, session_id);
-            }
+impl AuthenticatedMcpContext {
+    pub(crate) fn new(agent_id: String, local_session_id: String) -> Self {
+        Self {
+            agent_id,
+            local_session_id,
+            conversation_scope_id: None,
         }
-        Value::Object(object)
-            if object.get("method").and_then(Value::as_str) == Some("tools/call") =>
-        {
-            let conversation_scope = read_openai_conversation_scope(object);
-            bind_tool_arguments(object, agent_id, session_id, conversation_scope.as_deref());
-        }
-        _ => {}
     }
 }
 
-fn bind_tool_arguments(
-    object: &mut Map<String, Value>,
-    agent_id: &str,
-    session_id: &str,
-    conversation_scope: Option<&str>,
+/// Attach trusted identity without reading, parsing, or replacing the body.
+pub(crate) fn bind_authenticated_context(
+    request: &mut Request<Body>,
+    context: AuthenticatedMcpContext,
 ) {
-    let params = object
-        .entry("params")
-        .or_insert_with(|| Value::Object(Map::new()));
-    let Some(params) = params.as_object_mut() else {
-        return;
-    };
-    let arguments = params
-        .entry("arguments")
-        .or_insert_with(|| Value::Object(Map::new()));
-    let Some(arguments) = arguments.as_object_mut() else {
-        return;
-    };
-    arguments.remove("agent_id");
-    arguments.insert("agentId".to_owned(), Value::String(agent_id.to_owned()));
-    arguments.remove("__chatcmd_mcp_session_id");
-    arguments.insert(
-        "__chatcmdMcpSessionId".to_owned(),
-        Value::String(session_id.to_owned()),
-    );
-    arguments.remove(PRIVATE_SCOPE_ARGUMENT);
-    if let Some(scope) = conversation_scope {
-        arguments.insert(
-            PRIVATE_SCOPE_ARGUMENT.to_owned(),
-            Value::String(scope.to_owned()),
-        );
-    }
+    request.extensions_mut().insert(context);
 }
 
-fn read_openai_conversation_scope(object: &Map<String, Value>) -> Option<String> {
-    let raw = object
-        .get("params")?
-        .as_object()?
-        .get("_meta")?
-        .as_object()?
-        .get(OPENAI_SESSION_META_KEY)?
-        .as_str()?
-        .trim();
+/// Recover HTTP identity after rmcp moves the request into its session worker.
+/// rmcp stores the original request parts in the tool request context.
+pub(crate) fn authenticated_context(
+    request_context: &RequestContext<RoleServer>,
+) -> Option<AuthenticatedMcpContext> {
+    let parts = request_context.extensions.get::<http::request::Parts>()?;
+    let mut context = parts.extensions.get::<AuthenticatedMcpContext>()?.clone();
+    context.conversation_scope_id = conversation_scope(&request_context.meta);
+    Some(context)
+}
+
+/// Non-HTTP transports have no authentication middleware. Preserve the local
+/// in-process transport contract without allowing this fallback on HTTP.
+pub(crate) fn local_transport_context(
+    request_context: &RequestContext<RoleServer>,
+    agent_id: &str,
+) -> Option<AuthenticatedMcpContext> {
+    if request_context
+        .extensions
+        .get::<http::request::Parts>()
+        .is_some()
+        || agent_id.trim().is_empty()
+    {
+        return None;
+    }
+    Some(AuthenticatedMcpContext::new(
+        agent_id.to_owned(),
+        format!(
+            "mcp-session-{}",
+            uuid::Uuid::new_v5(
+                &uuid::Uuid::NAMESPACE_OID,
+                format!("local-transport\0{agent_id}").as_bytes(),
+            )
+        ),
+    ))
+}
+
+fn conversation_scope(meta: &rmcp::model::RequestMetaObject) -> Option<String> {
+    let raw = meta.get(OPENAI_SESSION_META_KEY)?.as_str()?.trim();
     if raw.is_empty() || raw.len() > MAX_CONVERSATION_IDENTITY_BYTES {
         return None;
     }
@@ -106,88 +83,53 @@ fn read_openai_conversation_scope(object: &Map<String, Value>) -> Option<String>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use axum::body::to_bytes;
 
-    #[test]
-    fn authenticated_agent_overrides_client_agent_id() {
-        let mut payload = json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {
-                "name": "device_list",
-                "arguments": { "agentId": "rust_test", "agent_id": "legacy-wrong-shape" }
-            }
-        });
+    #[tokio::test]
+    async fn binding_preserves_request_body_byte_for_byte() {
+        let original =
+            br#"{ "jsonrpc": "2.0", "params": { "arguments": { "agentId": "spoof" } } }"#;
+        let mut request = Request::post("/mcp/token")
+            .body(Body::from(original.as_slice()))
+            .expect("request");
 
-        bind_identity_value(&mut payload, "agent-from-token", "mcp-session-safe");
-
-        assert_eq!(
-            payload.pointer("/params/arguments/agentId"),
-            Some(&Value::String("agent-from-token".to_owned()))
+        bind_authenticated_context(
+            &mut request,
+            AuthenticatedMcpContext::new("agent-safe".to_owned(), "session-safe".to_owned()),
         );
-        assert!(payload.pointer("/params/arguments/agent_id").is_none());
+
         assert_eq!(
-            payload.pointer("/params/arguments/__chatcmdMcpSessionId"),
-            Some(&Value::String("mcp-session-safe".to_owned()))
+            to_bytes(request.into_body(), original.len())
+                .await
+                .expect("body"),
+            original.as_slice()
         );
     }
 
     #[test]
-    fn openai_session_metadata_is_fingerprinted_and_overrides_spoofed_scope() {
-        let mut first = json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {
-                "name": "shell_create",
-                "_meta": { "openai/session": "chat-a" },
-                "arguments": { "__chatcmdConversationScopeId": "spoofed" }
-            }
-        });
+    fn conversation_identity_is_bounded_and_fingerprinted() {
+        let mut first = rmcp::model::RequestMetaObject::default();
+        first.insert(
+            OPENAI_SESSION_META_KEY.to_owned(),
+            serde_json::Value::String("chat-a".to_owned()),
+        );
         let mut second = first.clone();
-        second["params"]["_meta"]["openai/session"] = Value::String("chat-b".to_owned());
-
-        bind_identity_value(&mut first, "agent", "mcp-session");
-        bind_identity_value(&mut second, "agent", "mcp-session");
-
-        let first_scope = first
-            .pointer("/params/arguments/__chatcmdConversationScopeId")
-            .and_then(Value::as_str)
-            .expect("first scope");
-        let second_scope = second
-            .pointer("/params/arguments/__chatcmdConversationScopeId")
-            .and_then(Value::as_str)
-            .expect("second scope");
-        assert!(first_scope.starts_with("openai:"));
-        assert_ne!(first_scope, "spoofed");
-        assert_ne!(first_scope, second_scope);
-    }
-
-    #[test]
-    fn missing_openai_session_removes_spoofed_private_scope() {
-        let mut payload = json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "tools/call",
-            "params": {
-                "name": "shell_create",
-                "arguments": { "__chatcmdConversationScopeId": "spoofed" }
-            }
-        });
-        bind_identity_value(&mut payload, "agent", "mcp-session");
-        assert!(
-            payload
-                .pointer("/params/arguments/__chatcmdConversationScopeId")
-                .is_none()
+        second.insert(
+            OPENAI_SESSION_META_KEY.to_owned(),
+            serde_json::Value::String("chat-b".to_owned()),
         );
-    }
 
-    #[test]
-    fn non_tool_messages_are_unchanged() {
-        let mut payload = json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{}});
-        let original = payload.clone();
-        bind_identity_value(&mut payload, "agent-from-token", "mcp-session-safe");
-        assert_eq!(payload, original);
+        let first_scope = conversation_scope(&first).expect("first scope");
+        assert!(first_scope.starts_with("openai:"));
+        assert_ne!(
+            first_scope,
+            conversation_scope(&second).expect("second scope")
+        );
+
+        first.insert(
+            OPENAI_SESSION_META_KEY.to_owned(),
+            serde_json::Value::String("x".repeat(MAX_CONVERSATION_IDENTITY_BYTES + 1)),
+        );
+        assert!(conversation_scope(&first).is_none());
     }
 }

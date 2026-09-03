@@ -376,6 +376,7 @@ fn common_tool_schema_exposes_catalog_hash_for_stale_cache_detection() {
     let schema = serde_json::to_value(schemars::schema_for!(CommonToolArgs))
         .expect("serialize common schema");
     assert!(schema["properties"].get("clientCatalogHash").is_some());
+    assert!(schema["properties"].get("agentId").is_none());
 }
 
 #[test]
@@ -527,4 +528,208 @@ async fn path_token_and_origin_fail_closed() {
             .code,
         "query_token_rejected"
     );
+}
+
+struct TokenAuth;
+
+impl AuthProvider for TokenAuth {
+    fn authorize<'a>(&'a self, token: &'a str) -> BoxFuture<'a, RuntimeResult<String>> {
+        Box::pin(async move { Ok(token.to_owned()) })
+    }
+}
+
+#[derive(Clone, Default)]
+struct RecordingRuntime {
+    calls: Arc<std::sync::Mutex<Vec<(OperationContext, Value)>>>,
+}
+
+impl RuntimeApi for RecordingRuntime {
+    fn call<'a>(
+        &'a self,
+        _tool: &'a str,
+        context: OperationContext,
+        arguments: Value,
+    ) -> BoxFuture<'a, RuntimeResult<Value>> {
+        Box::pin(async move {
+            self.calls
+                .lock()
+                .expect("recording runtime lock")
+                .push((context, arguments));
+            Ok(serde_json::json!({"ok": true}))
+        })
+    }
+
+    fn local_device(&self) -> DeviceDescriptor {
+        CatalogRuntime.local_device()
+    }
+
+    fn fail_subagent<'a>(
+        &'a self,
+        _child_task_id: &'a str,
+        _message: &'a str,
+    ) -> BoxFuture<'a, RuntimeResult<()>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn request_subagent_fallback<'a>(
+        &'a self,
+        _parent_context: &'a OperationContext,
+        _registration: &'a Value,
+        _delegated_prompt: &'a str,
+    ) -> BoxFuture<'a, RuntimeResult<Value>> {
+        Box::pin(async { Ok(Value::Null) })
+    }
+}
+
+fn mcp_post(path: &str, body: impl Into<Body>, session_id: Option<&str>) -> Request<Body> {
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri(path)
+        .header("host", "localhost")
+        .header("origin", "https://allowed.example")
+        .header("content-type", "application/json")
+        .header("accept", "application/json, text/event-stream");
+    if let Some(session_id) = session_id {
+        builder = builder
+            .header("mcp-session-id", session_id)
+            .header("mcp-protocol-version", "2025-03-26");
+    }
+    builder.body(body.into()).expect("MCP request")
+}
+
+async fn initialized_router(runtime: RecordingRuntime, agent: &str) -> (Router, String) {
+    let security = HttpSecurity::new(Arc::new(TokenAuth), Arc::new(Accept));
+    let router =
+        axum_router_with_host_validation(McpServer::new(Arc::new(runtime)), security, false);
+    let initialize = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": {"name": "identity-test", "version": "1"}
+        }
+    })
+    .to_string();
+    let response = router
+        .clone()
+        .oneshot(mcp_post(&format!("/mcp/{agent}"), initialize, None))
+        .await
+        .expect("initialize response");
+    if response.status() != StatusCode::OK {
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("error body");
+        panic!(
+            "initialize failed with {status}: {}",
+            String::from_utf8_lossy(&body)
+        );
+    }
+    let session_id = response
+        .headers()
+        .get("mcp-session-id")
+        .and_then(|value| value.to_str().ok())
+        .expect("session header")
+        .to_owned();
+    let initialized = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized"
+    })
+    .to_string();
+    let response = router
+        .clone()
+        .oneshot(mcp_post(
+            &format!("/mcp/{agent}"),
+            initialized,
+            Some(&session_id),
+        ))
+        .await
+        .expect("initialized response");
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    (router, session_id)
+}
+
+#[tokio::test]
+async fn streamable_http_uses_trusted_identity_and_parsed_request_meta() {
+    let runtime = RecordingRuntime::default();
+    let (router, session_id) = initialized_router(runtime.clone(), "agent-a").await;
+    let call = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "device_list",
+            "_meta": {"openai/session": "chat-a"},
+            "arguments": {
+                "agentId": "spoofed-agent",
+                "__chatcmdMcpSessionId": "spoofed-session",
+                "__chatcmdConversationScopeId": "spoofed-scope"
+            }
+        }
+    })
+    .to_string();
+    let response = router
+        .oneshot(mcp_post("/mcp/agent-a", call, Some(&session_id)))
+        .await
+        .expect("tool response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let response_body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .expect("tool response body");
+
+    let calls = runtime.calls.lock().expect("recorded calls");
+    let (context, arguments) = calls.first().unwrap_or_else(|| {
+        panic!(
+            "runtime tool call; response was {}",
+            String::from_utf8_lossy(&response_body)
+        )
+    });
+    assert_eq!(context.agent_id, "agent-a");
+    assert_eq!(
+        context.mcp_session_id.as_deref(),
+        Some(local_mcp_session_id("agent-a", Some(&session_id)).as_str())
+    );
+    assert!(
+        context
+            .conversation_scope_id
+            .as_deref()
+            .is_some_and(|scope| scope.starts_with("openai:"))
+    );
+    assert_eq!(arguments, &serde_json::json!({}));
+}
+
+#[tokio::test]
+async fn streamable_http_session_cannot_be_reused_by_another_agent() {
+    let runtime = RecordingRuntime::default();
+    let (router, session_id) = initialized_router(runtime, "agent-a").await;
+    let call = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {"name": "device_list", "arguments": {}}
+    })
+    .to_string();
+    let response = router
+        .oneshot(mcp_post("/mcp/agent-b", call, Some(&session_id)))
+        .await
+        .expect("cross-agent response");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn streamable_http_enforces_control_body_cap() {
+    let security = HttpSecurity::new(Arc::new(TokenAuth), Arc::new(Accept));
+    let router = axum_router_with_host_validation(
+        McpServer::new(Arc::new(RecordingRuntime::default())),
+        security,
+        false,
+    );
+    let oversized = vec![b'x'; request_identity::MCP_CONTROL_BODY_BYTES + 1];
+    let response = router
+        .oneshot(mcp_post("/mcp/agent-a", oversized, None))
+        .await
+        .expect("oversized response");
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
 }

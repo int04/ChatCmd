@@ -154,3 +154,12 @@ cargo test --workspace
 - Conversation-scope session flow.
 - Body limits/blob interaction.
 - Integration/performance test result.
+
+# Verification follow-up (_check)
+
+Implementation and the minimum Cargo validation pass, but the following Plan 17 items still need verification or follow-up before this plan can be considered fully closed:
+
+- `rmcp 3.1.4` currently deserializes one `ClientJsonRpcMessage` per HTTP POST and rejects JSON-RPC batch arrays. Upgrade or patch `rmcp`, then add real transport tests proving consistent trusted identity across mixed batch tool calls and notifications.
+- Add streamed/chunked HTTP regression coverage for a missing or incorrect `Content-Length`, disconnect while reading the request body, malformed and empty POST bodies, and a near-cap allocation/memory measurement. The implemented byte-for-byte test proves the identity layer no longer consumes or re-encodes the body, and the real transport cap test proves an oversized body returns 413.
+- Exercise session-owner lifecycle beyond the in-process tests: expiry/cleanup, reconnect after application restart, and token rotation or revocation while an MCP session remains open. The current in-memory binding rejects a second authenticated agent reusing the same live remote session ID, but it has no persistence or TTL policy of its own.
+- Run a packaged streamable-HTTP tool-call regression. The existing packaged release test validates catalog startup, while the new trusted-identity tool-call test runs through the real Axum plus `rmcp` transport in process.

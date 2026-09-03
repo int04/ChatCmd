@@ -19,14 +19,19 @@ use rmcp::{
     Peer, RoleServer,
     handler::server::wrapper::Parameters,
     model::CallToolResult,
-    schemars, tool, tool_router,
+    schemars,
+    service::RequestContext,
+    tool, tool_router,
     transport::streamable_http_server::{
         StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
     },
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
 use tower::ServiceExt;
 
 use server_contract::error_value;
@@ -39,10 +44,6 @@ pub use tool_catalog::{
 /// Path-token authentication dependency injected by the HTTP host.
 pub trait AuthProvider: Send + Sync {
     fn authorize<'a>(&'a self, token: &'a str) -> BoxFuture<'a, RuntimeResult<String>>;
-}
-
-tokio::task_local! {
-    static AUTHENTICATED_AGENT_ID: String;
 }
 
 /// Origin allow-list dependency injected by the HTTP host.
@@ -89,8 +90,9 @@ pub struct ToolArguments {
     /// Caller-generated idempotency key.
     #[serde(default)]
     pub request_id: String,
-    /// Calling agent identifier used by policy checks.
+    /// Deprecated caller identity accepted only for compatibility and discarded.
     #[serde(default)]
+    #[schemars(skip)]
     pub agent_id: String,
     /// Task correlation identifier.
     #[serde(default)]
@@ -101,11 +103,11 @@ pub struct ToolArguments {
     /// Catalog hash last observed by the caller. When present it must match this server build.
     #[serde(default)]
     pub client_catalog_hash: Option<String>,
-    /// HTTP-bound, server-derived correlation. Hidden from MCP input schema.
+    /// Deprecated private caller field accepted only for compatibility and discarded.
     #[serde(default, rename = "__chatcmdMcpSessionId")]
     #[schemars(skip)]
     pub(crate) authenticated_session_id: Option<String>,
-    /// HTTP-bound private conversation identity. Hidden from MCP input schema.
+    /// Deprecated private caller field accepted only for compatibility and discarded.
     #[serde(default, rename = "__chatcmdConversationScopeId")]
     #[schemars(skip)]
     pub(crate) conversation_scope_id: Option<String>,
@@ -120,8 +122,9 @@ struct CommonToolArgs {
     /// Caller-generated idempotency key. Usually omit and let ChatCMD generate one.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     request_id: String,
-    /// Calling agent identifier. The authenticated server identity overrides this value.
+    /// Deprecated caller identity accepted only for compatibility and discarded.
     #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[schemars(skip)]
     agent_id: String,
     /// Task correlation identifier returned by agent_user_message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -585,29 +588,39 @@ impl McpServer {
         &self,
         tool_name: &'static str,
         arguments: ToolArguments,
+        authenticated: request_identity::AuthenticatedMcpContext,
     ) -> (OperationContext, Value) {
         let request_id = if arguments.request_id.is_empty() {
             uuid::Uuid::new_v4().to_string()
         } else {
             arguments.request_id.clone()
         };
-        let authenticated_agent = AUTHENTICATED_AGENT_ID
-            .try_with(Clone::clone)
-            .unwrap_or(arguments.agent_id);
-        let mut context = OperationContext::new(request_id, authenticated_agent, tool_name);
+        let mut context = OperationContext::new(request_id, authenticated.agent_id, tool_name);
         context.task_id = arguments.task_id;
         context.turn_id = arguments.turn_id;
-        context.mcp_session_id = arguments.authenticated_session_id;
-        context.conversation_scope_id = arguments.conversation_scope_id;
+        context.mcp_session_id = Some(authenticated.local_session_id);
+        context.conversation_scope_id = authenticated.conversation_scope_id;
         let value = Value::Object(arguments.fields.into_iter().collect());
         (context, value)
     }
 
-    async fn invoke(&self, tool_name: &'static str, arguments: ToolArguments) -> CallToolResult {
+    async fn invoke(
+        &self,
+        tool_name: &'static str,
+        arguments: ToolArguments,
+        request_context: RequestContext<RoleServer>,
+    ) -> CallToolResult {
         if let Some(mismatch) = catalog_mismatch(&arguments) {
             return mismatch;
         }
-        let (context, value) = self.prepare_call(tool_name, arguments);
+        let Some(authenticated) = request_identity::authenticated_context(&request_context)
+            .or_else(|| {
+                request_identity::local_transport_context(&request_context, &arguments.agent_id)
+            })
+        else {
+            return missing_authenticated_context();
+        };
+        let (context, value) = self.prepare_call(tool_name, arguments, authenticated);
         match self.runtime.call(tool_name, context, value).await {
             Ok(value) => CallToolResult::structured(value),
             Err(error) => CallToolResult::structured_error(error_value(&error)),
@@ -618,11 +631,19 @@ impl McpServer {
         &self,
         arguments: ToolArguments,
         peer: Peer<RoleServer>,
+        request_context: RequestContext<RoleServer>,
     ) -> CallToolResult {
         if let Some(mismatch) = catalog_mismatch(&arguments) {
             return mismatch;
         }
-        let (context, value) = self.prepare_call("agent_subagent_start", arguments);
+        let Some(authenticated) = request_identity::authenticated_context(&request_context)
+            .or_else(|| {
+                request_identity::local_transport_context(&request_context, &arguments.agent_id)
+            })
+        else {
+            return missing_authenticated_context();
+        };
+        let (context, value) = self.prepare_call("agent_subagent_start", arguments, authenticated);
         let request = value
             .get("request")
             .and_then(Value::as_str)
@@ -679,6 +700,17 @@ impl McpServer {
     }
 }
 
+fn missing_authenticated_context() -> CallToolResult {
+    CallToolResult::structured_error(serde_json::json!({
+        "error": {
+            "code": "authenticated_context_missing",
+            "message": "trusted MCP request identity is unavailable",
+            "retryable": true,
+            "approvalRequired": false
+        }
+    }))
+}
+
 fn catalog_mismatch(arguments: &ToolArguments) -> Option<CallToolResult> {
     let client_hash = arguments.client_catalog_hash.as_deref()?;
     let metadata = catalog_metadata();
@@ -709,8 +741,13 @@ macro_rules! tool_methods {
                 async fn $method(
                     &self,
                     Parameters(arguments): Parameters<$args>,
+                    request_context: RequestContext<RoleServer>,
                 ) -> CallToolResult {
-                    self.invoke(stringify!($method), into_tool_arguments(arguments)).await
+                    self.invoke(
+                        stringify!($method),
+                        into_tool_arguments(arguments),
+                        request_context,
+                    ).await
                 }
             )+
 
@@ -719,8 +756,13 @@ macro_rules! tool_methods {
                 &self,
                 Parameters(arguments): Parameters<SubagentStartArgs>,
                 peer: Peer<RoleServer>,
+                request_context: RequestContext<RoleServer>,
             ) -> CallToolResult {
-                self.invoke_subagent_start(into_tool_arguments(arguments), peer).await
+                self.invoke_subagent_start(
+                    into_tool_arguments(arguments),
+                    peer,
+                    request_context,
+                ).await
             }
         }
     };
@@ -1048,6 +1090,7 @@ fn has_query_token(query: &str) -> bool {
 struct McpHttpState {
     security: HttpSecurity,
     service: StreamableHttpService<McpServer, LocalSessionManager>,
+    session_owners: Arc<tokio::sync::RwLock<HashMap<String, String>>>,
 }
 
 async fn mcp_handler(
@@ -1067,8 +1110,19 @@ async fn mcp_handler(
     let header_session = request
         .headers()
         .get("mcp-session-id")
-        .and_then(|value| value.to_str().ok());
-    let session_id = local_mcp_session_id(&agent_id, header_session);
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned);
+    if let Some(remote_session) = header_session.as_deref()
+        && state
+            .session_owners
+            .read()
+            .await
+            .get(remote_session)
+            .is_some_and(|owner| owner != &agent_id)
+    {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let session_id = local_mcp_session_id(&agent_id, header_session.as_deref());
     let metadata = catalog_metadata();
     tracing::info!(
         target: "chatcmd_mcp_catalog",
@@ -1083,22 +1137,31 @@ async fn mcp_handler(
         "mcp_session_catalog"
     );
 
-    // Bind tool identity and safe correlation before rmcp moves work into its session task.
-    // Client-provided `agent_id` values (for example a ChatGPT connector name) never win.
-    request =
-        match request_identity::bind_authenticated_agent(request, &agent_id, &session_id).await {
-            Ok(request) => request,
-            Err(status) => return status.into_response(),
-        };
+    // rmcp forwards the original HTTP parts through RequestContext, including this
+    // server-owned extension. The request body remains untouched and is parsed once.
+    request_identity::bind_authenticated_context(
+        &mut request,
+        request_identity::AuthenticatedMcpContext::new(agent_id.clone(), session_id),
+    );
 
     // Keep the credential at the HTTP boundary. Downstream rmcp handlers receive
     // a stable credential-free URI and the authenticated agent identity only.
     *request.uri_mut() = Uri::from_static("/mcp");
-    match AUTHENTICATED_AGENT_ID
-        .scope(agent_id, state.service.clone().oneshot(request))
-        .await
-    {
-        Ok(response) => response.into_response(),
+    match state.service.clone().oneshot(request).await {
+        Ok(response) => {
+            if let Some(remote_session) = response
+                .headers()
+                .get("mcp-session-id")
+                .and_then(|value| value.to_str().ok())
+            {
+                state
+                    .session_owners
+                    .write()
+                    .await
+                    .insert(remote_session.to_owned(), agent_id);
+            }
+            response.into_response()
+        }
         Err(infallible) => match infallible {},
     }
 }
@@ -1144,6 +1207,7 @@ fn streamable_http_service_with_config(
     server: McpServer,
     config: StreamableHttpServerConfig,
 ) -> StreamableHttpService<McpServer, LocalSessionManager> {
+    let config = config.with_max_request_body_bytes(request_identity::MCP_CONTROL_BODY_BYTES);
     StreamableHttpService::new(
         move || Ok(server.clone()),
         LocalSessionManager::default().into(),
@@ -1174,6 +1238,7 @@ pub fn axum_router_with_host_validation(
     let state = McpHttpState {
         security,
         service: streamable_http_service_with_config(server, config),
+        session_owners: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
     };
     Router::new()
         .route("/mcp/{token}", any(mcp_handler))
