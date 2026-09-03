@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use chatcmd_core::{
     ArtifactId, ArtifactStore, ExecutionMode, TaskExecutionMode, TaskId, TaskStore,
@@ -232,6 +232,54 @@ impl RuntimeHost {
                         .list(&input.path, input.offset, input.limit)
                         .await?,
                 )
+            }
+            "fs_list_v2" => {
+                let started = Instant::now();
+                let input: ListV2Input = parse(arguments)?;
+                let limit = input.limit.clamp(1, 1_999);
+                let scope = workspace.stat(&input.path).await?.path;
+                let normalized_scope = scope.to_string_lossy();
+                let offset = match input.cursor.as_deref() {
+                    Some(cursor) => {
+                        let state: Value = self.cursor_codec.decode(
+                            cursor,
+                            "fs_list_v2",
+                            normalized_scope.as_ref(),
+                        )?;
+                        state
+                            .get("offset")
+                            .and_then(Value::as_u64)
+                            .and_then(|value| usize::try_from(value).ok())
+                            .ok_or_else(|| {
+                                RuntimeError::new("invalid_cursor", "cursor state is invalid")
+                            })?
+                    }
+                    None => 0,
+                };
+                let mut entries = workspace.list(&input.path, offset, limit + 1).await?;
+                let has_more = entries.len() > limit;
+                if has_more {
+                    entries.truncate(limit);
+                }
+                let next_cursor = if has_more {
+                    Some(self.cursor_codec.encode(
+                        "fs_list_v2",
+                        normalized_scope.as_ref(),
+                        &json!({ "offset": offset.saturating_add(entries.len()) }),
+                        None,
+                    )?)
+                } else {
+                    None
+                };
+                let mut result =
+                    chatcmd_runtime::ToolResultEnvelope::paged(entries, next_cursor, has_more)
+                        .with_usage(chatcmd_runtime::ToolUsage {
+                            elapsed_ms: u64::try_from(started.elapsed().as_millis())
+                                .unwrap_or(u64::MAX),
+                            ..chatcmd_runtime::ToolUsage::default()
+                        });
+                result.measure_output_bytes()?;
+                value(result)
             }
             "fs_search" => {
                 filesystem_dispatch::search(self, workspace, &context, parse(arguments)?).await

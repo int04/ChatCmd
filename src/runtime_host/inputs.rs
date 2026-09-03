@@ -171,6 +171,16 @@ pub(super) struct ListInput {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct ListV2Input {
+    pub(super) path: PathBuf,
+    #[serde(default)]
+    pub(super) cursor: Option<String>,
+    #[serde(default = "default_limit")]
+    pub(super) limit: usize,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct SearchInput {
     pub(super) path: PathBuf,
     pub(super) query: String,

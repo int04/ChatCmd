@@ -63,7 +63,8 @@ Các method `fs_*` thao tác trực tiếp trong canonical workspace scope và t
 | Method | Tham số chính | Ý nghĩa |
 |---|---|---|
 | `workspace_roots` | Không có tham số riêng | Liệt kê các canonical workspace root mà agent được phép thao tác. |
-| `fs_list` | `path`, `offset?`, `limit?` | Liệt kê file/thư mục con bên trong một path. |
+| `fs_list` | `path`, `offset?`, `limit?` | Legacy: liệt kê file/thư mục con và trả trực tiếp mảng `FsEntry`; giữ nguyên để tương thích. |
+| `fs_list_v2` | `path`, `cursor?`, `limit?` | Bản envelope v1: trả `schemaVersion`, typed `data`, `page`, `usage` và các metadata chung khi có. `cursor` là opaque, chỉ dùng lại `page.nextCursor` cho đúng cùng tool/path. |
 | `fs_search` | `path`, `query`, `caseSensitive?`, `maxResults?`, `maxFileBytes?`, `includeIgnored?`, `exclude?` | Tìm kiếm **nội dung text** trong workspace. Khi tìm từ root nên dùng `path: "."`. |
 | `fs_find` | `path`, `pattern`, `maxResults?`, `maxDepth?` | Tìm **đường dẫn/tên file hoặc thư mục** theo pattern. Nên dùng khi chưa chắc relative path thay vì đoán path. |
 | `fs_read_text` | `path`, `startLine?`, `lineCount?`, `maxCharacters?` | Đọc file text UTF-8; hỗ trợ đọc theo range để tránh tải file lớn toàn bộ. |
@@ -149,7 +150,9 @@ Lưu ý: `fs_find`, `fs_search`, `fs_read_text`, các tool sửa file, shell, Gi
 
 `TOOL_NAMES` được sinh từ chính `McpServer::tool_router().list_all()` và sort deterministic. Không copy danh sách tool sang connector, UI, release script hoặc tài liệu.
 
-Canonical manifest chứa `protocolVersion`, `catalogVersion` và với mỗi tool có `name`, normalized input schema cùng capability flags. Trước khi hash SHA-256, object keys được sort và metadata chỉ để mô tả như `description`/`title` được bỏ khỏi contract; vì vậy đổi wording không làm invalid cache, còn đổi property/type/required/capability sẽ làm đổi `catalogHash`.
+Canonical manifest chứa `protocolVersion`, `catalogVersion` và với mỗi tool có `name`, normalized input schema, `resultSchema` cùng capability flags. Tool chưa migrate result contract có `resultSchema: null` và `resultSchemaVersion: null`; `fs_list_v2` quảng bá `resultSchemaVersion: 1` cùng generated JSON schema của `ToolResultEnvelope<Vec<FsEntry>>`. Trước khi hash SHA-256, object keys được sort và metadata chỉ để mô tả như `description`/`title` được bỏ khỏi contract; vì vậy đổi wording không làm invalid cache, còn đổi input/result schema hoặc capability sẽ làm đổi `catalogHash`.
+
+Chi tiết semantics, cursor/error code, migration inventory và các ví dụ complete/paged/truncated/content-backed nằm tại `docs/tool_result_envelope.md`.
 
 Metadata runtime gồm `appVersion`, `protocolVersion`, `catalogVersion`, `catalogHash`, `buildId`. MCP initialize trả metadata dưới prefix `CHATCMD_CATALOG_METADATA=...` trong server instructions. HTTP host cũng expose endpoint authenticated `GET /mcp/{token}/catalog` để diagnostics lấy metadata + canonical manifest; token vẫn chỉ ở auth boundary và không được ghi vào structured catalog log.
 

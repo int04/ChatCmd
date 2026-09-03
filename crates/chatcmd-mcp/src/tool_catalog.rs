@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::sync::LazyLock;
 
 pub const PROTOCOL_VERSION: u32 = 2;
-pub const CATALOG_VERSION: u32 = 1;
+pub const CATALOG_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -24,6 +24,7 @@ pub struct ToolCapabilityFlags {
     pub supports_content_ref: bool,
     pub mutating: bool,
     pub streaming: bool,
+    pub result_schema_version: Option<u16>,
     pub deprecated_aliases: Vec<String>,
 }
 
@@ -68,6 +69,7 @@ pub fn canonical_manifest() -> Value {
             serde_json::json!({
                 "name": name,
                 "schema": canonicalize_contract(schema),
+                "resultSchema": result_schema(&name),
                 "capabilities": capability_flags(&name),
             })
         })
@@ -120,12 +122,23 @@ pub(crate) fn canonicalize_contract(value: Value) -> Value {
 
 fn capability_flags(name: &str) -> ToolCapabilityFlags {
     ToolCapabilityFlags {
-        supports_cursor: matches!(name, "fs_list" | "shell_read"),
-        supports_content_ref: false,
+        supports_cursor: matches!(name, "fs_list_v2" | "shell_read"),
+        supports_content_ref: name == "fs_list_v2",
         mutating: is_mutating(name),
         streaming: name == "shell_read",
+        result_schema_version: (name == "fs_list_v2")
+            .then_some(chatcmd_runtime::TOOL_RESULT_SCHEMA_VERSION),
         deprecated_aliases: Vec::new(),
     }
+}
+
+fn result_schema(name: &str) -> Value {
+    if name != "fs_list_v2" {
+        return Value::Null;
+    }
+    let schema =
+        schemars::schema_for!(chatcmd_runtime::ToolResultEnvelope<Vec<chatcmd_runtime::FsEntry>>);
+    canonicalize_contract(serde_json::to_value(schema).expect("result schema must serialize"))
 }
 
 fn is_mutating(name: &str) -> bool {

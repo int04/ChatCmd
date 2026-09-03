@@ -31,8 +31,8 @@ pub(crate) mod user_message_tests;
 use chatcmd_core::{LocalDevice, Task, TaskId, TaskStore as _};
 use chatcmd_mcp::RuntimeApi;
 use chatcmd_runtime::{
-    BoxFuture, DeviceDescriptor, GitService, OperationContext, ProcessService, RuntimeError,
-    RuntimeResult, ShellRuntime, SkillService, WorkspaceService,
+    BoxFuture, CursorCodec, DeviceDescriptor, GitService, OperationContext, ProcessService,
+    RuntimeError, RuntimeResult, ShellRuntime, SkillService, WorkspaceService,
 };
 use chatcmd_storage::SqliteRepository;
 use serde::de::DeserializeOwned;
@@ -64,6 +64,7 @@ pub(crate) struct RuntimeHost {
     file_changes: TurnFileChangeTracker,
     subagent_registration_gate: Arc<Mutex<()>>,
     auth_usage_cache: Arc<RwLock<AuthUsageCache>>,
+    cursor_codec: CursorCodec,
 }
 
 impl RuntimeHost {
@@ -97,6 +98,7 @@ impl RuntimeHost {
             file_changes: TurnFileChangeTracker::default(),
             subagent_registration_gate: Arc::new(Mutex::new(())),
             auth_usage_cache,
+            cursor_codec: CursorCodec::ephemeral(),
         }
     }
 

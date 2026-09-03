@@ -119,6 +119,7 @@ fn catalog_names_are_sorted_stable_and_unique() {
     assert_eq!(sorted.len(), TOOL_NAMES.len());
     assert!(TOOL_NAMES.iter().any(|name| name == "agent_user_message"));
     assert!(TOOL_NAMES.iter().any(|name| name == "fs_replace_text"));
+    assert!(TOOL_NAMES.iter().any(|name| name == "fs_list_v2"));
 }
 
 #[tokio::test]
@@ -145,6 +146,37 @@ fn canonical_manifest_has_schema_for_every_tool() {
         );
         assert!(tool["capabilities"].is_object());
     }
+}
+
+#[test]
+fn fs_list_v2_advertises_versioned_result_schema_without_changing_legacy_input() {
+    let manifest = canonical_manifest();
+    let tools = manifest["tools"].as_array().expect("manifest tools");
+    let legacy = tools
+        .iter()
+        .find(|tool| tool["name"] == "fs_list")
+        .expect("legacy fs_list");
+    let v2 = tools
+        .iter()
+        .find(|tool| tool["name"] == "fs_list_v2")
+        .expect("fs_list_v2");
+
+    assert!(legacy["schema"]["properties"].get("offset").is_some());
+    assert!(legacy["schema"]["properties"].get("cursor").is_none());
+    assert!(legacy["resultSchema"].is_null());
+    assert_eq!(legacy["capabilities"]["resultSchemaVersion"], Value::Null);
+
+    assert!(v2["schema"]["properties"].get("cursor").is_some());
+    assert!(v2["schema"]["properties"].get("offset").is_none());
+    assert_eq!(v2["capabilities"]["resultSchemaVersion"], 1);
+    assert_eq!(v2["capabilities"]["supportsCursor"], true);
+    assert_eq!(
+        v2["resultSchema"]["properties"]["schemaVersion"]["type"],
+        "integer"
+    );
+    assert!(v2["resultSchema"]["properties"].get("page").is_some());
+    assert!(v2["resultSchema"]["properties"].get("truncation").is_some());
+    assert!(v2["resultSchema"]["properties"].get("contentRef").is_some());
 }
 
 #[test]

@@ -9,6 +9,7 @@ function formatKnownTool(tool: string, output: unknown): string {
   const value = asObject(output);
   switch (tool) {
     case 'fs_list': return formatFsList(output);
+    case 'fs_list_v2': return formatFsListEnvelope(value);
     case 'fs_find': return formatPathList(output);
     case 'fs_stat': return formatFsEntry(value);
     case 'fs_create_directory': return actionPath('Đã tạo thư mục', value);
@@ -52,6 +53,19 @@ function formatFsList(output: unknown) {
     const size = value.size !== undefined ? ` · ${value.size} byte` : '';
     return `${type === 'directory' ? '📁' : '📄'} ${path}${size}`;
   }).join('\n');
+}
+
+function formatFsListEnvelope(value: Record<string, unknown>) {
+  const body = formatFsList(value.data);
+  const page = asObject(value.page);
+  const truncation = asObject(value.truncation);
+  const contentRef = asObject(value.contentRef);
+  return compact([
+    body,
+    page.hasMore === true ? 'Còn dữ liệu ở trang tiếp theo.' : '',
+    truncation.truncated === true ? `Kết quả bị cắt${stringish(truncation.reason) ? `: ${humanKey(stringish(truncation.reason))}` : '.'}` : '',
+    stringish(contentRef.id) ? `Nội dung đầy đủ: ${stringish(contentRef.id)}` : '',
+  ]);
 }
 
 function formatPathList(output: unknown, prefix = '') {

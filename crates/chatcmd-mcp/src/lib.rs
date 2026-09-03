@@ -289,6 +289,13 @@ tool_args!(ListArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     limit: Option<usize>
 });
+tool_args!(ListV2Args {
+    path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cursor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    limit: Option<usize>
+});
 tool_args!(SearchArgs {
     path: String,
     query: String,
@@ -593,6 +600,11 @@ tool_methods!(
         fs_list,
         ListArgs,
         "List workspace directory entries. Required field: path; optional offset, limit."
+    ),
+    (
+        fs_list_v2,
+        ListV2Args,
+        "List workspace directory entries using result envelope schemaVersion 1. Required field: path; optional opaque cursor and limit. Continue only with page.nextCursor returned for the same path."
     ),
     (
         fs_search,

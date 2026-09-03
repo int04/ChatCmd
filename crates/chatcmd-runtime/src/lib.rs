@@ -5,6 +5,7 @@ mod policy;
 mod services;
 mod shell;
 mod skill_service;
+mod tool_result;
 mod types;
 
 pub use filesystem::{SearchProgress, WorkspaceService};
@@ -18,4 +19,5 @@ pub use skill_service::{
     ManagedSkill, SkillInstallCandidate, SkillInstallPreview, SkillOption, SkillOptionChoice,
     SkillService,
 };
+pub use tool_result::*;
 pub use types::*;
