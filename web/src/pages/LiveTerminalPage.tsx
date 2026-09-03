@@ -103,7 +103,7 @@ export function LiveTerminalPage() {
         if (cancelled) return;
         if (result.replayTruncated && lastSequenceRef.current > 0) terminalRef.current?.writeln('\r\n\x1b[33m[ChatCMD: terminal replay was truncated]\x1b[0m');
         for (const event of result.events) terminalRef.current?.write(event.data);
-        lastSequenceRef.current = Math.max(lastSequenceRef.current, result.latestAvailableSequence);
+        lastSequenceRef.current = Math.max(lastSequenceRef.current, result.events.at(-1)?.sequence ?? lastSequenceRef.current);
       } catch (error) {
         if (!cancelled) setProblem(error instanceof Error ? error.message : tr('Terminal stream is unavailable'));
       } finally {

@@ -18,6 +18,7 @@ mod subagent_fallback;
 #[cfg(test)]
 mod subagent_tests;
 mod subagents;
+mod terminal_lifecycle;
 mod turn_file_changes;
 mod user_message;
 #[cfg(test)]

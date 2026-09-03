@@ -116,6 +116,7 @@ impl RuntimeHost {
             }
             "shell_create" => {
                 let input: ShellCreate = parse(arguments)?;
+                self.retire_idle_current_turn_terminals(&context).await?;
                 let working_directory = match input.working_directory {
                     Some(value) if value.is_absolute() => value,
                     Some(value) => project_folder
@@ -143,6 +144,8 @@ impl RuntimeHost {
                     )
                     .await?;
                 self.persist_shell_session(&context, &info).await?;
+                self.publish_terminal_opened(&context, &info);
+                self.spawn_terminal_live_bridge(&context, &info);
                 value(info)
             }
             "shell_write" => {

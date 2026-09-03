@@ -177,6 +177,10 @@ impl RuntimeHost {
                 ));
             }
         }
+        if inserted > 0 {
+            self.retire_previous_turn_terminals(context, &task_id, &turn_id)
+                .await?;
+        }
         self.bind_project_folder_from_user_message(&task_id, content)
             .await?;
         self.begin_turn_file_tracking(context).await;

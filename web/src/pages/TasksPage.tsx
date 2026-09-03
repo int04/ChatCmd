@@ -1,4 +1,4 @@
-import { CheckCircle2, CircleAlert, Clock3, LoaderCircle, MessageSquareText, TerminalSquare } from 'lucide-react';
+import { CheckCircle2, CircleAlert, Clock3, LoaderCircle, MessageSquareText } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 
@@ -10,6 +10,7 @@ import { useRealtime } from '../realtime';
 import { TaskAccessCard } from '../tasks/TaskAccessCard';
 import { TaskConversationStopCard } from '../tasks/TaskConversationStopCard';
 import { SubagentApprovalQueue } from '../tasks/SubagentApprovalQueue';
+import { TaskTerminalSection } from '../tasks/TaskTerminalSection';
 import { TaskTurnBubble } from '../tasks/TaskTurnBubble';
 import { useResizableWidth } from '../tasks/useResizableWidth';
 import { buildTaskTurns, mergeLiveDetail } from '../tasks/taskTimeline';
@@ -132,7 +133,7 @@ function TaskDetailContent({ detail, realtime, onTaskChanged, hasOlder, loadingO
         <div className="panel-resize-handle task-sidebar-resize-handle" role="separator" aria-label={tr('Resize task information')} aria-orientation="vertical" aria-valuemin={280} aria-valuemax={520} aria-valuenow={sidebarResize.width} tabIndex={0} onPointerDown={sidebarResize.onPointerDown} onKeyDown={sidebarResize.onKeyDown} />
         <header className="task-info-header"><span className={`task-info-state ${task.status}`}>{task.status === 'running' ? <LoaderCircle className="spin" /> : task.status === 'failed' ? <CircleAlert /> : <CheckCircle2 />}</span><div><h2>{conversationName(task)}</h2><p><code>#{task.id}</code> · {translatedStatus(task.status)} · {tr('{count} agent turns', { count: turns.length })}</p></div></header>
         <div className="task-info-duration"><Clock3 /><span>{formatTime(startedAt)} → {formatTime(task.updatedAtUtc)}</span></div>
-        <section className="task-info-section"><strong>{tr('Terminal / Task')}</strong><div className="task-info-generation"><TerminalSquare /><div><code>{tr('Generation {generation}', { generation: task.generation ?? 1 })}</code><small>{task.activeSessionId ? `#${task.activeSessionId}` : tr('No active terminal')}</small></div></div></section>
+        <TaskTerminalSection taskId={task.id} turnId={lastTurn?.id} />
         {(chatGpt || task.isSubagent) && <ChatGptTaskCard taskId={task.id} />}
         <TaskAccessCard taskId={detail.executionModeSourceTaskId ?? task.id} defaultMode={detail.executionMode ?? 'allowAll'} />
         {!chatGpt && <TaskConversationStopCard taskId={task.id} taskStatus={task.status} onStopped={onTaskChanged} />}
