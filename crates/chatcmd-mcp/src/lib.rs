@@ -322,9 +322,29 @@ tool_args!(FindArgs {
     path: String,
     pattern: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pattern_mode: Option<chatcmd_runtime::FindPatternMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    case_sensitive: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    entry_types: Option<Vec<chatcmd_runtime::FindEntryType>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_depth: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    include_ignored: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    include_hidden: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    exclude: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    extensions: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cursor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    limit: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     max_results: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    max_depth: Option<usize>
+    budget: Option<chatcmd_runtime::FsFindBudget>
 });
 tool_args!(ReadArgs {
     path: String,
@@ -649,7 +669,7 @@ tool_methods!(
     (
         fs_find,
         FindArgs,
-        "Find workspace paths. Required fields: path, pattern; optional maxResults, maxDepth. Use this when a relative file path is uncertain."
+        "Scalable cursor-paginated path discovery. Required fields: path, pattern. Set patternMode=literal for filename contains, glob for workspace-relative glob matching (for example **/*.rs), or regex for workspace-relative regular expressions. Optional caseSensitive, entryTypes, maxDepth, includeIgnored, includeHidden, exclude, extensions, cursor, limit, budget {timeoutMs,maxEntriesScanned,maxMetadataCalls}. When patternMode is omitted, legacy *foo* literal-contains semantics are preserved with a warning. Continue only with page.nextCursor for the same path/options."
     ),
     (
         fs_read_text,

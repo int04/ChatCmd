@@ -1,9 +1,5 @@
-use super::WorkspaceService;
+use super::{WorkspaceService, walk::configured_walker};
 use crate::{RuntimeError, RuntimeResult};
-use ignore::{
-    WalkBuilder,
-    gitignore::{Gitignore, GitignoreBuilder},
-};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -32,30 +28,7 @@ impl WorkspaceService {
         let root = self.existing(path)?;
         let query = query.to_owned();
         tokio::task::spawn_blocking(move || -> RuntimeResult<Vec<serde_json::Value>> {
-            let explicit_excludes = build_search_excludes(&root, &exclude)?;
-            let mut walker = WalkBuilder::new(&root);
-            walker
-                .follow_links(false)
-                .max_depth(Some(64))
-                .hidden(false)
-                .parents(false)
-                .git_global(false)
-                .git_exclude(false)
-                .require_git(false)
-                .git_ignore(!include_ignored);
-            walker.filter_entry(move |entry| {
-                if entry.depth() == 0 {
-                    return true;
-                }
-                let is_dir = entry.file_type().is_some_and(|kind| kind.is_dir());
-                if explicit_excludes
-                    .matched_path_or_any_parents(entry.path(), is_dir)
-                    .is_ignore()
-                {
-                    return false;
-                }
-                include_ignored || !is_default_ignored_search_directory(entry.path())
-            });
+            let walker = configured_walker(&root, 64, true, include_ignored, &exclude)?;
 
             let mut found = Vec::new();
             let mut files_scanned = 0usize;
@@ -127,68 +100,4 @@ impl WorkspaceService {
         .await
         .map_err(super::join_error)?
     }
-}
-
-fn build_search_excludes(root: &Path, patterns: &[String]) -> RuntimeResult<Gitignore> {
-    let mut builder = GitignoreBuilder::new(root);
-    for pattern in patterns {
-        let normalized = pattern.trim().replace('\\', "/");
-        if normalized.is_empty() {
-            continue;
-        }
-        builder
-            .add_line(None, &normalized)
-            .map_err(|error| RuntimeError::new("invalid_search_exclude", error.to_string()))?;
-    }
-    builder
-        .build()
-        .map_err(|error| RuntimeError::new("invalid_search_exclude", error.to_string()))
-}
-
-fn is_default_ignored_search_directory(path: &Path) -> bool {
-    let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
-        return false;
-    };
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        ".git"
-            | ".idea"
-            | ".next"
-            | ".nuxt"
-            | ".turbo"
-            | ".vite"
-            | ".vs"
-            | ".gradle"
-            | ".venv"
-            | "venv"
-            | "__pycache__"
-            | ".pytest_cache"
-            | ".mypy_cache"
-            | ".ruff_cache"
-            | ".tox"
-            | ".parcel-cache"
-            | ".svelte-kit"
-            | ".angular"
-            | ".expo"
-            | ".pnpm-store"
-            | ".dart_tool"
-            | ".symlinks"
-            | ".cxx"
-            | ".externalnativebuild"
-            | ".nyc_output"
-            | "artifacts"
-            | "bin"
-            | "bower_components"
-            | "build"
-            | "coverage"
-            | "deriveddata"
-            | "dist"
-            | "htmlcov"
-            | "jspm_packages"
-            | "node_modules"
-            | "obj"
-            | "pods"
-            | "target"
-            | "testresults"
-    )
 }

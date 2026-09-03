@@ -9,6 +9,8 @@ anyhow = "1"
 base64 = "0.22"
 hmac = "0.12"
 ignore = "0.4"
+globset = "0.4"
+regex = "1"
 portable-pty = "0.9"
 schemars = "1"
 serde = { version = "1", features = ["derive"] }

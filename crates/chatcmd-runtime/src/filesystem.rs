@@ -8,6 +8,8 @@ use std::{
     sync::Arc,
 };
 
+#[path = "filesystem_find.rs"]
+mod find;
 #[path = "filesystem_list.rs"]
 mod list;
 #[path = "filesystem_mutations.rs"]
@@ -16,6 +18,8 @@ mod mutations;
 mod read;
 #[path = "filesystem_search.rs"]
 mod search;
+#[path = "filesystem_walk.rs"]
+mod walk;
 pub use search::SearchProgress;
 
 #[derive(Clone)]
@@ -24,6 +28,7 @@ pub struct WorkspaceService {
     allowed_scopes: Vec<PathBuf>,
     policy: PolicyEngine,
     list_states: Arc<list::DirectoryListStore>,
+    find_states: Arc<find::FindStateStore>,
 }
 
 impl WorkspaceService {
@@ -46,6 +51,7 @@ impl WorkspaceService {
             allowed_scopes: canonical,
             policy,
             list_states: Arc::new(list::DirectoryListStore::default()),
+            find_states: Arc::new(find::FindStateStore::default()),
         })
     }
 
@@ -79,6 +85,7 @@ impl WorkspaceService {
             allowed_scopes,
             policy: self.policy.clone(),
             list_states: self.list_states.clone(),
+            find_states: self.find_states.clone(),
         })
     }
 
@@ -272,34 +279,6 @@ impl WorkspaceService {
         self.write_text(context, &resolved, &updated, true).await
     }
 
-    pub async fn find(
-        &self,
-        path: &Path,
-        pattern: &str,
-        max_results: usize,
-        max_depth: usize,
-    ) -> RuntimeResult<Vec<PathBuf>> {
-        let root = self.existing(path)?;
-        let needle = pattern.trim_matches('*').to_lowercase();
-        tokio::task::spawn_blocking(move || -> RuntimeResult<Vec<PathBuf>> {
-            let mut found = Vec::new();
-            visit(&root, 0, max_depth.clamp(1, 128), &mut |path, _| {
-                let name = path
-                    .file_name()
-                    .map_or_else(String::new, |value| value.to_string_lossy().to_lowercase());
-                if (needle.is_empty() || name.contains(&needle))
-                    && found.len() < max_results.clamp(1, 5000)
-                {
-                    found.push(path.to_path_buf());
-                }
-                Ok(())
-            })?;
-            Ok(found)
-        })
-        .await
-        .map_err(join_error)?
-    }
-
     fn existing(&self, path: &Path) -> RuntimeResult<PathBuf> {
         let requested_absolute = path.is_absolute();
         let resolved = path.canonicalize().map_err(io_error)?;
@@ -358,32 +337,6 @@ fn adapt_line_endings(value: &str, line_ending: &str) -> String {
         .replace('\n', line_ending)
 }
 
-fn visit(
-    path: &Path,
-    depth: usize,
-    max_depth: usize,
-    callback: &mut impl FnMut(&Path, &fs::Metadata) -> RuntimeResult<()>,
-) -> RuntimeResult<()> {
-    if depth > max_depth {
-        return Ok(());
-    }
-    let metadata = fs::symlink_metadata(path).map_err(io_error)?;
-    if metadata.file_type().is_symlink() {
-        return Ok(());
-    }
-    callback(path, &metadata)?;
-    if metadata.is_dir() {
-        for child in fs::read_dir(path).map_err(io_error)? {
-            visit(
-                &child.map_err(io_error)?.path(),
-                depth + 1,
-                max_depth,
-                callback,
-            )?;
-        }
-    }
-    Ok(())
-}
 fn copy_recursive(source: &Path, destination: &Path, overwrite: bool) -> RuntimeResult<()> {
     let metadata = fs::symlink_metadata(source).map_err(io_error)?;
     if metadata.file_type().is_symlink() {

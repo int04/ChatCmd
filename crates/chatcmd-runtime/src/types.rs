@@ -408,6 +408,118 @@ pub struct FsListScanPage {
     pub warnings: Vec<crate::ToolWarning>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum FindPatternMode {
+    #[default]
+    Literal,
+    Glob,
+    Regex,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum FindEntryType {
+    File,
+    Directory,
+    Symlink,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FsFindBudget {
+    #[serde(default = "default_fs_find_timeout_ms")]
+    pub timeout_ms: u64,
+    #[serde(default = "default_fs_find_max_entries_scanned")]
+    pub max_entries_scanned: u64,
+    #[serde(default = "default_fs_find_max_metadata_calls")]
+    pub max_metadata_calls: u64,
+}
+
+impl Default for FsFindBudget {
+    fn default() -> Self {
+        Self {
+            timeout_ms: default_fs_find_timeout_ms(),
+            max_entries_scanned: default_fs_find_max_entries_scanned(),
+            max_metadata_calls: default_fs_find_max_metadata_calls(),
+        }
+    }
+}
+
+const fn default_fs_find_timeout_ms() -> u64 {
+    10_000
+}
+const fn default_fs_find_max_entries_scanned() -> u64 {
+    100_000
+}
+const fn default_fs_find_max_metadata_calls() -> u64 {
+    10_000
+}
+const fn default_fs_find_limit() -> usize {
+    200
+}
+const fn default_fs_find_max_depth() -> usize {
+    64
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FsFindRequest {
+    pub path: PathBuf,
+    pub pattern: String,
+    #[serde(default)]
+    pub pattern_mode: FindPatternMode,
+    #[serde(default)]
+    pub case_sensitive: bool,
+    #[serde(default)]
+    pub entry_types: Vec<FindEntryType>,
+    #[serde(default = "default_fs_find_max_depth")]
+    pub max_depth: usize,
+    #[serde(default)]
+    pub include_ignored: bool,
+    #[serde(default)]
+    pub include_hidden: bool,
+    #[serde(default)]
+    pub exclude: Vec<String>,
+    #[serde(default)]
+    pub extensions: Vec<String>,
+    #[serde(default = "default_fs_find_limit")]
+    pub limit: usize,
+    #[serde(default)]
+    pub budget: FsFindBudget,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FsFindItem {
+    pub path: String,
+    pub entry_type: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FsFindPageData {
+    pub items: Vec<FsFindItem>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FsFindCursorState {
+    pub state_id: String,
+    pub root_version: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct FsFindScanPage {
+    pub data: FsFindPageData,
+    pub has_more: bool,
+    pub entries_scanned: u64,
+    pub metadata_calls: u64,
+    pub truncation_reason: Option<crate::TruncationReason>,
+    pub warnings: Vec<crate::ToolWarning>,
+    pub root_version: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TextReadResult {

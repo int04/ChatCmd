@@ -1,6 +1,9 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
-use chatcmd_runtime::{FsListBudget, FsListMetadata, FsListSort, ShellSignal};
+use chatcmd_runtime::{
+    FindEntryType, FindPatternMode, FsFindBudget, FsListBudget, FsListMetadata, FsListSort,
+    ShellSignal,
+};
 use serde::Deserialize;
 
 macro_rules! input {
@@ -213,14 +216,34 @@ const fn default_file_bytes() -> u64 {
 pub(super) struct FindInput {
     pub(super) path: PathBuf,
     pub(super) pattern: String,
-    #[serde(default = "default_limit")]
-    pub(super) max_results: usize,
-    #[serde(default = "default_depth")]
+    #[serde(default)]
+    pub(super) pattern_mode: Option<FindPatternMode>,
+    #[serde(default)]
+    pub(super) case_sensitive: bool,
+    #[serde(default)]
+    pub(super) entry_types: Vec<FindEntryType>,
+    #[serde(default = "default_find_depth")]
     pub(super) max_depth: usize,
+    #[serde(default)]
+    pub(super) include_ignored: bool,
+    #[serde(default)]
+    pub(super) include_hidden: bool,
+    #[serde(default)]
+    pub(super) exclude: Vec<String>,
+    #[serde(default)]
+    pub(super) extensions: Vec<String>,
+    #[serde(default)]
+    pub(super) cursor: Option<String>,
+    #[serde(default)]
+    pub(super) limit: Option<usize>,
+    #[serde(default)]
+    pub(super) max_results: Option<usize>,
+    #[serde(default)]
+    pub(super) budget: FsFindBudget,
 }
 
-const fn default_depth() -> usize {
-    32
+const fn default_find_depth() -> usize {
+    64
 }
 
 #[derive(Deserialize)]

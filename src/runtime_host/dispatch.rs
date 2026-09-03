@@ -308,17 +308,99 @@ impl RuntimeHost {
                 filesystem_dispatch::search(self, workspace, &context, parse(arguments)?).await
             }
             "fs_find" => {
+                let started = Instant::now();
                 let input: FindInput = parse(arguments)?;
-                value(
-                    workspace
-                        .find(
-                            &input.path,
-                            &input.pattern,
-                            input.max_results,
-                            input.max_depth,
-                        )
-                        .await?,
-                )
+                let scope = workspace.stat(&input.path).await?.path;
+                let normalized_scope = scope.to_string_lossy();
+                let cursor_state = input
+                    .cursor
+                    .as_deref()
+                    .map(|cursor| {
+                        self.cursor_codec
+                            .decode::<chatcmd_runtime::FsFindCursorState>(
+                                cursor,
+                                "fs_find",
+                                normalized_scope.as_ref(),
+                            )
+                    })
+                    .transpose()?;
+                let legacy_pattern = input.pattern_mode.is_none();
+                let pattern = if legacy_pattern {
+                    input.pattern.trim_matches('*').to_owned()
+                } else {
+                    input.pattern
+                };
+                let request = chatcmd_runtime::FsFindRequest {
+                    path: input.path,
+                    pattern,
+                    pattern_mode: input
+                        .pattern_mode
+                        .unwrap_or(chatcmd_runtime::FindPatternMode::Literal),
+                    case_sensitive: input.case_sensitive,
+                    entry_types: input.entry_types,
+                    max_depth: input.max_depth.clamp(1, 128),
+                    include_ignored: input.include_ignored,
+                    include_hidden: input.include_hidden,
+                    exclude: input.exclude,
+                    extensions: input.extensions,
+                    limit: input
+                        .limit
+                        .or(input.max_results)
+                        .unwrap_or(200)
+                        .clamp(1, 5_000),
+                    budget: input.budget,
+                };
+                let (page, state_id) = workspace
+                    .find_v2(
+                        &context,
+                        &request,
+                        cursor_state.as_ref().map(|state| state.state_id.as_str()),
+                        cursor_state
+                            .as_ref()
+                            .map(|state| state.root_version.as_str()),
+                    )
+                    .await?;
+                let next_cursor = match (page.has_more, state_id) {
+                    (true, Some(state_id)) => Some(self.cursor_codec.encode(
+                        "fs_find",
+                        normalized_scope.as_ref(),
+                        &chatcmd_runtime::FsFindCursorState {
+                            state_id,
+                            root_version: page.root_version.clone(),
+                        },
+                        None,
+                    )?),
+                    _ => None,
+                };
+                let returned_items = u64::try_from(page.data.items.len()).unwrap_or(u64::MAX);
+                let mut result = chatcmd_runtime::ToolResultEnvelope::paged(
+                    page.data,
+                    next_cursor,
+                    page.has_more,
+                );
+                if let Some(reason) = page.truncation_reason {
+                    result.truncation = Some(chatcmd_runtime::TruncationInfo {
+                        truncated: true,
+                        reason: Some(reason),
+                        returned_items,
+                        omitted_items: None,
+                    });
+                }
+                result.warnings = page.warnings;
+                if legacy_pattern {
+                    result.warnings.push(chatcmd_runtime::ToolWarning {
+                        code: "legacy_find_pattern".to_owned(),
+                        message: "patternMode omitted; using legacy case-insensitive literal-contains semantics after trimming outer '*'".to_owned(),
+                    });
+                }
+                result = result.with_usage(chatcmd_runtime::ToolUsage {
+                    elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                    entries_scanned: Some(page.entries_scanned),
+                    metadata_calls: Some(page.metadata_calls),
+                    ..chatcmd_runtime::ToolUsage::default()
+                });
+                result.measure_output_bytes()?;
+                value(result)
             }
             "fs_read_text" => {
                 let input: ReadInput = parse(arguments)?;
