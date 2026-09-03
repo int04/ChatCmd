@@ -224,16 +224,16 @@ cargo test --workspace
 - Test/fault injection/benchmark và số liệu.
 - Các trường hợp chỉ best-effort theo OS/filesystem.
 
-## CHECK REQUIRED — Validation and implementation gaps
+## KIỂM TRA BẮT BUỘC — Các khoảng trống về xác thực và triển khai
 
-Plan 12 has a tested safety baseline, but the following acceptance work still requires manual or follow-up validation before this plan can be considered fully checked:
+Plan 12 đã có mức an toàn cơ sở được kiểm thử, nhưng các hạng mục nghiệm thu sau vẫn cần được xác thực thủ công hoặc tiếp tục thực hiện trước khi có thể coi plan này đã được kiểm tra đầy đủ:
 
-- Run the mandatory 100,000-small-file and 10 GB sparse/streamed benchmarks and record throughput, peak memory, open-file count, journal growth, progress-event count, and cancellation latency. These destructive-scale benchmarks were not run in this development environment.
-- Exercise a real cross-device mount, network share, and removable disk. The implementation stages beside the destination and therefore preserves publish ordering, but real platform error/durability behavior was not validated.
-- Add deterministic fault injection at every state transition and after configurable file/byte counts. Current tests cover normal copy/move/replace, dry-run, pre-cancel, overlap rejection, quarantine, permanent delete, content verification, and the legacy overwrite adapter, but do not simulate every crash window or disk-full condition.
-- Wire migration `0015_filesystem_operation_journal.sql` into runtime mutation transitions and implement startup recovery/retention GC from SQLite. The current runtime writes fsynced atomic sidecar journals beside the destination; this is durable but does not yet satisfy the requested SQLite transaction requirement or automatic startup scan.
-- Implement an explicit quarantine restore tool and retention/quota GC. Current quarantine is same-filesystem, operation-owned, and its retained path is reported in warnings, but restore/expiry is manual.
-- Add bounded artifact persistence for large per-file error lists and progress throttling. The typed result is bounded and currently returns summary warnings only.
-- Validate ACLs, timestamps, sparse extents, hard-link topology, case-only rename, non-UTF-8 names, long paths, concurrent writers/movers/deleters, and symlink-swap TOCTOU on every supported OS. Permission bits are preserved; the remaining metadata classes are documented as best-effort in ADR 0012.
+- Chạy các benchmark bắt buộc với 100,000 file nhỏ và file 10 GB dạng sparse/stream; ghi nhận throughput, peak memory, số file đang mở, mức tăng của journal, số sự kiện tiến độ và độ trễ khi hủy. Các benchmark có quy mô mang tính phá hủy này chưa được chạy trong môi trường phát triển hiện tại.
+- Kiểm thử trên mount cross-device, network share và ổ đĩa rời thực tế. Phần triển khai tạo vùng tạm cạnh đích nên duy trì thứ tự công bố dữ liệu, nhưng chưa xác thực hành vi lỗi/durability thực tế trên từng nền tảng.
+- Bổ sung mô phỏng lỗi có tính tất định tại mọi lần chuyển trạng thái và sau số lượng file/byte có thể cấu hình. Các kiểm thử hiện tại bao phủ copy/move/replace thông thường, dry-run, hủy trước khi chạy, từ chối vùng chồng lấn, quarantine, xóa vĩnh viễn, xác minh nội dung và adapter ghi đè cũ, nhưng chưa mô phỏng mọi khoảng thời gian có thể crash hoặc mọi tình huống hết dung lượng đĩa.
+- Kết nối migration `0015_filesystem_operation_journal.sql` vào các lần chuyển trạng thái thao tác của runtime, đồng thời triển khai phục hồi khi khởi động và retention GC từ SQLite. Runtime hiện ghi journal sidecar atomic đã fsync cạnh đích; cơ chế này bền vững nhưng chưa đáp ứng yêu cầu transaction SQLite hoặc tự động quét khi khởi động.
+- Triển khai tool khôi phục rõ ràng từ quarantine và retention/quota GC. Quarantine hiện nằm trên cùng filesystem, thuộc sở hữu của thao tác và đường dẫn lưu giữ được báo trong warnings, nhưng việc khôi phục/hết hạn vẫn phải làm thủ công.
+- Bổ sung lưu trữ artifact có giới hạn cho danh sách lỗi lớn theo từng file và điều tiết tần suất báo tiến độ. Kết quả có kiểu hiện đã được giới hạn và chỉ trả về cảnh báo tóm tắt.
+- Xác thực ACL, timestamp, sparse extent, cấu trúc hard link, rename chỉ thay đổi chữ hoa/thường, tên không phải UTF-8, đường dẫn dài, các writer/mover/deleter chạy đồng thời và TOCTOU do hoán đổi symlink trên mọi OS được hỗ trợ. Các bit quyền đã được bảo toàn; những lớp metadata còn lại được ghi trong ADR 0012 là chỉ hỗ trợ ở mức best-effort.
 
-Automated checks completed during implementation: `cargo fmt --all --check`, `cargo check --workspace`, the 7-test `mutation_safety` integration suite, `cargo test -p chatcmd-runtime`, `cargo test -p chatcmd-storage`, `cargo test -p chatcmd-mcp`, and `cargo test --workspace`. All executed tests passed; pre-existing manual performance fixtures remained ignored.
+Các kiểm tra tự động đã hoàn tất trong quá trình triển khai: `cargo fmt --all --check`, `cargo check --workspace`, bộ 7 kiểm thử tích hợp `mutation_safety`, `cargo test -p chatcmd-runtime`, `cargo test -p chatcmd-storage`, `cargo test -p chatcmd-mcp` và `cargo test --workspace`. Mọi kiểm thử đã thực thi đều chạy thành công; các fixture hiệu năng thủ công có từ trước vẫn được bỏ qua.

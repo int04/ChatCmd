@@ -212,26 +212,21 @@ cargo test --workspace
 - Tích hợp `fs_write_text`, `fs_write_raw`, `fs_apply_edits`.
 - Test/benchmark và số liệu.
 
-## CHECK — Nội dung cần kiểm tra hoặc hoàn thiện sau
+## KIỂM TRA — Nội dung cần kiểm tra hoặc hoàn thiện sau
 
-Phần lõi đã được triển khai và các test tự động hiện có đã pass: protocol upload tuần tự,
-resume bằng `nextOffset`, duplicate chunk idempotent, conflict/integrity/ownership checks,
-`contentRef` cho ba filesystem mutations, streaming writer cho text/raw, inline cap, persistence
-redaction và packaged MCP catalog.
+Phần lõi đã được triển khai và các kiểm thử tự động hiện có đã chạy thành công: giao thức tải lên tuần tự,
+tiếp tục bằng `nextOffset`, xử lý idempotent cho chunk trùng lặp, kiểm tra conflict/integrity/ownership,
+`contentRef` cho ba thao tác thay đổi filesystem, writer dạng stream cho text/raw, giới hạn nội dung inline,
+che dữ liệu nhạy cảm khi lưu trữ và packaged MCP catalog.
 
 Các mục sau chưa được nghiệm thu đầy đủ và cần kiểm tra/triển khai tiếp trước khi coi Plan 10 hoàn tất:
 
-- `fs_apply_edits` nhận JSON edits qua blob nhưng edit engine hiện vẫn materialize mảng edits trong RAM;
-  cần benchmark và/hoặc parser streaming nếu manifest edits có thể rất lớn.
-- Artifact flow hiện chỉ chấp nhận purpose `artifact`; chưa có tool tạo/register artifact từ contentRef.
-- Blob metadata hiện process-local. Startup dọn orphan bytes nhưng không phục hồi upload để resume sau
-  restart; chưa có SQLite state transition transaction như thiết kế đầy đủ.
-- Periodic TTL GC đã được nối; chưa có cleanup trực tiếp khi task bị xóa và quota-pressure eviction policy.
-- Chưa chạy fault injection cho disk-full/permission/temp-dir loss, race seal/consume/abort, crash tại
-  từng commit point, hoặc kiểm tra hai writer cạnh tranh trong test tích hợp end-to-end.
-- Chưa chạy benchmark bắt buộc 10 MB, 100 MB và 1 GB để ghi throughput, peak RSS, số request,
-  temporary disk usage và cleanup time. Chỉ các test chức năng tự động đã chạy.
-- MCP schema có các field optional và runtime enforce exactly-one; cần xác nhận client host hiển thị
-  ràng buộc one-of như mong muốn hoặc bổ sung custom JSON Schema oneOf.
-- Retry `fs_write_*` sau khi blob đã consumed hiện trả state conflict; cần quyết định contract replay
-  theo idempotency key và bổ sung test nếu muốn retry mutation trả lại kết quả trước đó.
+- `fs_apply_edits` nhận các chỉnh sửa JSON qua blob nhưng edit engine hiện vẫn tạo toàn bộ mảng chỉnh sửa trong RAM;
+  cần chạy benchmark và/hoặc dùng parser dạng stream nếu manifest chỉnh sửa có thể rất lớn.
+- Luồng artifact hiện chỉ chấp nhận purpose `artifact`; chưa có tool tạo/đăng ký artifact từ `contentRef`.
+- Metadata của blob hiện chỉ tồn tại trong phạm vi process. Khi khởi động, hệ thống dọn các byte mồ côi nhưng không phục hồi phiên tải lên để tiếp tục sau khi khởi động lại; chưa có transaction chuyển trạng thái SQLite như thiết kế đầy đủ.
+- Cơ chế TTL GC định kỳ đã được kết nối; chưa có bước dọn dẹp trực tiếp khi task bị xóa và chưa có chính sách loại bỏ dữ liệu khi chịu áp lực quota.
+- Chưa chạy mô phỏng lỗi cho tình huống hết dung lượng đĩa, lỗi quyền truy cập, mất thư mục tạm, điều kiện tranh chấp giữa seal/consume/abort, crash tại từng điểm commit, hoặc kiểm tra hai writer cạnh tranh trong kiểm thử tích hợp end-to-end.
+- Chưa chạy benchmark bắt buộc với 10 MB, 100 MB và 1 GB để ghi nhận throughput, peak RSS, số request, dung lượng đĩa tạm sử dụng và thời gian dọn dẹp. Mới chỉ chạy các kiểm thử chức năng tự động.
+- Schema MCP có các field tùy chọn và runtime áp dụng ràng buộc chính xác một field; cần xác nhận client host hiển thị ràng buộc one-of như mong muốn hoặc bổ sung `oneOf` tùy chỉnh trong JSON Schema.
+- Việc thử lại `fs_write_*` sau khi blob đã được consume hiện trả về conflict trạng thái; cần quyết định hợp đồng phát lại theo idempotency key và bổ sung kiểm thử nếu muốn thao tác thử lại trả về kết quả trước đó.

@@ -211,28 +211,28 @@ cargo test --workspace
 
 ## Cần kiểm tra và hoàn thiện sau
 
-Phần lõi streaming đã được triển khai và các validation tối thiểu đều pass, nhưng
+Phần lõi xử lý theo luồng đã được triển khai và các bước kiểm tra tối thiểu đều đạt, nhưng
 Plan 15 chưa được xác nhận trọn vẹn ở các nội dung sau:
 
-- Artifact stdout hiện được stream vào thư mục tạm có quota và SHA-256, nhưng chưa
+- Artifact stdout hiện được ghi theo luồng vào thư mục tạm có quota và SHA-256, nhưng chưa
   đăng ký vào `ArtifactStore` theo task/session và chưa hỗ trợ đọc range qua
-  `task_artifact_read`. Cần nối lifecycle/cleanup với artifact registry Plan 13.
-- `git status` đã chuyển sang porcelain v2 và log/branch dùng separator format,
-  nhưng chưa có typed parser cho branch/status entries, non-UTF-8 path base64,
-  rename/copy, item cap hoặc signed cursor/`hasMore`.
-- Chưa có progress milestone theo bytes/thời gian và chưa trả commit phase/hook
-  phase cùng commit hash sau khi commit thành công.
-- Chưa chạy integration test cho child/grandchild process tree trên Unix; Windows
-  mới được test trực tiếp cho timeout/cancel/kill-on-limit. Chưa test hanging hook,
-  credential helper, submodule, corrupt repo, lock/permission failure và race
-  timeout/cancel với process exit.
-- Chưa có fault-injection test cho slow/full artifact sink, quota đầy giữa stream,
-  timeline projection không giữ full Git output, compatibility migration, binary
-  diff, rename/copy và non-UTF-8 repository paths.
-- Chưa chạy benchmark bắt buộc cho diff 10 MB/100 MB/1 GB và repository 100.000
-  entries; chưa thu thập peak memory, time-to-first-byte, artifact throughput,
-  cancellation latency hoặc process cleanup metrics.
+  `task_artifact_read`. Cần nối vòng đời và bước dọn dẹp với artifact registry của Plan 13.
+- `git status` đã chuyển sang porcelain v2, còn log/branch dùng định dạng có ký tự phân cách,
+  nhưng chưa có parser có kiểu cho các entry branch/status, path không phải UTF-8 được mã hóa Base64,
+  rename/copy, giới hạn số item hoặc cursor có chữ ký/`hasMore`.
+- Chưa có mốc tiến độ theo số byte/thời gian và chưa trả về giai đoạn commit/giai đoạn hook
+  cùng commit hash sau khi commit thành công.
+- Chưa chạy test tích hợp cho cây process con/cháu trên Unix; Windows
+  mới chỉ được kiểm thử trực tiếp cho timeout/cancel/kill-on-limit. Chưa kiểm thử hook bị treo,
+  credential helper, submodule, repository hỏng, lỗi khóa/quyền truy cập và tình huống tranh chấp
+  giữa timeout/cancel với lúc process thoát.
+- Chưa có test chèn lỗi cho artifact sink chậm/đầy, quota đầy giữa luồng,
+  cơ chế chiếu timeline không giữ toàn bộ đầu ra Git, migration tương thích, diff nhị phân,
+  rename/copy và path repository không phải UTF-8.
+- Chưa chạy benchmark bắt buộc cho diff 10 MB/100 MB/1 GB và repository có 100.000
+  entry; chưa thu thập mức sử dụng bộ nhớ đỉnh, thời gian đến byte đầu tiên, thông lượng artifact,
+  độ trễ hủy hoặc số liệu dọn dẹp process.
 
-Validation đã chạy thành công trên Windows: `cargo fmt --all -- --check`,
+Các bước kiểm tra sau đã chạy thành công trên Windows: `cargo fmt --all -- --check`,
 `cargo check --workspace`, `cargo test -p chatcmd-runtime`, và
 `cargo test --workspace`.

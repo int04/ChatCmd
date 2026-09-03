@@ -211,10 +211,10 @@ Chạy platform-specific tests trên macOS hiện tại và bảo đảm Windows
 
 ## Kiểm tra còn lại
 
-- Chưa chạy test/CI trên macOS và Linux; cần xác nhận atomic rename, POSIX mode và directory fsync trực tiếp trên hai nền tảng này.
-- Chưa có crash-process harness và fault injection cho từng phase (short write, disk full, sync failure, rename failure, Windows sharing violation và crash ngay trước/sau commit).
-- Chưa benchmark nguồn blob/file 10 MB, 100 MB và 1 GB để ghi nhận throughput, peak memory và chi phí của từng durability mode.
-- Chưa kiểm thử filesystem mạng/non-atomic để quyết định `requireAtomic`; hiện writer chỉ cam kết atomic replace theo primitive cùng thư mục của OS và không dò loại filesystem.
-- Metadata `preserve` hiện bảo toàn POSIX mode hoặc Windows readonly permissions do `std::fs::Permissions` hỗ trợ; ACL, xattr, owner, resource fork và Windows attributes khác chưa được bảo toàn/cảnh báo riêng.
-- Chưa triển khai policy explicit metadata, `lineEndingPolicy`, `bomPolicy`, journal và startup orphan cleanup. Temp trong lỗi/cancel cùng process đã được RAII cleanup và có test.
-- Chưa có test race đồng thời hai create writer, symlink swap/parent replacement ở commit, cross-device misconfiguration, readonly overwrite trên Windows và BOM/CRLF/LF cho write facade mới.
+- Chưa chạy kiểm thử/CI trên macOS và Linux; cần xác nhận trực tiếp atomic rename, POSIX mode và đồng bộ thư mục bằng fsync trên hai nền tảng này.
+- Chưa có bộ khung kiểm thử crash ở cấp process và mô phỏng lỗi cho từng giai đoạn (ghi thiếu, hết dung lượng đĩa, lỗi đồng bộ, lỗi rename, Windows sharing violation và crash ngay trước/sau commit).
+- Chưa benchmark nguồn blob/file 10 MB, 100 MB và 1 GB để ghi nhận throughput, peak memory và chi phí của từng chế độ durability.
+- Chưa kiểm thử filesystem mạng/không hỗ trợ atomic để quyết định `requireAtomic`; hiện writer chỉ cam kết thay thế atomic theo primitive cùng thư mục của OS và không dò loại filesystem.
+- Metadata `preserve` hiện bảo toàn POSIX mode hoặc quyền chỉ đọc của Windows do `std::fs::Permissions` hỗ trợ; ACL, xattr, owner, resource fork và các thuộc tính Windows khác chưa được bảo toàn hoặc cảnh báo riêng.
+- Chưa triển khai chính sách metadata `explicit`, `lineEndingPolicy`, `bomPolicy`, journal và dọn dữ liệu mồ côi khi khởi động. Temp phát sinh khi lỗi/hủy trong cùng process đã được RAII dọn dẹp và có kiểm thử.
+- Chưa có kiểm thử điều kiện tranh chấp giữa hai writer cùng tạo file, hoán đổi symlink/thay thế thư mục cha tại thời điểm commit, cấu hình sai cross-device, ghi đè file chỉ đọc trên Windows và BOM/CRLF/LF cho write facade mới.

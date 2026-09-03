@@ -164,18 +164,12 @@ Chạy test platform-specific trên macOS hiện tại; bảo đảm CI Windows 
 - Shared ignore precedence.
 - Test và validation result.
 
-## CHECK — Platform and race validation still required
+## KIỂM TRA — Vẫn cần xác thực trên nhiều nền tảng và kiểm thử điều kiện tranh chấp
 
-The implementation and complete workspace test suite pass on Windows, but the following Plan 07
-acceptance items could not be fully exercised in this environment and require follow-up:
+Phần triển khai và toàn bộ bộ kiểm thử workspace đã chạy thành công trên Windows, nhưng các tiêu chí nghiệm thu sau của Plan 07 chưa thể được kiểm tra đầy đủ trong môi trường này và cần tiếp tục thực hiện:
 
-- Run the Unix/macOS-only symlink-component and broken-symlink tests on macOS and Linux CI.
-- Add and run a Windows junction/reparse-point integration test on a CI runner where creating those
-  filesystem objects is permitted.
-- Add a barrier-controlled adversarial test that swaps a path component to a symlink between
-  authorization and read/write/delete. Current capability identity and parent revalidation are
-  best-effort and deliberately do not claim handle-relative, fully race-free behavior.
-- Verify case-variant and Unicode-normalization authorization on both case-sensitive and
-  case-insensitive macOS filesystems.
-- No separate workspace indexer exists in the current tree; if one is introduced, migrate it to
-  `WorkspaceIgnorePolicy` and add parity tests with search, find, and the turn watcher.
+- Chạy các kiểm thử thành phần symlink và symlink hỏng chỉ dành cho Unix/macOS trên macOS và CI Linux.
+- Bổ sung và chạy kiểm thử tích hợp junction/reparse-point của Windows trên một CI runner cho phép tạo các đối tượng filesystem này.
+- Bổ sung kiểm thử đối kháng có barrier kiểm soát, trong đó một thành phần đường dẫn bị đổi thành symlink trong khoảng giữa bước cấp quyền và thao tác read/write/delete. Cơ chế nhận diện capability và xác thực lại thư mục cha hiện chỉ ở mức best-effort; chủ đích không tuyên bố cơ chế này hoạt động theo handle-relative hoặc hoàn toàn không có điều kiện tranh chấp.
+- Xác minh việc cấp quyền với các biến thể chữ hoa/thường và chuẩn hóa Unicode trên cả filesystem macOS phân biệt và không phân biệt chữ hoa/thường.
+- Cây mã nguồn hiện chưa có workspace indexer riêng. Nếu sau này bổ sung, cần chuyển nó sang `WorkspaceIgnorePolicy` và thêm kiểm thử tính tương đương với search, find và turn watcher.

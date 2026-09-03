@@ -180,9 +180,9 @@ Chạy frontend test/build nếu sửa UI.
 
 ## Kiểm tra còn lại sau triển khai
 
-Plan 18 đã qua `cargo fmt --check`, `cargo check --workspace`, `cargo test --workspace`, frontend production build và test UI riêng cho trạng thái timeout/retry/reason. Cần kiểm tra lại các điểm sau trước khi bỏ hậu tố `_check`:
+Plan 18 đã qua `cargo fmt --check`, `cargo check --workspace`, `cargo test --workspace`, bản build frontend dùng cho production và test giao diện riêng cho trạng thái timeout/retry/reason. Cần kiểm tra lại các điểm sau trước khi bỏ hậu tố `_check`:
 
-- Full frontend suite `npm test -- --run` hiện có 7 lỗi trong `src/test/App.test.tsx` (các ca routing/runtime state và agent MCP URL); test mới `src/tasks/subagentStatus.test.ts` vẫn pass riêng. Các lỗi full-suite không nằm trên code path sub-agent mới nhưng cần ổn định fixture/cleanup của suite.
-- `npm run lint` hiện lỗi có sẵn tại `web/scripts/obfuscate-build.mjs` (`process`/`console`) và `web/src/realtime.ts` (React ref during render), cùng các warning hook ngoài phạm vi Plan 18.
-- Cần smoke test thủ công việc đóng process/terminal hệ điều hành thật khi watchdog timeout, vì test tự động hiện xác nhận cancellation registry và trạng thái database/session nhưng không khởi chạy worker process bị kill thật.
-- Cần kiểm tra suspend/resume hoặc wall-clock jump trên máy thật. Persisted deadline dùng wall clock và arithmetic bão hòa; chưa có harness hệ điều hành để mô phỏng sleep/resume end-to-end.
+- Toàn bộ bộ test frontend `npm test -- --run` hiện có 7 lỗi trong `src/test/App.test.tsx` (các ca về định tuyến, trạng thái runtime và URL MCP của agent); test mới `src/tasks/subagentStatus.test.ts` vẫn đạt khi chạy riêng. Các lỗi của toàn bộ bộ test không nằm trên luồng code sub-agent mới, nhưng cần ổn định dữ liệu dựng sẵn và bước dọn dẹp của bộ test.
+- `npm run lint` hiện gặp các lỗi có sẵn tại `web/scripts/obfuscate-build.mjs` (`process`/`console`) và `web/src/realtime.ts` (`React ref during render`), cùng các cảnh báo hook ngoài phạm vi Plan 18.
+- Cần chạy smoke test thủ công để kiểm tra việc đóng process/terminal thật của hệ điều hành khi watchdog timeout. Test tự động hiện chỉ xác nhận cancellation registry và trạng thái database/session, chưa khởi chạy worker process thật để kiểm tra thao tác kill.
+- Cần kiểm tra tình huống suspend/resume hoặc đồng hồ hệ thống nhảy thời gian trên máy thật. Deadline đã persist dùng đồng hồ hệ thống và phép toán bão hòa; chưa có harness ở cấp hệ điều hành để mô phỏng sleep/resume từ đầu đến cuối.

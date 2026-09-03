@@ -211,14 +211,14 @@ Chạy frontend build/typecheck/test nếu sửa UI.
 - Test marker/privacy và benchmark DB/RAM/realtime.
 - Compatibility với timeline cũ.
 
-## CHECK REQUIRED — Remaining implementation and validation
+## Cần kiểm tra và hoàn thiện sau
 
-The bounded schema-v2 projection, recursive sensitive-field redaction, SQLite/realtime marker test, terminal de-duplication policy, and degraded persistence behavior are implemented. The following Plan 13 items still require follow-up before full acceptance:
+Cơ chế chiếu dữ liệu giới hạn theo schema v2, che thông tin nhạy cảm theo kiểu đệ quy, kiểm thử marker trên SQLite/realtime, chính sách chống lưu trùng dữ liệu terminal và hành vi persistence suy giảm đã được triển khai. Các hạng mục sau của Plan 13 vẫn cần được thực hiện trước khi có thể nghiệm thu đầy đủ:
 
-- Implement a dedicated managed `ToolPayloadArtifactStore`. The existing artifact registry points to user-controlled workspace files and does not provide payload-specific atomic finalize, per-owner quota, TTL/GC, startup orphan reconciliation, or concurrent GC/read guarantees.
-- Add automatic streaming externalization for reloadable large read/Git/diff results. The current projection preserves an existing `contentRef` but otherwise safely redacts or truncates oversized timeline data instead of creating a new artifact.
-- Add database schema fields/indexes and a lazy summary query for historical multi-megabyte timeline rows. Schema-v2 events remain backward compatible through JSON, but old rows are not migrated or cleaned up.
-- Export projection counters to the application's metrics backend. Events currently include received/projected byte counters and redaction/truncation metadata, but there are no aggregate persisted/realtime/externalized/redacted metrics.
-- Run and record the required 1 MB, 100 MB, and 1 GB contentRef benchmarks for peak RAM, SQLite growth, realtime bytes, artifact bytes, and serialization time.
-- Exercise artifact failure after a successful mutation, database outage, slow/disconnected WebSocket subscribers, task deletion during artifact creation, and concurrent artifact GC/read.
-- Verify the timeline UI manually with both legacy full-payload events and schema-v2 projected events. No frontend code changed, and the Rust workspace tests passed, but browser-level rendering was not run.
+- Triển khai một `ToolPayloadArtifactStore` chuyên dụng và được quản lý. Artifact registry hiện tại trỏ tới các file trong workspace do người dùng kiểm soát và chưa cung cấp thao tác finalize nguyên tử dành riêng cho payload, quota theo từng owner, TTL/GC, đối soát artifact mồ côi khi khởi động hoặc bảo đảm an toàn khi GC/read chạy đồng thời.
+- Bổ sung cơ chế tự động externalize theo luồng cho các kết quả read/Git/diff lớn có thể tải lại. Cơ chế chiếu hiện tại giữ lại `contentRef` nếu đã có; trong các trường hợp khác, nó chỉ che hoặc cắt an toàn dữ liệu timeline quá lớn thay vì tạo artifact mới.
+- Bổ sung các field/index cho schema cơ sở dữ liệu và truy vấn summary tải lười cho các dòng timeline lịch sử có kích thước nhiều megabyte. Event schema v2 vẫn tương thích ngược qua JSON, nhưng các dòng cũ chưa được migrate hoặc dọn dẹp.
+- Xuất các bộ đếm của cơ chế chiếu sang backend metrics của ứng dụng. Event hiện có bộ đếm số byte nhận được/sau khi chiếu cùng metadata về che dữ liệu/cắt bớt, nhưng chưa có metrics tổng hợp cho dữ liệu đã persist, gửi realtime, externalize và che.
+- Chạy và lưu kết quả benchmark bắt buộc với `contentRef` kích thước 1 MB, 100 MB và 1 GB, gồm RAM đỉnh, mức tăng dung lượng SQLite, số byte realtime, số byte artifact và thời gian serialize.
+- Kiểm thử các tình huống: tạo artifact thất bại sau khi mutation đã thành công, cơ sở dữ liệu ngừng hoạt động, subscriber WebSocket chậm hoặc mất kết nối, xóa task khi đang tạo artifact và GC/read artifact chạy đồng thời.
+- Kiểm tra thủ công giao diện timeline với cả event legacy chứa toàn bộ payload và event đã chiếu theo schema v2. Không có code frontend nào thay đổi và các test Rust trong workspace đã đạt, nhưng chưa chạy kiểm tra render ở cấp trình duyệt.

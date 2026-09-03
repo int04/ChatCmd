@@ -331,28 +331,33 @@ Tên feature/command thực tế phải được tài liệu hóa, không bắt 
 - Command chạy local/CI và kết quả đầy đủ.
 - Test nào còn platform/manual-only và lý do.
 
-## CHECK — Các hạng mục chưa được xác minh tự động
+## CẦN KIỂM TRA LẠI — Các hạng mục chưa được xác minh tự động
 
-Plan 23 đã thêm và chạy xanh fixture streaming/sparse, resource probe, named fault gate,
-deterministic versioned-writer race, subprocess kill/reap sau staging, bounded generated-tree
-search, Git large-output spill, packaged transport coverage hiện có, Criterion filesystem
-benchmarks và CI tiers. Tuy nhiên plan phải giữ hậu tố `_check` vì các hạng mục sau chưa thể chạy
-đầy đủ trên máy Windows hiện tại:
+Plan 23 đã thêm và chạy thành công bộ dữ liệu kiểm thử dạng luồng/thưa, phép dò tài nguyên, cổng lỗi
+có tên, tranh chấp trình ghi có phiên bản mang tính tất định, kết thúc/thu hồi tiến trình con sau giai
+đoạn chuẩn bị, tìm kiếm cây sinh tự động có giới hạn, chuyển đầu ra Git lớn sang tệp, phạm vi kiểm
+thử vận chuyển đóng gói hiện có, phép đo hiệu năng hệ thống tệp bằng Criterion và các tầng CI. Tuy
+nhiên, plan phải giữ hậu tố `_check` vì các hạng mục sau chưa thể chạy đầy đủ trên máy Windows hiện
+tại:
 
-- Chưa chạy dense 100 MiB/1 GiB, tree 100.000–1.000.000 file và soak test nhiều giờ. Cần chạy
-  trong disposable workspace bằng Tier 2 có đủ disk/time rồi lưu seed, cấu hình và report.
-- Named fault gate mới là test helper; chưa nối test-only seam vào mọi production commit phase.
-  Cần inject và chứng minh old-or-new state cho disk-full, short-write, sync, rename, journal,
-  publish, source-delete và rollback failures.
-- Chưa có mount thứ hai để test cross-device move; chưa có elevated permission matrix, Unix
-  non-UTF-8 path, macOS symlink và Windows junction/symlink-swap matrix.
-- Chưa fault-test hanging Git hook/credential helper và toàn bộ descendant process-tree cleanup.
-- Chưa đo peak RSS/open handles trên runner kiểm soát, database/subscriber slowdown, WebSocket
-  overflow, 100k Git status entries, shell one-byte storm và long-running concurrency soak.
-- Workflow mới chỉ được syntax/review và compile-path local; GitHub-hosted Ubuntu/macOS/Windows
-  jobs chưa được thực thi từ môi trường local này.
+- Chưa chạy dữ liệu đặc 100 MiB/1 GiB, cây 100.000–1.000.000 tệp và kiểm thử ngâm nhiều giờ. Cần
+  chạy trong thư mục làm việc dùng một lần bằng Tầng 2 có đủ dung lượng đĩa/thời gian rồi lưu hạt giống,
+  cấu hình và báo cáo.
+- Cổng lỗi có tên mới là hàm hỗ trợ kiểm thử; chưa nối điểm can thiệp chỉ dành cho kiểm thử vào mọi
+  giai đoạn xác nhận thay đổi trong môi trường thực tế. Cần chèn lỗi và chứng minh trạng thái cũ
+  hoặc mới cho các lỗi đầy đĩa, ghi ngắn, đồng bộ, đổi tên, nhật ký, xuất bản, xóa nguồn và hoàn tác.
+- Chưa có điểm gắn kết thứ hai để kiểm thử di chuyển qua thiết bị; chưa có ma trận quyền nâng cao,
+  đường dẫn Unix không phải UTF-8, liên kết tượng trưng macOS và ma trận điểm nối/hoán đổi liên kết
+  tượng trưng trên Windows.
+- Chưa kiểm thử lỗi hook Git/trình hỗ trợ thông tin xác thực bị treo và việc dọn dẹp toàn bộ cây tiến
+  trình hậu duệ.
+- Chưa đo RSS cực đại/số tài nguyên xử lý đang mở trên máy chạy được kiểm soát, tình trạng chậm của cơ sở dữ
+  liệu/bên đăng ký, tràn WebSocket, 100k mục trạng thái Git, bão dữ liệu shell mỗi lần một byte và
+  kiểm thử ngâm đồng thời chạy lâu.
+- Luồng công việc mới chỉ được kiểm tra cú pháp/đánh giá và đường biên dịch cục bộ; các tác vụ
+  Ubuntu/macOS/Windows do GitHub lưu trữ chưa được thực thi từ môi trường cục bộ này.
 
-Các lệnh đã chạy local:
+Các lệnh đã chạy cục bộ:
 
 ```text
 cargo fmt --all -- --check
@@ -362,10 +367,11 @@ cargo bench -p chatcmd-runtime --bench filesystem_workloads -- --sample-size 10 
 cargo bench -p chatcmd-runtime --bench tool_telemetry -- --sample-size 10 --measurement-time 1 --warm-up-time 1
 ```
 
-Kết quả tại thời điểm ghi: fmt/check xanh; `cargo test --workspace --no-fail-fast` xanh (các
-suite lần lượt 102, 2, 39, 2, 82, 8, 3, 12, 7, 7, 2, 8, 1 và 9 passed; 6 ignored manual
-tests); Criterion hoàn tất 7 cases. `cargo clippy --workspace --all-targets -- -D warnings` fail
-với các lỗi đã tồn tại ngoài file Plan 23 và không được sửa vì phạm vi plan này chỉ thêm test:
+Kết quả tại thời điểm ghi: bước định dạng/kiểm tra thành công; `cargo test --workspace --no-fail-fast`
+thành công (các bộ lần lượt có 102, 2, 39, 2, 82, 8, 3, 12, 7, 7, 2, 8, 1 và 9 kiểm thử thành công;
+6 kiểm thử thủ công mang thuộc tính `ignored`); Criterion hoàn tất 7 trường hợp. Lệnh
+`cargo clippy --workspace --all-targets -- -D warnings` thất bại với các lỗi đã tồn tại ngoài tệp
+Plan 23 và không được sửa vì phạm vi plan này chỉ thêm kiểm thử:
 
 - `filesystem_find.rs:213`: `clippy::collapsible_if`;
 - `filesystem_read.rs:115`: `clippy::too_many_arguments`;
@@ -374,5 +380,6 @@ với các lỗi đã tồn tại ngoài file Plan 23 và không được sửa 
 - `process_runner.rs:77`: `clippy::manual_clamp`;
 - `filesystem/file_version.rs:524`: `clippy::items_after_test_module`.
 
-User cần quyết định refactor hoặc allow lint cho các production APIs trên rồi chạy lại đúng lệnh
-Clippy. Do check này không xanh, file giữ hậu tố `_check.md` theo quy tắc bàn giao.
+Người dùng cần quyết định tái cấu trúc hoặc cho phép các cảnh báo lint đối với những API trong môi
+trường thực tế ở trên, rồi chạy lại đúng lệnh Clippy. Do bước kiểm tra này chưa thành công, tệp giữ
+hậu tố `_check.md` theo quy tắc bàn giao.

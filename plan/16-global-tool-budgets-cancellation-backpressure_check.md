@@ -215,18 +215,18 @@ cargo test --workspace
 - Test/benchmark cancellation/fairness/memory.
 - Các breaking changes/schema migration.
 
-## CHECK — Hạng mục cần kiểm tra và hoàn thiện sau
+## Hạng mục cần kiểm tra và hoàn thiện sau
 
-Validation tự động `cargo fmt --check`, `cargo check --workspace` và `cargo test --workspace` đã
+Các bước kiểm tra tự động `cargo fmt --check`, `cargo check --workspace` và `cargo test --workspace` đã
 thành công. Tuy nhiên các benchmark tải lớn trong workspace đang được đánh dấu `ignored`, nên chưa
-đo được cancellation latency, memory, throughput và fairness dưới tải concurrent theo ma trận bắt
-buộc của plan. Cần chạy riêng các benchmark ignored trên máy benchmark ổn định và lưu kết quả.
+đo được độ trễ hủy, mức sử dụng bộ nhớ, thông lượng và tính công bằng dưới tải đồng thời theo ma trận bắt
+buộc của plan. Cần chạy riêng các benchmark bị bỏ qua trên máy benchmark ổn định và lưu kết quả.
 
-Framework chung đã được áp dụng cho find/search, ranged read/edit, recursive safe mutation, Git
-process và persisted cancellation cleanup. Hai legacy subsystem còn cần migration/schema review:
-interactive PTY hiện vẫn dùng session/replay limits riêng, còn blob upload/download dùng quota riêng
-và chưa trả `BudgetUsage` trong response. Open-file weighted semaphore và disk reservation dùng chung
-cũng chưa được nối vào toàn bộ recursive/blob staging paths. Cần hoàn tất các migration này, bổ sung
-test fake-clock/proptest, cancel giữa từng phase mutation, process descendant verification, slow
-consumer fairness, app shutdown, và xác nhận public MCP schema/breaking-change strategy trước khi bỏ
+Khung xử lý chung đã được áp dụng cho find/search, thao tác đọc/sửa theo range, mutation đệ quy an toàn, process Git
+và việc dọn dẹp yêu cầu hủy đã được lưu bền vững. Hai subsystem cũ còn cần xem xét migration/schema:
+PTY tương tác hiện vẫn dùng giới hạn session/replay riêng, còn upload/download blob dùng quota riêng
+và chưa trả `BudgetUsage` trong response. Semaphore có trọng số cho file đang mở và cơ chế đặt trước dung lượng đĩa dùng chung
+cũng chưa được nối vào toàn bộ path staging đệ quy/blob. Cần hoàn tất các migration này, bổ sung
+test fake-clock/proptest, hủy giữa từng giai đoạn mutation, xác minh process hậu duệ, tính công bằng với bên tiêu thụ chậm,
+việc tắt ứng dụng, và xác nhận chiến lược thay đổi không tương thích của schema MCP công khai trước khi bỏ
 hậu tố `_check`.

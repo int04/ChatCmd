@@ -232,11 +232,11 @@ cargo test --workspace
 - Benchmark cold/warm/incremental/DB size.
 - Phase nào hoàn thành, phase nào chủ động để sau.
 
-## CHECK — Nội dung cần kiểm tra hoặc hoàn thiện sau
+## CẦN KIỂM TRA LẠI — Nội dung cần kiểm tra hoặc hoàn thiện sau
 
-- Lần chạy `cargo fmt --check` đầu tiên thất bại vì các file mới chưa được format; đã chạy `cargo fmt --all` và validation lại thành công.
-- `cargo test --workspace` có một failure ngoài phạm vi Plan 20: `shell_reader_retires_exited_session_without_wait` trả `session_not_found` tại `crates/chatcmd-runtime/tests/direct_runtime.rs:414`; cần kiểm tra race/flakiness của terminal replay lifecycle.
-- `cargo clippy -p chatcmd-runtime -p chatcmd-mcp --all-targets -- -D warnings` fail vì 6 lint pre-existing: `collapsible_if`, hai `too_many_arguments`, `redundant_guards`, `manual_clamp`, và `items_after_test_module` trong các file runtime hiện hữu; không có lỗi trỏ vào file Plan 20 mới.
-- Runtime index hiện hoàn thành crawl metadata in-memory, generation/status, cancellation, hard cap và stale marking cho native mutations. Chưa hydrate/publish snapshot qua SQLite schema 17, chưa có batch transaction, quota theo kích thước DB hoặc cleanup root lifecycle.
-- Chưa bật indexed `fs_find_v2`/candidate filtering cho search vì watcher update, overflow semantics, restart reconcile và direct stale verification chưa hoàn chỉnh; direct bounded walker vẫn là correctness fallback.
-- Chưa có benchmark bắt buộc 100k/1m paths, incremental 1/100/10.000 changes, DB size/memory/CPU p50/p95 và batch-vs-N-calls. Phase B text index và Phase C symbol index chủ động để sau.
+- Lần chạy `cargo fmt --check` đầu tiên thất bại vì các tệp mới chưa được định dạng; đã chạy `cargo fmt --all` và kiểm tra lại thành công.
+- `cargo test --workspace` có một lỗi ngoài phạm vi Plan 20: `shell_reader_retires_exited_session_without_wait` trả `session_not_found` tại `crates/chatcmd-runtime/tests/direct_runtime.rs:414`; cần kiểm tra điều kiện tranh chấp hoặc tính không ổn định trong vòng đời phát lại thiết bị đầu cuối.
+- `cargo clippy -p chatcmd-runtime -p chatcmd-mcp --all-targets -- -D warnings` thất bại vì 6 cảnh báo kiểm tra tĩnh đã tồn tại từ trước: `collapsible_if`, hai `too_many_arguments`, `redundant_guards`, `manual_clamp` và `items_after_test_module` trong các tệp lúc chạy hiện hữu; không có lỗi trỏ vào tệp mới của Plan 20.
+- Chỉ mục lúc chạy hiện đã hoàn thành việc duyệt siêu dữ liệu trong bộ nhớ, quản lý thế hệ/trạng thái, hủy tác vụ, giới hạn cứng và đánh dấu dữ liệu cũ cho các thao tác gốc. Chưa nạp/xuất bản ảnh chụp qua lược đồ SQLite 17, chưa có giao dịch theo lô, hạn ngạch theo kích thước cơ sở dữ liệu hoặc dọn dẹp vòng đời thư mục gốc.
+- Chưa bật `fs_find_v2` có chỉ mục/lọc ứng viên cho tìm kiếm vì cập nhật trình theo dõi, ngữ nghĩa tràn, đối soát sau khi khởi động lại và xác minh trực tiếp dữ liệu cũ chưa hoàn chỉnh; trình duyệt trực tiếp có giới hạn vẫn là phương án dự phòng bảo đảm tính đúng đắn.
+- Chưa có phép đo hiệu năng bắt buộc cho 100k/1m đường dẫn, thay đổi gia tăng 1/100/10.000 mục, kích thước cơ sở dữ liệu/bộ nhớ/CPU p50/p95 và so sánh lô với N lời gọi. Chủ động để chỉ mục văn bản Giai đoạn B và chỉ mục ký hiệu Giai đoạn C thực hiện sau.

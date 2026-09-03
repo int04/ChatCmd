@@ -155,11 +155,11 @@ cargo test --workspace
 - Body limits/blob interaction.
 - Integration/performance test result.
 
-# Verification follow-up (_check)
+# Hạng mục cần kiểm tra và hoàn thiện sau (_check)
 
-Implementation and the minimum Cargo validation pass, but the following Plan 17 items still need verification or follow-up before this plan can be considered fully closed:
+Phần triển khai và các bước kiểm tra Cargo tối thiểu đã đạt, nhưng các hạng mục sau của Plan 17 vẫn cần được kiểm tra hoặc hoàn thiện trước khi có thể đóng plan:
 
-- `rmcp 3.1.4` currently deserializes one `ClientJsonRpcMessage` per HTTP POST and rejects JSON-RPC batch arrays. Upgrade or patch `rmcp`, then add real transport tests proving consistent trusted identity across mixed batch tool calls and notifications.
-- Add streamed/chunked HTTP regression coverage for a missing or incorrect `Content-Length`, disconnect while reading the request body, malformed and empty POST bodies, and a near-cap allocation/memory measurement. The implemented byte-for-byte test proves the identity layer no longer consumes or re-encodes the body, and the real transport cap test proves an oversized body returns 413.
-- Exercise session-owner lifecycle beyond the in-process tests: expiry/cleanup, reconnect after application restart, and token rotation or revocation while an MCP session remains open. The current in-memory binding rejects a second authenticated agent reusing the same live remote session ID, but it has no persistence or TTL policy of its own.
-- Run a packaged streamable-HTTP tool-call regression. The existing packaged release test validates catalog startup, while the new trusted-identity tool-call test runs through the real Axum plus `rmcp` transport in process.
+- `rmcp 3.1.4` hiện deserialize một `ClientJsonRpcMessage` cho mỗi HTTP POST và từ chối mảng batch JSON-RPC. Cần nâng cấp hoặc vá `rmcp`, sau đó bổ sung test qua transport thật để chứng minh trusted identity nhất quán trong batch kết hợp tool call và notification.
+- Bổ sung test hồi quy HTTP dạng stream/chunk cho các trường hợp thiếu hoặc sai `Content-Length`, mất kết nối khi đang đọc request body, POST body sai định dạng hoặc rỗng, cùng phép đo allocation/bộ nhớ khi kích thước gần giới hạn. Test so sánh từng byte đã có chứng minh identity layer không còn đọc hết hoặc mã hóa lại body; test giới hạn qua transport thật cũng chứng minh body quá lớn trả về 413.
+- Kiểm thử vòng đời owner của session ngoài phạm vi test chạy trong cùng process: hết hạn/dọn dẹp, kết nối lại sau khi ứng dụng khởi động lại và xoay vòng hoặc thu hồi token khi MCP session vẫn đang mở. Binding trong bộ nhớ hiện tại từ chối agent đã xác thực thứ hai dùng lại cùng remote session ID đang hoạt động, nhưng chưa có persistence hoặc chính sách TTL riêng.
+- Chạy test hồi quy tool call qua streamable HTTP trong bản đóng gói. Test bản release đóng gói hiện có mới xác minh catalog khởi động; test tool call với trusted identity mới chỉ chạy trong cùng process qua transport Axum thật kết hợp với `rmcp`.

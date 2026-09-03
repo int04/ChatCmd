@@ -212,16 +212,17 @@ Chạy frontend typecheck/test/build cho approval UI.
 - File/migration đã đổi.
 - Security/race/e2e test và kết quả.
 
-## CHECK REQUIRED
+## CẦN KIỂM TRA LẠI
 
-Frontend `npm test -- --run` completed with 47 passing tests and 7 failures in
-`src/test/App.test.tsx`. The jsdom environment reports that
-`HTMLCanvasElement.getContext()` is unavailable, after which the affected full-App assertions
-time out. Re-run those seven App integration tests in an environment with canvas support. Also
-perform a manual browser check of the scoped-grant summary/revoke controls and a concurrent
-end-to-end safe-read sequence to confirm that one prompt covers only the displayed task, tool,
-canonical paths, options, expiry, and resource budgets. Rust workspace tests, frontend production
-build, and the focused approval UI test completed successfully. Frontend lint also remains blocked
-by eight existing errors and eight warnings outside the Plan 21 changes: missing Node globals in
-`scripts/obfuscate-build.mjs`, render-time ref access in `src/realtime.ts`, and existing React hook
-dependency warnings. Re-run the full lint suite after those baseline issues are corrected.
+Lệnh `npm test -- --run` cho giao diện hoàn tất với 47 kiểm thử thành công và 7 kiểm thử thất bại
+trong `src/test/App.test.tsx`. Môi trường jsdom báo không có
+`HTMLCanvasElement.getContext()`, sau đó các phép xác nhận toàn ứng dụng liên quan bị hết thời gian
+chờ. Cần chạy lại bảy kiểm thử tích hợp ứng dụng đó trong môi trường có hỗ trợ canvas. Đồng thời,
+cần kiểm tra thủ công trên trình duyệt đối với các điều khiển tóm tắt/thu hồi quyền theo phạm vi và
+chạy một chuỗi đọc an toàn đồng thời từ đầu đến cuối để xác nhận rằng một lời nhắc chỉ bao phủ đúng
+tác vụ, công cụ, đường dẫn chuẩn hóa, tùy chọn, thời hạn và hạn mức tài nguyên được hiển thị. Các kiểm
+thử không gian làm việc Rust, bản dựng giao diện cho môi trường thực tế và kiểm thử giao diện phê duyệt trọng
+tâm đều hoàn tất thành công. Việc kiểm tra tĩnh giao diện vẫn bị chặn bởi tám lỗi và tám cảnh báo đã
+tồn tại ngoài thay đổi của Plan 21: thiếu biến toàn cục Node trong
+`scripts/obfuscate-build.mjs`, truy cập tham chiếu trong lúc kết xuất tại `src/realtime.ts` và các cảnh báo
+phụ thuộc React hook hiện hữu. Cần chạy lại toàn bộ bộ kiểm tra tĩnh sau khi sửa các vấn đề nền này.

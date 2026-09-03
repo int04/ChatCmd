@@ -2,12 +2,12 @@
 
 ## Cần kiểm tra lại sau triển khai
 
-- Full frontend suite `npm test -- --run` còn 7 lỗi trong `src/test/App.test.tsx` ở các assertion API health/routing/agent workflow; các test timeline/tool-output liên quan đều pass và `npm run build` pass. Cần xác nhận/fix riêng trạng thái test harness của `App.test.tsx`.
-- Chạy benchmark thủ công trên từng platform watcher với workspace 100.000 file và shell build 100.000 event để đo CPU/RAM/backend event loss thực tế. Unit stress 100.000 event đã xác nhận queue giữ cap và đếm drop.
-- Chạy fixture sparse 1 GiB với native range edit và instrument OS reads để xác nhận tổng snapshot read không vượt 200.000 byte trên Windows/macOS/Linux. Unit snapshot hiện xác nhận bounded prefix/suffix với file 1 MB.
-- Backend watcher có thể mất event im lặng trước callback. Hiện lỗi backend/queue overflow được báo `fileChangeTrackingIncomplete`, nhưng full manifest reconciliation cần workspace index của Plan 20 để kiểm chứng completeness.
-- Directory-scale copy/move/delete đã dùng `detailArtifactRef` khi runtime cung cấp; UI lazy-fetch/render diff artifact riêng chưa có API artifact download phù hợp và cần kiểm tra sau khi artifact persistence contract hoàn tất.
-- Exact internal-temp registration từ atomic writer chưa có cross-crate callback; tracker hiện coalesce mọi path create-then-delete trong debounce window. Cần nối operation-ID/temp-path registry nếu UI vẫn thấy staging path trên backend watcher cụ thể, đồng thời test file người dùng có tên giống tempfile.
+- Toàn bộ bộ test frontend `npm test -- --run` còn 7 lỗi trong `src/test/App.test.tsx` tại các điều kiện kiểm tra về tình trạng API, định tuyến và quy trình agent; các test liên quan đến timeline/tool-output đều đạt và `npm run build` cũng đạt. Cần xác minh và sửa riêng môi trường chạy test của `App.test.tsx`.
+- Chạy benchmark thủ công trên watcher của từng nền tảng với workspace gồm 100.000 file và bản build shell tạo 100.000 event để đo mức sử dụng CPU/RAM và số event backend bị mất trong thực tế. Kiểm thử tải đơn vị với 100.000 event đã xác nhận queue giữ đúng giới hạn và đếm được số event bị loại.
+- Chạy fixture sparse 1 GiB với range edit native, đồng thời đo số byte hệ điều hành đọc để xác nhận tổng dữ liệu snapshot được đọc không vượt 200.000 byte trên Windows/macOS/Linux. Kiểm thử snapshot đơn vị hiện đã xác nhận prefix/suffix được giới hạn với file 1 MB.
+- Watcher backend có thể làm mất event mà không báo trước khi callback được gọi. Hiện lỗi backend hoặc queue overflow được báo qua `fileChangeTrackingIncomplete`, nhưng việc đối soát toàn bộ manifest cần workspace index của Plan 20 để kiểm chứng tính đầy đủ.
+- Các thao tác copy/move/delete ở quy mô thư mục đã dùng `detailArtifactRef` khi runtime cung cấp. Giao diện chưa thể tải lười và render riêng diff artifact vì chưa có API tải artifact phù hợp; cần kiểm tra sau khi contract persistence của artifact hoàn tất.
+- Atomic writer chưa có callback xuyên crate để đăng ký chính xác file tạm nội bộ. Tracker hiện gộp mọi path được tạo rồi xóa trong debounce window. Nếu giao diện vẫn hiển thị staging path trên một backend watcher cụ thể, cần nối operation-ID với registry temp-path và kiểm thử cả file người dùng có tên giống tempfile.
 - `cargo clippy --workspace --all-targets -- -D warnings` còn lỗi có sẵn ngoài Plan 14 trong `filesystem_find.rs`, `filesystem_read.rs`, `filesystem.rs` và `filesystem/file_version.rs`; không sửa chéo phạm vi plan này.
 
 ## Nhiệm vụ dùng cho chat mới
