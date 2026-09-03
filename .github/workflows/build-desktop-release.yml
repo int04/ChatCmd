@@ -100,7 +100,7 @@ jobs:
         shell: bash
         env:
           CHATCMD_BUILD_VERSION: ${{ needs.prepare.outputs.version }}
-        run: ./scripts/build-macos.sh
+        run: bash ./scripts/build-macos.sh
 
       - name: Give release assets stable names
         shell: bash
