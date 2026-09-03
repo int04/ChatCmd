@@ -1,4 +1,4 @@
-import { CheckCircle2, Cloud, Copy, Globe2, KeyRound, Link2, LoaderCircle, Network, Pencil, PlugZap, Plus, Power, RotateCw, Trash2, Wifi } from 'lucide-react';
+import { CheckCircle2, Cloud, Copy, Globe2, KeyRound, Link2, LoaderCircle, Network, Pencil, Plus, RotateCw, Trash2, Wifi } from 'lucide-react';
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { api } from '../api';
 import { Empty, ErrorState, Loading, Modal, PageHeading, ProblemBanner, StatusBadge } from '../components';
@@ -21,7 +21,6 @@ const groupNames: Record<string, string> = {
 export function AgentsPage() {
   const agents = useLoad(api.agents, []);
   const tunnels = useLoad(api.tunnels, []);
-  const managedTunnel = useLoad(api.managedTunnelStatus, []);
   const tools = useLoad(api.tools, []);
   const presets = useLoad(api.presets, []);
   const settings = useLoad(api.settings, []);
@@ -35,28 +34,7 @@ export function AgentsPage() {
   const [testedTunnelId, setTestedTunnelId] = useState<number>();
   const [deleteTunnelTarget, setDeleteTunnelTarget] = useState<Tunnel>();
   const [deletingTunnelId, setDeletingTunnelId] = useState<number>();
-  const [tunnelConnectionBusy, setTunnelConnectionBusy] = useState(false);
   const [problem, setProblem] = useState('');
-  const refreshManagedTunnel = managedTunnel.refresh;
-  const managedTunnelState = managedTunnel.data?.state;
-  const managedTunnelActive = managedTunnelState === 'connecting' || managedTunnelState === 'connected' || managedTunnelState === 'reconnecting';
-  const managedTunnelStateLabel = managedTunnel.loading && !managedTunnel.data
-    ? tr('Checking…')
-    : managedTunnelState === 'connecting'
-      ? tr('Connecting…')
-      : managedTunnelState === 'connected'
-        ? tr('Connected')
-        : managedTunnelState === 'reconnecting'
-          ? tr('Reconnecting…')
-          : managedTunnelState === 'disconnected'
-            ? tr('Disconnected')
-            : tr('Unavailable');
-
-  useEffect(() => {
-    if (!managedTunnelState || managedTunnelState === 'disconnected') return;
-    const timer = window.setInterval(() => { void refreshManagedTunnel(); }, 3000);
-    return () => window.clearInterval(timer);
-  }, [managedTunnelState, refreshManagedTunnel]);
 
   const updateList = (next: Agent) => agents.setData((current) => current ? [next, ...current.filter((item) => item.id !== next.id)] : [next]);
   const save = async (input: AgentInput) => {
@@ -117,48 +95,11 @@ export function AgentsPage() {
     } catch (error) { setProblem(error instanceof Error ? error.message : tr('Tunnel could not be deleted')); }
     finally { setDeletingTunnelId(undefined); }
   };
-  const connectTunnel = async () => {
-    setProblem('');
-    setTunnelConnectionBusy(true);
-    managedTunnel.setData((current) => current ? { ...current, state: 'connecting', connected: false, lastError: undefined } : current);
-    try {
-      managedTunnel.setData(await api.connectManagedTunnel());
-      await tunnels.reload();
-    } catch (error) {
-      setProblem(error instanceof Error ? error.message : tr('Tunnel connection failed'));
-      await managedTunnel.reload();
-    }
-    finally { setTunnelConnectionBusy(false); }
-  };
-  const disconnectTunnel = async () => {
-    setProblem('');
-    setTunnelConnectionBusy(true);
-    try { managedTunnel.setData(await api.disconnectManagedTunnel()); }
-    catch (error) { setProblem(error instanceof Error ? error.message : tr('Tunnel disconnect failed')); }
-    finally { setTunnelConnectionBusy(false); }
-  };
-
   const presetName = (presetId?: string) => presetId ? presets.data?.find((preset) => preset.id === presetId)?.name ?? tr('Saved permission profile') : tr('Custom permissions');
 
   return <div className="agents-page agents-simple-page agents-clean-page">
     <PageHeading eyebrow={tr('AI ACCESS')} title={tr('Plugin list')} body={tr('Connect this device once, then choose which AI clients are allowed to use it.')} actions={<button className="button primary" onClick={() => setEditor('new')}><Plus />{tr('Create new Plugin connection')}</button>} />
     <ProblemBanner message={problem} clear={() => setProblem('')} />
-
-    <section className="agents-clean-connect">
-      <div className="agents-clean-connect-main">
-        <span className={`agents-clean-status-icon ${managedTunnelState ?? 'loading'}`}><PlugZap /></span>
-        <div className="agents-clean-connect-copy">
-          <div className="agents-clean-connect-title"><h2>{tr('ChatCMD Tunnel')}</h2><span role="status" className={`managed-tunnel-state ${managedTunnelState ?? 'loading'}`}>{managedTunnelStateLabel}</span></div>
-          <p>{tr('Use ChatCMD free Tunnel to quickly connect to AI services without any setup.')}</p>
-          {managedTunnel.data?.publicUrl && <code title={managedTunnel.data.publicUrl}>{managedTunnel.data.publicUrl}</code>}
-          {(managedTunnel.error || managedTunnel.data?.lastError) && <small className="managed-tunnel-error">{managedTunnel.error || managedTunnel.data?.lastError}</small>}
-        </div>
-      </div>
-      <button type="button" className={`button ${managedTunnelActive ? 'secondary' : 'primary'}`} disabled={managedTunnel.loading || tunnelConnectionBusy || !managedTunnel.data} onClick={() => void (managedTunnelActive ? disconnectTunnel() : connectTunnel())}>
-        {tunnelConnectionBusy || managedTunnelState === 'connecting' ? <LoaderCircle className="spin" /> : managedTunnelActive ? <Power /> : <PlugZap />}
-        {managedTunnelState === 'connecting' ? tr('Connecting…') : tunnelConnectionBusy ? tr('Stopping…') : managedTunnelActive ? tr('Turn off') : tr('Turn on')}
-      </button>
-    </section>
 
     <section className="agents-clean-access">
       <header className="agents-clean-section-header">
@@ -261,7 +202,7 @@ function PluginLinksModal({ agent, close, onTestTunnel, testingTunnelId }: { age
   const test = async (link: PluginLink) => onTestTunnel({ id: link.tunnelId, baseUrl: link.baseUrl });
   return <Modal title={tr('Connection links — {name}', { name: agent.name })} description={tr('Choose the Internet address this AI client will use. Because the link contains an access key, the full value stays hidden until you copy it.')} close={close}>
     {error && <div className="tunnel-form-error">{error}</div>}
-    {!links ? <div className="plugin-links-state"><LoaderCircle className="spin" />{tr('Preparing connection links…')}</div> : !links.length ? <div className="plugin-links-empty"><Network /><strong>{tr('No connection address available')}</strong><p>{tr('Connect ChatCMD Tunnel or add your own public address before creating a connection link.')}</p></div> : <div className="plugin-link-list">{links.map((link) => <article className="plugin-link-row" key={link.tunnelId}>
+    {!links ? <div className="plugin-links-state"><LoaderCircle className="spin" />{tr('Preparing connection links…')}</div> : !links.length ? <div className="plugin-links-empty"><Network /><strong>{tr('No connection address available')}</strong><p>{tr('Add your own public address before creating a connection link.')}</p></div> : <div className="plugin-link-list">{links.map((link) => <article className="plugin-link-row" key={link.tunnelId}>
       <span className="plugin-link-icon"><Link2 /></span><div className="plugin-link-copy"><strong>{link.baseUrl}</strong><code>{link.maskedEndpoint}</code></div><div className="plugin-link-actions"><button className="button secondary compact" disabled={testingTunnelId === link.tunnelId} onClick={() => void test(link)}>{testingTunnelId === link.tunnelId ? <LoaderCircle className="spin" /> : <Wifi />}{tr('Test connection')}</button><button className="button primary compact" disabled={copyingTunnelId === link.tunnelId} onClick={() => void copy(link)}>{copyingTunnelId === link.tunnelId ? <LoaderCircle className="spin" /> : copiedTunnelId === link.tunnelId ? <CheckCircle2 /> : <Copy />}{copiedTunnelId === link.tunnelId ? tr('Copied') : tr('Copy')}</button></div>
     </article>)}</div>}
     <p className="plugin-link-security"><KeyRound />{tr('This connection link contains a secret access key. ChatCMD keeps it hidden on screen and copies the complete value directly to your clipboard.')}</p>

@@ -6,16 +6,16 @@ use axum::{
     http::{HeaderValue, StatusCode},
     middleware::{self, Next},
     response::Response,
-    routing::{any, get, patch, post},
+    routing::{get, patch, post},
 };
 
 use crate::websocket::AppState;
 
 use super::{
-    Problem, agents::*, auth, backend, chatgpt::*, chatgpt_completion::*, chatgpt_queue::*, crypto,
-    data::*, folders::*, overview::*, payment::*, plan_questions::*, sessions::*, settings::*,
-    skills::*, subagent_fallback::*, system::*, task_controls::*, task_delete::*, task_views::*,
-    tunnels::*, updates::*, workspaces::*,
+    Problem, agents::*, chatgpt::*, chatgpt_completion::*, chatgpt_queue::*, crypto, data::*,
+    folders::*, overview::*, plan_questions::*, sessions::*, settings::*, skills::*,
+    subagent_fallback::*, system::*, task_controls::*, task_delete::*, task_views::*, tunnels::*,
+    workspaces::*,
 };
 
 pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
@@ -34,15 +34,6 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/mcp/tunnels", get(list_tunnels).post(create_tunnel))
         .route("/mcp/tunnels/{id}", axum::routing::delete(delete_tunnel))
         .route("/mcp/tunnels/{id}/test", post(test_tunnel))
-        .route("/mcp/tunnel-connection", get(managed_tunnel_status))
-        .route(
-            "/mcp/tunnel-connection/connect",
-            post(connect_managed_tunnel),
-        )
-        .route(
-            "/mcp/tunnel-connection/disconnect",
-            post(disconnect_managed_tunnel),
-        )
         .route("/mcp/agents/{id}/plugin-links", get(plugin_links))
         .route(
             "/mcp/agents/{id}/plugin-links/{tunnel_id}",
@@ -139,28 +130,13 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/skills/{id}/options", patch(set_skill_options))
         .route("/skills/{id}/icon", get(skill_icon))
         .route("/settings", get(settings).put(save_settings))
-        .route("/payment/create", post(create_payment))
         .route("/diagnostics/database", get(database_diagnostics))
         .route("/diagnostics/logs", get(diagnostic_logs))
         .route(
             "/diagnostics/user-data",
             axum::routing::delete(delete_all_user_data),
-        )
-        .route("/updates/status", get(update_status))
-        .route("/updates/check", post(check_update))
-        .route("/updates/start", post(start_update))
-        .route("/updates/restart", post(restart_update))
-        .route("/auth/info", get(auth::info))
-        .route("/auth/change-password", post(auth::change_password))
-        .route("/auth/logout", post(super::statistics::logout))
-        .route("/backend/{*path}", any(backend::proxy))
-        .layer(middleware::from_fn_with_state(
-            state.clone(),
-            auth::require_auth,
-        ));
+        );
     let local = Router::new()
-        .route("/auth/register", post(auth::register))
-        .route("/auth/login", post(auth::login))
         .route("/crypto/handshake", post(crypto::handshake))
         .route("/system/elevation", get(elevation_status))
         .route("/system/elevation/restart", post(restart_elevated))

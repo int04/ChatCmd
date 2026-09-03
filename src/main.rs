@@ -4,7 +4,6 @@
 )]
 
 mod api;
-mod backend_api;
 mod chatgpt_message;
 mod chatgpt_queue;
 #[cfg(all(not(debug_assertions), any(target_os = "windows", target_os = "macos")))]
@@ -13,8 +12,6 @@ mod desktop_tray;
 mod embedded_web;
 mod log_helper;
 mod runtime_host;
-mod tunnel_client;
-mod updater;
 mod version;
 mod websocket;
 
@@ -45,7 +42,6 @@ use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tracing::info;
 
-use backend_api::BackendApiClient;
 use runtime_host::RuntimeHost;
 use websocket::{AppEvent, AppState, ws_handler};
 
@@ -189,7 +185,6 @@ async fn run_server(ready: Option<std::sync::mpsc::Sender<()>>) -> Result<()> {
     let runtime = Arc::new(RuntimeHost::new(
         repository.clone(),
         bootstrap.device.clone(),
-        port,
         shell.clone(),
         workspace,
         git,
@@ -212,8 +207,6 @@ async fn run_server(ready: Option<std::sync::mpsc::Sender<()>>) -> Result<()> {
         security,
         !ip.is_loopback(),
     );
-    let backend_api = BackendApiClient::new().context("configure backend API")?;
-    info!(backend_api = %backend_api.base_url(), "Backend API configured");
     let state = Arc::new(AppState::new(
         repository,
         database_path.display().to_string(),
@@ -224,13 +217,9 @@ async fn run_server(ready: Option<std::sync::mpsc::Sender<()>>) -> Result<()> {
         skills,
         activity_registry,
         plan_prompt_registry,
-        backend_api,
-        runtime.auth_usage_cache(),
         event_tx,
     ));
-    api::warm_auth_runtime_cache(&state).await;
     api::start_data_cleanup_scheduler(state.clone());
-    let tunnel_manager = state.tunnel.clone();
     let management = Router::new()
         .nest("/api", api::router(state.clone()))
         .route(
@@ -263,7 +252,6 @@ async fn run_server(ready: Option<std::sync::mpsc::Sender<()>>) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(address)
         .await
         .with_context(|| format!("bind {address}"))?;
-    tunnel_manager.start_if_enabled().await;
     if let Some(sender) = ready {
         let _ = sender.send(());
     }

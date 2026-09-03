@@ -1,30 +1,24 @@
-import { AlertTriangle, Database, Download, Info, MonitorCog, Save, ShieldCheck, SlidersHorizontal, TerminalSquare, UserRound, Volume2 } from 'lucide-react';
+import { AlertTriangle, Database, Info, MonitorCog, Save, ShieldCheck, SlidersHorizontal, TerminalSquare, Volume2 } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../api';
 import { ErrorState, Loading, Modal, PageHeading, ProblemBanner, StatusBadge } from '../components';
 import { applyAppFont, applyTaskFontScale, GOOGLE_FONT_PRESETS, normalizeFontFamily, normalizeTaskFontScale, TASK_FONT_SCALE_PRESETS } from '../fontPreferences';
 import { getAppLanguage, setAppLanguage, tr, translatedStatus } from '../i18n';
-import { AccountSettings } from '../settings/AccountSettings';
 import { DataSettings } from '../settings/DataSettings';
 import type { LocalSettings } from '../types';
 import { useLoad } from '../useLoad';
-import { UpdateSettings } from '../updates/UpdateSettings';
-import { updateCopy } from '../updates/copy';
 
-type SettingsTab = 'account' | 'execution' | 'display' | 'sound' | 'data' | 'update';
+type SettingsTab = 'execution' | 'display' | 'sound' | 'data';
 
-const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; description: string; icon: typeof UserRound }> = [
-  { id: 'account', label: 'Account', description: 'Profile and security', icon: UserRound },
+const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; description: string; icon: typeof SlidersHorizontal }> = [
   { id: 'execution', label: 'Execution', description: 'Agent and terminal rules', icon: SlidersHorizontal },
   { id: 'display', label: 'Display', description: 'Theme and language', icon: MonitorCog },
   { id: 'sound', label: 'Sound', description: 'Agent notifications', icon: Volume2 },
   { id: 'data', label: 'Data', description: 'SQLite and application logs', icon: Database },
-  { id: 'update', label: 'Update', description: 'Version and updater', icon: Download },
 ];
 
 export function SettingsPage() {
-  const copy = updateCopy();
   const [searchParams, setSearchParams] = useSearchParams();
   const result = useLoad(api.settings, []);
   const [value, setValue] = useState<LocalSettings>();
@@ -32,11 +26,11 @@ export function SettingsPage() {
   const [confirming, setConfirming] = useState(false);
   const [saved, setSaved] = useState(false);
   const requestedTab = searchParams.get('tab');
-  const [activeTab, setActiveTab] = useState<SettingsTab>(requestedTab === 'update' || requestedTab === 'data' ? requestedTab : 'account');
+  const [activeTab, setActiveTab] = useState<SettingsTab>(isSettingsTab(requestedTab) ? requestedTab : 'execution');
 
   useEffect(() => {
     const tab = searchParams.get('tab');
-    if (tab === 'update' || tab === 'data') setActiveTab(tab);
+    if (isSettingsTab(tab)) setActiveTab(tab);
   }, [searchParams]);
 
   useEffect(() => {
@@ -86,9 +80,9 @@ export function SettingsPage() {
 
     <form className="settings-workspace-form" onSubmit={submit}>
       <div className="settings-category-grid" role="tablist" aria-label={tr('Settings categories')}>
-        {SETTINGS_TABS.map(({ id, label, description, icon: Icon }) => <button key={id} type="button" role="tab" aria-selected={activeTab === id} className={`settings-category-card ${activeTab === id ? 'active' : ''}`} onClick={() => { setActiveTab(id); setSearchParams(id === 'update' || id === 'data' ? { tab: id } : {}); }}>
+        {SETTINGS_TABS.map(({ id, label, description, icon: Icon }) => <button key={id} type="button" role="tab" aria-selected={activeTab === id} className={`settings-category-card ${activeTab === id ? 'active' : ''}`} onClick={() => { setActiveTab(id); setSearchParams(id === 'data' ? { tab: id } : {}); }}>
           <span className="settings-category-icon"><Icon aria-hidden="true" /></span>
-          <span><strong>{id === 'update' ? copy.tabLabel : tr(label)}</strong><small>{id === 'update' ? copy.tabDescription : tr(description)}</small></span>
+          <span><strong>{tr(label)}</strong><small>{tr(description)}</small></span>
         </button>)}
       </div>
 
@@ -96,13 +90,12 @@ export function SettingsPage() {
         <header className="settings-workspace-header">
           <div className="settings-workspace-title">
             <span><ActiveIcon aria-hidden="true" /></span>
-            <div><p>{tr('SETTINGS CATEGORY')}</p><h2>{activeTab === 'update' ? copy.tabLabel : tr(activeMeta.label)}</h2><small>{sectionDescription(activeTab)}</small></div>
+            <div><p>{tr('SETTINGS CATEGORY')}</p><h2>{tr(activeMeta.label)}</h2><small>{sectionDescription(activeTab)}</small></div>
           </div>
-          {activeTab !== 'account' && activeTab !== 'update' && activeTab !== 'data' && <div className="settings-workspace-status">{saved ? <strong>{tr('Settings saved.')}</strong> : <span>{tr('Changes are stored locally after saving.')}</span>}</div>}
+          {activeTab !== 'data' && <div className="settings-workspace-status">{saved ? <strong>{tr('Settings saved.')}</strong> : <span>{tr('Changes are stored locally after saving.')}</span>}</div>}
         </header>
 
         <div className="settings-workspace-body">
-          {activeTab === 'account' && <AccountSettings />}
           {activeTab === 'execution' && <div className="execution-settings">
             <SettingsIntro icon={<ShieldCheck />} title={tr('Execution safety and limits')} description={tr('These settings control how much access Agents receive and how many tasks can run at the same time. Use restrictive values when you are unsure.')} />
             <div className="settings-section-block">
@@ -139,10 +132,9 @@ export function SettingsPage() {
             </div></div>
           </div>}
           {activeTab === 'data' && <DataSettings />}
-          {activeTab === 'update' && <UpdateSettings />}
         </div>
 
-        {activeTab !== 'account' && activeTab !== 'update' && activeTab !== 'data' && <footer className="settings-workspace-footer"><span>{saved ? tr('Saved successfully') : tr('Review changes before applying them.')}</span><button className="button primary"><Save />{tr('Save settings')}</button></footer>}
+        {activeTab !== 'data' && <footer className="settings-workspace-footer"><span>{saved ? tr('Saved successfully') : tr('Review changes before applying them.')}</span><button className="button primary"><Save />{tr('Save settings')}</button></footer>}
       </section>
     </form>
 
@@ -176,10 +168,12 @@ function ToggleSetting({ checked, onChange, label, hint, detail }: { checked: bo
 }
 
 function sectionDescription(tab: SettingsTab) {
-  if (tab === 'update') return updateCopy().categoryDescription;
-  if (tab === 'account') return tr('Manage your account information and password.');
   if (tab === 'execution') return tr('Defaults for new tasks and terminal processes.');
   if (tab === 'display') return tr('Stored locally for this browser.');
   if (tab === 'data') return tr('Inspect local SQLite storage and application logs.');
   return tr('Choose a separate notification sound for each Agent event type.');
+}
+
+function isSettingsTab(value: string | null): value is SettingsTab {
+  return SETTINGS_TABS.some((tab) => tab.id === value);
 }
