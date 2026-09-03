@@ -262,52 +262,7 @@ fn should_ignore_path(root: &Path, path: &Path) -> bool {
         .into_iter()
         .flat_map(Path::components)
         .filter_map(|component| component.as_os_str().to_str())
-        .any(ignored_component)
-}
-
-fn ignored_component(value: &str) -> bool {
-    matches!(
-        value.to_ascii_lowercase().as_str(),
-        ".git"
-            | ".idea"
-            | ".next"
-            | ".nuxt"
-            | ".turbo"
-            | ".vite"
-            | ".vs"
-            | ".gradle"
-            | ".venv"
-            | "venv"
-            | "__pycache__"
-            | ".pytest_cache"
-            | ".mypy_cache"
-            | ".ruff_cache"
-            | ".tox"
-            | ".parcel-cache"
-            | ".svelte-kit"
-            | ".angular"
-            | ".expo"
-            | ".pnpm-store"
-            | ".dart_tool"
-            | ".symlinks"
-            | ".cxx"
-            | ".externalnativebuild"
-            | ".nyc_output"
-            | "artifacts"
-            | "bin"
-            | "bower_components"
-            | "build"
-            | "coverage"
-            | "deriveddata"
-            | "dist"
-            | "htmlcov"
-            | "jspm_packages"
-            | "node_modules"
-            | "obj"
-            | "pods"
-            | "target"
-            | "testresults"
-    )
+        .any(chatcmd_runtime::is_default_ignored_component)
 }
 
 fn transient_file(path: &Path) -> bool {

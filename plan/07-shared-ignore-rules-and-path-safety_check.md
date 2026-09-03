@@ -163,3 +163,19 @@ Chạy test platform-specific trên macOS hiện tại; bảo đảm CI Windows 
 - Guarantee symlink/TOCTOU theo từng OS.
 - Shared ignore precedence.
 - Test và validation result.
+
+## CHECK — Platform and race validation still required
+
+The implementation and complete workspace test suite pass on Windows, but the following Plan 07
+acceptance items could not be fully exercised in this environment and require follow-up:
+
+- Run the Unix/macOS-only symlink-component and broken-symlink tests on macOS and Linux CI.
+- Add and run a Windows junction/reparse-point integration test on a CI runner where creating those
+  filesystem objects is permitted.
+- Add a barrier-controlled adversarial test that swaps a path component to a symlink between
+  authorization and read/write/delete. Current capability identity and parent revalidation are
+  best-effort and deliberately do not claim handle-relative, fully race-free behavior.
+- Verify case-variant and Unicode-normalization authorization on both case-sensitive and
+  case-insensitive macOS filesystems.
+- No separate workspace indexer exists in the current tree; if one is introduced, migrate it to
+  `WorkspaceIgnorePolicy` and add parity tests with search, find, and the turn watcher.

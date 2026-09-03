@@ -34,32 +34,46 @@ impl WorkspaceService {
         bytes: &[u8],
         overwrite: bool,
     ) -> RuntimeResult<FsEntry> {
-        let target = self.creation(path)?;
+        let target = self.creation_for(
+            path,
+            if overwrite {
+                PathAccess::Replace
+            } else {
+                PathAccess::Create
+            },
+        )?;
+        let target_path = target.path();
         self.policy
             .authorize(&PolicyContext {
                 agent_id: context.agent_id.clone(),
                 tool_name: context.tool_name.clone(),
-                root: self.containing_root(&target),
-                destructive: target.exists() && overwrite,
+                root: Some(target.root.clone()),
+                destructive: target_path.exists() && overwrite,
             })
             .await?;
-        if target.exists() && !overwrite {
+        if target_path.exists() && !overwrite {
             return Err(RuntimeError::new(
                 "already_exists",
                 "destination exists and overwrite is false",
             ));
         }
-        let parent = target
-            .parent()
-            .ok_or_else(|| RuntimeError::new("invalid_path", "destination has no parent"))?
-            .to_path_buf();
-        let target_clone = target.clone();
+        let existing_target = if target_path.exists() {
+            Some(self.existing_for(&target_path, PathAccess::Replace)?)
+        } else {
+            None
+        };
+        let parent = target.canonical_parent.clone();
+        let target_clone = target_path.clone();
         let bytes = bytes.to_vec();
         tokio::task::spawn_blocking(move || -> RuntimeResult<()> {
             let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(io_error)?;
             temporary.write_all(&bytes).map_err(io_error)?;
             temporary.flush().map_err(io_error)?;
+            target.revalidate_parent()?;
             if overwrite && target_clone.exists() {
+                if let Some(existing) = existing_target.as_ref() {
+                    existing.revalidate()?;
+                }
                 fs::remove_file(&target_clone).map_err(io_error)?;
             }
             temporary
@@ -69,13 +83,17 @@ impl WorkspaceService {
         })
         .await
         .map_err(join_error)??;
-        self.stat(&target).await
+        self.stat(&target_path).await
     }
 
     pub async fn create_directory(&self, path: &Path) -> RuntimeResult<FsEntry> {
         let target = self.creation(path)?;
-        tokio::fs::create_dir_all(&target).await.map_err(io_error)?;
-        self.stat(&target).await
+        target.revalidate_parent()?;
+        let target_path = target.path();
+        tokio::fs::create_dir(&target_path)
+            .await
+            .map_err(io_error)?;
+        self.stat(&target_path).await
     }
 
     pub async fn copy(
@@ -85,30 +103,46 @@ impl WorkspaceService {
         destination: &Path,
         overwrite: bool,
     ) -> RuntimeResult<FsEntry> {
-        let source = self.existing(source)?;
-        let destination = self.creation(destination)?;
+        let source = self.existing_for(source, PathAccess::Read)?;
+        let destination = self.creation_for(
+            destination,
+            if overwrite {
+                PathAccess::Replace
+            } else {
+                PathAccess::Create
+            },
+        )?;
+        let destination_path = destination.path();
         self.policy
             .authorize(&PolicyContext {
                 agent_id: context.agent_id.clone(),
                 tool_name: "fs_copy".into(),
-                root: self.containing_root(&destination),
+                root: Some(destination.root.clone()),
                 destructive: overwrite,
             })
             .await?;
-        if destination.exists() && !overwrite {
+        if destination_path.exists() && !overwrite {
             return Err(RuntimeError::new(
                 "already_exists",
                 "destination exists and overwrite is false",
             ));
         }
+        if destination_path.exists() {
+            self.existing_for(&destination_path, PathAccess::Replace)?
+                .revalidate()?;
+        }
+        source.revalidate()?;
+        destination.revalidate_parent()?;
         let source_clone = source.clone();
-        let destination_clone = destination.clone();
+        let destination_clone = destination_path.clone();
         tokio::task::spawn_blocking(move || {
+            source_clone.revalidate()?;
+            destination.revalidate_parent()?;
             copy_recursive(&source_clone, &destination_clone, overwrite)
         })
         .await
         .map_err(join_error)??;
-        self.stat(&destination).await
+        self.stat(&destination_path).await
     }
 
     pub async fn move_path(
@@ -118,31 +152,51 @@ impl WorkspaceService {
         destination: &Path,
         overwrite: bool,
     ) -> RuntimeResult<FsEntry> {
-        let source = self.existing(source)?;
-        let destination = self.creation(destination)?;
+        let source = self.existing_for(source, PathAccess::MoveSource)?;
+        let destination = self.creation_for(destination, PathAccess::MoveDestination)?;
+        if self
+            .allowed_scopes
+            .iter()
+            .any(|scope| scope == source.as_ref())
+        {
+            return Err(RuntimeError::new(
+                "root_path_rejected",
+                "workspace and explicit grant roots cannot be moved",
+            ));
+        }
+        let destination_path = destination.path();
         self.policy
             .authorize(&PolicyContext {
                 agent_id: context.agent_id.clone(),
                 tool_name: "fs_move".into(),
-                root: self.containing_root(&source),
+                root: Some(source.root.clone()),
                 destructive: true,
             })
             .await?;
-        if destination.exists() {
+        source.revalidate()?;
+        destination.revalidate_parent()?;
+        if destination_path.exists() {
             if !overwrite {
                 return Err(RuntimeError::new(
                     "already_exists",
                     "destination exists and overwrite is false",
                 ));
             }
-            remove_recursive(&destination)?;
+            let existing_destination =
+                self.existing_for(&destination_path, PathAccess::MoveDestination)?;
+            existing_destination.revalidate()?;
+            remove_recursive(&destination_path)?;
         }
-        match tokio::fs::rename(&source, &destination).await {
+        source.revalidate()?;
+        destination.revalidate_parent()?;
+        match tokio::fs::rename(&source, &destination_path).await {
             Ok(()) => {}
             Err(_) => {
                 let source_clone = source.clone();
-                let destination_clone = destination.clone();
+                let destination_clone = destination_path.clone();
                 tokio::task::spawn_blocking(move || -> RuntimeResult<()> {
+                    source_clone.revalidate()?;
+                    destination.revalidate_parent()?;
                     copy_recursive(&source_clone, &destination_clone, true)?;
                     remove_recursive(&source_clone)
                 })
@@ -150,7 +204,7 @@ impl WorkspaceService {
                 .map_err(join_error)??;
             }
         }
-        self.stat(&destination).await
+        self.stat(&destination_path).await
     }
 
     pub async fn delete(
@@ -159,22 +213,27 @@ impl WorkspaceService {
         path: &Path,
         recursive: bool,
     ) -> RuntimeResult<bool> {
-        let resolved = self.existing(path)?;
-        if self.roots.contains(&resolved) {
+        let resolved = self.existing_for(path, PathAccess::Delete)?;
+        if self
+            .allowed_scopes
+            .iter()
+            .any(|scope| scope == resolved.as_ref())
+        {
             return Err(RuntimeError::new(
                 "root_path_rejected",
-                "configured workspace roots cannot be deleted",
+                "workspace and explicit grant roots cannot be deleted",
             ));
         }
         self.policy
             .authorize(&PolicyContext {
                 agent_id: context.agent_id.clone(),
                 tool_name: "fs_delete".into(),
-                root: self.containing_root(&resolved),
+                root: Some(resolved.root.clone()),
                 destructive: true,
             })
             .await?;
         tokio::task::spawn_blocking(move || -> RuntimeResult<bool> {
+            resolved.revalidate()?;
             if resolved.is_dir() {
                 if recursive {
                     fs::remove_dir_all(resolved).map_err(io_error)?;

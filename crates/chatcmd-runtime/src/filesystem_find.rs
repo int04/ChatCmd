@@ -1,7 +1,7 @@
 use super::{WorkspaceService, walk::configured_walker};
 use crate::{
     FindEntryType, FindPatternMode, FsFindItem, FsFindPageData, FsFindRequest, FsFindScanPage,
-    OperationContext, RuntimeError, RuntimeResult, ToolWarning, TruncationReason,
+    OperationContext, RuntimeError, RuntimeResult, ToolWarning, TraversalOptions, TruncationReason,
 };
 use globset::{GlobBuilder, GlobMatcher};
 use ignore::{DirEntry, Walk};
@@ -56,6 +56,7 @@ impl WorkspaceService {
         expected_root_version: Option<&str>,
     ) -> RuntimeResult<(FsFindScanPage, Option<String>)> {
         let root = self.existing(&request.path)?;
+        root.revalidate()?;
         let request = request.clone();
         let cancellation = context.cancellation.clone();
         let owner = owner_key(context);
@@ -92,16 +93,19 @@ impl WorkspaceService {
             } else {
                 let walker = configured_walker(
                     &root,
-                    request.max_depth,
-                    request.include_hidden,
-                    request.include_ignored,
-                    &request.exclude,
+                    &TraversalOptions {
+                        include_hidden: request.include_hidden,
+                        include_ignored: request.include_ignored,
+                        exclude: request.exclude.clone(),
+                        max_depth: request.max_depth,
+                        ..TraversalOptions::default()
+                    },
                 )?
                 .build();
                 (
                     Uuid::new_v4().to_string(),
                     FindState {
-                        root: root.clone(),
+                        root: root.to_path_buf(),
                         root_version: version.clone(),
                         owner,
                         request_fingerprint: fingerprint,

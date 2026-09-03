@@ -78,8 +78,8 @@ async fn user_supplied_absolute_path_grant_persists_for_task() {
             json!({"path": denied_file.display().to_string(), "maxCharacters": 1000}),
         )
         .await
-        .expect("absolute external path must be auto-allowed");
-    assert_eq!(external["content"], "must stay blocked");
+        .expect_err("unmentioned absolute external path must remain blocked");
+    assert_eq!(external.code, "path_outside_allowed_scope");
 
     let next_turn = "turn-after-explicit-path-grant";
     let mut next_user_context = turn_context(

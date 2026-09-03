@@ -7,6 +7,7 @@ mod shell;
 mod skill_service;
 mod tool_result;
 mod types;
+mod workspace_ignore;
 
 pub use filesystem::{SearchProgress, WorkspaceService};
 pub use policy::{
@@ -21,3 +22,4 @@ pub use skill_service::{
 };
 pub use tool_result::*;
 pub use types::*;
+pub use workspace_ignore::{TraversalOptions, WorkspaceIgnorePolicy, is_default_ignored_component};

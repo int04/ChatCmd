@@ -48,6 +48,7 @@ impl WorkspaceService {
         expected_directory_version: Option<&str>,
     ) -> RuntimeResult<(FsListScanPage, Option<String>)> {
         let resolved = self.existing(&request.path)?;
+        resolved.revalidate()?;
         if !resolved.is_dir() {
             return Err(RuntimeError::new(
                 "not_a_directory",
@@ -94,7 +95,7 @@ impl WorkspaceService {
                 (
                     Uuid::new_v4().to_string(),
                     DirectoryListState {
-                        path: resolved.clone(),
+                        path: resolved.to_path_buf(),
                         directory_version: current_version,
                         sort: request.sort,
                         metadata: normalized_metadata(&request.metadata),

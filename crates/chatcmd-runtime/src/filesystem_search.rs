@@ -12,7 +12,7 @@ use super::{
 };
 use crate::{
     FsSearchMatch, FsSearchPageData, FsSearchRequest, FsSearchScanPage, OperationContext,
-    RuntimeError, RuntimeResult, TruncationReason,
+    RuntimeError, RuntimeResult, TraversalOptions, TruncationReason,
 };
 use globset::GlobSet;
 use ignore::{DirEntry, Walk};
@@ -93,6 +93,7 @@ impl WorkspaceService {
         progress: impl Fn(SearchProgress) + Send + Sync + 'static,
     ) -> RuntimeResult<(FsSearchScanPage, Option<String>)> {
         let root = self.existing(&request.path)?;
+        root.revalidate()?;
         let request = request.clone();
         let cancellation = context.cancellation.clone();
         let owner = owner_key(context);
@@ -126,13 +127,20 @@ impl WorkspaceService {
                 )?;
                 (id, state)
             } else {
-                let walker =
-                    configured_walker(&root, 64, true, request.include_ignored, &request.exclude)?
-                        .build();
+                let walker = configured_walker(
+                    &root,
+                    &TraversalOptions {
+                        include_hidden: true,
+                        include_ignored: request.include_ignored,
+                        exclude: request.exclude.clone(),
+                        ..TraversalOptions::default()
+                    },
+                )?
+                .build();
                 (
                     Uuid::new_v4().to_string(),
                     SearchState {
-                        root: root.clone(),
+                        root: root.to_path_buf(),
                         root_version: version.clone(),
                         owner,
                         request_fingerprint: fingerprint,
