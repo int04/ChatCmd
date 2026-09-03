@@ -80,6 +80,7 @@ pub(crate) async fn test_host() -> (RuntimeHost, String, TempDir) {
             bootstrap.device,
             shell,
             workspace,
+            chatcmd_runtime::BlobStore::new(root.join(".test-blobs")).expect("blob store"),
             git,
             process,
             skills,

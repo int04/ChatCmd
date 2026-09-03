@@ -74,6 +74,7 @@ async fn git_status_uses_task_project_folder_when_cwd_is_omitted() {
         bootstrap.device,
         shell,
         workspace,
+        chatcmd_runtime::BlobStore::new(root.join(".test-blobs")).expect("blob store"),
         git,
         process,
         skills,

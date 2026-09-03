@@ -211,3 +211,27 @@ cargo test --workspace
 - Ownership/quota/GC/integrity flow.
 - Tích hợp `fs_write_text`, `fs_write_raw`, `fs_apply_edits`.
 - Test/benchmark và số liệu.
+
+## CHECK — Nội dung cần kiểm tra hoặc hoàn thiện sau
+
+Phần lõi đã được triển khai và các test tự động hiện có đã pass: protocol upload tuần tự,
+resume bằng `nextOffset`, duplicate chunk idempotent, conflict/integrity/ownership checks,
+`contentRef` cho ba filesystem mutations, streaming writer cho text/raw, inline cap, persistence
+redaction và packaged MCP catalog.
+
+Các mục sau chưa được nghiệm thu đầy đủ và cần kiểm tra/triển khai tiếp trước khi coi Plan 10 hoàn tất:
+
+- `fs_apply_edits` nhận JSON edits qua blob nhưng edit engine hiện vẫn materialize mảng edits trong RAM;
+  cần benchmark và/hoặc parser streaming nếu manifest edits có thể rất lớn.
+- Artifact flow hiện chỉ chấp nhận purpose `artifact`; chưa có tool tạo/register artifact từ contentRef.
+- Blob metadata hiện process-local. Startup dọn orphan bytes nhưng không phục hồi upload để resume sau
+  restart; chưa có SQLite state transition transaction như thiết kế đầy đủ.
+- Periodic TTL GC đã được nối; chưa có cleanup trực tiếp khi task bị xóa và quota-pressure eviction policy.
+- Chưa chạy fault injection cho disk-full/permission/temp-dir loss, race seal/consume/abort, crash tại
+  từng commit point, hoặc kiểm tra hai writer cạnh tranh trong test tích hợp end-to-end.
+- Chưa chạy benchmark bắt buộc 10 MB, 100 MB và 1 GB để ghi throughput, peak RSS, số request,
+  temporary disk usage và cleanup time. Chỉ các test chức năng tự động đã chạy.
+- MCP schema có các field optional và runtime enforce exactly-one; cần xác nhận client host hiển thị
+  ràng buộc one-of như mong muốn hoặc bổ sung custom JSON Schema oneOf.
+- Retry `fs_write_*` sau khi blob đã consumed hiện trả state conflict; cần quyết định contract replay
+  theo idempotency key và bổ sung test nếu muốn retry mutation trả lại kết quả trước đó.

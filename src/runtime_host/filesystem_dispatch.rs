@@ -8,14 +8,16 @@ use std::{
 };
 
 use chatcmd_runtime::{
-    ApplyEditsRequest, OperationContext, RuntimeError, RuntimeResult, SearchProgress,
-    TextReadBudget, TextReadRange, TextReadRequestV2, WorkspaceService,
+    ApplyEditsRequest, MAX_INLINE_BYTES, OperationContext, RuntimeError, RuntimeResult,
+    SearchProgress, TextReadBudget, TextReadRange, TextReadRequestV2, WorkspaceService,
 };
 use serde_json::{Value, json};
 
 use super::{
     RuntimeHost,
-    inputs::{DeleteInput, ReplaceTextInput, SearchInput, WriteTextInput},
+    inputs::{
+        ApplyEditsInput, DeleteInput, ReplaceTextInput, SearchInput, WriteRawInput, WriteTextInput,
+    },
     value,
 };
 
@@ -177,20 +179,85 @@ pub(super) async fn search(
 }
 
 pub(super) async fn write_text(
+    host: &RuntimeHost,
     workspace: &WorkspaceService,
     context: &OperationContext,
     input: WriteTextInput,
 ) -> RuntimeResult<Value> {
     let before = snapshot(workspace, &input.path).await;
-    let entry = workspace
-        .write_text(context, &input.path, &input.content, input.overwrite)
-        .await?;
-    Ok(with_text_diff(
-        value(entry)?,
-        &input.path,
-        before,
-        Some(input.content),
-    ))
+    let entry = match (input.content, input.content_ref) {
+        (Some(content), None) => {
+            if content.len() > MAX_INLINE_BYTES {
+                return Err(RuntimeError::new(
+                    "inlineContentTooLarge",
+                    "inline content exceeds 256 KiB; upload with blob_begin/blob_write_chunk/blob_seal and pass contentRef",
+                ));
+            }
+            workspace
+                .write_text(context, &input.path, &content, input.overwrite)
+                .await?
+        }
+        (None, Some(content_ref)) => {
+            let lease = host
+                .blob_store
+                .lease(context, &content_ref, "fsWriteText")?;
+            let result = workspace
+                .write_blob(context, &input.path, lease.path(), input.overwrite, true)
+                .await;
+            match result {
+                Ok(entry) => {
+                    lease.finish(true)?;
+                    entry
+                }
+                Err(error) => {
+                    lease.finish(false)?;
+                    return Err(error);
+                }
+            }
+        }
+        _ => return Err(content_choice_error("content")),
+    };
+    let after = snapshot(workspace, &input.path).await;
+    Ok(with_text_diff(value(entry)?, &input.path, before, after))
+}
+
+pub(super) async fn write_raw(
+    host: &RuntimeHost,
+    workspace: &WorkspaceService,
+    context: &OperationContext,
+    input: WriteRawInput,
+) -> RuntimeResult<Value> {
+    let entry = match (input.base64, input.content_ref) {
+        (Some(base64), None) => {
+            if base64.len() > MAX_INLINE_BYTES.saturating_mul(4) / 3 + 4 {
+                return Err(RuntimeError::new(
+                    "inlineContentTooLarge",
+                    "inline Base64 exceeds the bounded limit; upload with blob_begin/blob_write_chunk/blob_seal and pass contentRef",
+                ));
+            }
+            workspace
+                .write_raw(context, &input.path, &base64, input.overwrite)
+                .await?
+        }
+        (None, Some(content_ref)) => {
+            let lease = host.blob_store.lease(context, &content_ref, "fsWriteRaw")?;
+            let result = workspace
+                .write_blob(context, &input.path, lease.path(), input.overwrite, false)
+                .await;
+            match result {
+                Ok(entry) => {
+                    lease.finish(true)?;
+                    entry
+                }
+                Err(error) => {
+                    lease.finish(false)?;
+                    return Err(error);
+                }
+            }
+        }
+        _ => return Err(content_choice_error("base64")),
+    };
+    value(entry)
 }
 
 pub(super) async fn replace_text(
@@ -213,11 +280,55 @@ pub(super) async fn replace_text(
 }
 
 pub(super) async fn apply_edits(
+    host: &RuntimeHost,
     workspace: &WorkspaceService,
     context: &OperationContext,
-    input: ApplyEditsRequest,
+    input: ApplyEditsInput,
 ) -> RuntimeResult<Value> {
-    value(workspace.apply_edits(context, &input).await?)
+    let (edits, lease) = match (input.edits, input.content_ref) {
+        (Some(edits), None) => (edits, None),
+        (None, Some(content_ref)) => {
+            let lease = host
+                .blob_store
+                .lease(context, &content_ref, "fsApplyEdits")?;
+            let bytes = tokio::fs::read(lease.path())
+                .await
+                .map_err(|error| RuntimeError::new("blobIoError", error.to_string()))?;
+            let edits = serde_json::from_slice::<Vec<chatcmd_runtime::TextEdit>>(&bytes).map_err(
+                |error| {
+                    RuntimeError::new(
+                        "invalidBlobContent",
+                        format!("contentRef must contain a JSON edits array: {error}"),
+                    )
+                },
+            )?;
+            (edits, Some(lease))
+        }
+        _ => return Err(content_choice_error("edits")),
+    };
+    let request = ApplyEditsRequest {
+        path: input.path,
+        expected_version: input.expected_version,
+        coordinate_system: input.coordinate_system,
+        column_encoding: input.column_encoding,
+        edits,
+        dry_run: input.dry_run,
+        preserve_line_endings: input.preserve_line_endings,
+        preserve_bom: input.preserve_bom,
+        budget: input.budget,
+    };
+    let result = workspace.apply_edits(context, &request).await;
+    if let Some(lease) = lease {
+        lease.finish(result.is_ok())?;
+    }
+    value(result?)
+}
+
+fn content_choice_error(inline_field: &str) -> RuntimeError {
+    RuntimeError::new(
+        "invalidContentSource",
+        format!("provide exactly one of {inline_field} or contentRef"),
+    )
 }
 
 pub(super) async fn delete(

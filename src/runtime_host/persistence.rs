@@ -32,8 +32,16 @@ impl RuntimeHost {
             return Err(error);
         }
         let _activity_guard = self.activities.register(&context, tool, &arguments);
-        self.append_call_event(&context, tool, "started", Some(&arguments), None, None)
-            .await?;
+        let persisted_arguments = persistable_input(tool, &arguments);
+        self.append_call_event(
+            &context,
+            tool,
+            "started",
+            Some(&persisted_arguments),
+            None,
+            None,
+        )
+        .await?;
 
         let result = tokio::select! {
             result = self.dispatch(tool, context.clone(), arguments) => result,
@@ -410,6 +418,32 @@ impl RuntimeHost {
     }
 }
 
+fn persistable_input(tool: &str, arguments: &Value) -> Value {
+    let mut safe = arguments.clone();
+    let Some(object) = safe.as_object_mut() else {
+        return safe;
+    };
+    let sensitive = match tool {
+        "blob_write_chunk" => &["dataBase64", "chunkSha256"][..],
+        "blob_seal" => &["sha256"][..],
+        "fs_write_text" => &["content"][..],
+        "fs_write_raw" => &["base64"][..],
+        "fs_apply_edits" => &["edits"][..],
+        _ => &[][..],
+    };
+    for key in sensitive {
+        if let Some(value) = object.get_mut(*key) {
+            let size = match value {
+                Value::String(text) => text.len(),
+                Value::Array(items) => items.len(),
+                _ => 0,
+            };
+            *value = json!({"redacted": true, "size": size});
+        }
+    }
+    safe
+}
+
 fn enrich_tool_result(value: Value, context: &OperationContext, tool: &str) -> Value {
     let mut object = match value {
         Value::Object(object) => object,
@@ -452,7 +486,7 @@ fn enrich_tool_result(value: Value, context: &OperationContext, tool: &str) -> V
 
 #[cfg(test)]
 mod tests {
-    use super::enrich_tool_result;
+    use super::{enrich_tool_result, persistable_input};
     use chatcmd_runtime::OperationContext;
     use serde_json::json;
 
@@ -486,6 +520,25 @@ mod tests {
         assert_eq!(result["taskId"], "task");
         assert_eq!(result["turnId"], "turn");
         assert_eq!(result["sessionId"], "session");
+    }
+
+    #[test]
+    fn large_content_is_redacted_before_timeline_persistence() {
+        let chunk = persistable_input(
+            "blob_write_chunk",
+            &json!({"uploadId":"upload", "offset":0, "dataBase64":"secret", "chunkSha256":"hash"}),
+        );
+        assert_eq!(chunk["dataBase64"]["redacted"], true);
+        assert_eq!(chunk["dataBase64"]["size"], 6);
+        assert_eq!(chunk["chunkSha256"]["redacted"], true);
+        assert_eq!(chunk["uploadId"], "upload");
+
+        let write = persistable_input(
+            "fs_write_text",
+            &json!({"path":"large.txt", "content":"private", "contentRef":"blob:v1:opaque"}),
+        );
+        assert_eq!(write["content"]["redacted"], true);
+        assert_eq!(write["contentRef"], "blob:v1:opaque");
     }
 }
 

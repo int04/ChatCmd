@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::sync::LazyLock;
 
 pub const PROTOCOL_VERSION: u32 = 2;
-pub const CATALOG_VERSION: u32 = 2;
+pub const CATALOG_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -123,7 +123,10 @@ pub(crate) fn canonicalize_contract(value: Value) -> Value {
 fn capability_flags(name: &str) -> ToolCapabilityFlags {
     ToolCapabilityFlags {
         supports_cursor: matches!(name, "fs_list_v2" | "fs_find" | "fs_search" | "shell_read"),
-        supports_content_ref: name == "fs_list_v2",
+        supports_content_ref: matches!(
+            name,
+            "fs_write_text" | "fs_write_raw" | "fs_apply_edits" | "task_artifact_read"
+        ),
         mutating: is_mutating(name),
         streaming: matches!(name, "shell_read" | "fs_read_text_v2" | "fs_apply_edits"),
         result_schema_version: matches!(name, "fs_list_v2" | "fs_find" | "fs_search")
@@ -156,7 +159,8 @@ fn result_schema(name: &str) -> Value {
 }
 
 fn is_mutating(name: &str) -> bool {
-    name.starts_with("fs_write")
+    name.starts_with("blob_")
+        || name.starts_with("fs_write")
         || name.starts_with("fs_replace")
         || name == "fs_apply_edits"
         || name.starts_with("fs_create")

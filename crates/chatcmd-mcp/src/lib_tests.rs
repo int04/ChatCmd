@@ -122,6 +122,15 @@ fn catalog_names_are_sorted_stable_and_unique() {
     assert!(TOOL_NAMES.iter().any(|name| name == "fs_apply_edits"));
     assert!(TOOL_NAMES.iter().any(|name| name == "fs_list_v2"));
     assert!(TOOL_NAMES.iter().any(|name| name == "fs_read_text_v2"));
+    for name in [
+        "blob_begin",
+        "blob_write_chunk",
+        "blob_status",
+        "blob_seal",
+        "blob_abort",
+    ] {
+        assert!(TOOL_NAMES.iter().any(|candidate| candidate == name));
+    }
 }
 
 #[test]

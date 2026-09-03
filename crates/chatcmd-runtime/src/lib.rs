@@ -1,5 +1,6 @@
 //! Direct, bounded local-machine execution primitives for ChatCMD.
 
+mod blob_store;
 mod filesystem;
 mod policy;
 mod services;
@@ -9,6 +10,7 @@ mod tool_result;
 mod types;
 mod workspace_ignore;
 
+pub use blob_store::*;
 pub use filesystem::{FileVersion, SearchProgress, WorkspaceService};
 pub use policy::{
     ApprovalDecision, ExecutionPolicy, PolicyAuthorizer, PolicyContext, PolicyDecision,

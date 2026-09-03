@@ -293,7 +293,10 @@ const fn default_start_line() -> usize {
 
 input!(WriteTextInput {
     path: PathBuf,
-    content: String,
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    content_ref: Option<String>,
     #[serde(default)]
     overwrite: bool
 });
@@ -306,10 +309,37 @@ input!(ReplaceTextInput {
 });
 input!(WriteRawInput {
     path: PathBuf,
-    base64: String,
+    #[serde(default)]
+    base64: Option<String>,
+    #[serde(default)]
+    content_ref: Option<String>,
     #[serde(default)]
     overwrite: bool
 });
+
+input!(BlobStatusInput { upload_id: String });
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct ApplyEditsInput {
+    pub(super) path: PathBuf,
+    pub(super) expected_version: String,
+    pub(super) coordinate_system: chatcmd_runtime::EditCoordinateSystem,
+    #[serde(default)]
+    pub(super) column_encoding: Option<chatcmd_runtime::EditColumnEncoding>,
+    #[serde(default)]
+    pub(super) edits: Option<Vec<chatcmd_runtime::TextEdit>>,
+    #[serde(default)]
+    pub(super) content_ref: Option<String>,
+    #[serde(default)]
+    pub(super) dry_run: bool,
+    #[serde(default = "default_true")]
+    pub(super) preserve_line_endings: bool,
+    #[serde(default = "default_true")]
+    pub(super) preserve_bom: bool,
+    #[serde(default)]
+    pub(super) budget: chatcmd_runtime::ApplyEditsBudget,
+}
 
 const fn default_expected_occurrences() -> usize {
     1

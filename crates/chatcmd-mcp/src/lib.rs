@@ -413,7 +413,10 @@ tool_args!(ReadV2Args {
 });
 tool_args!(WriteTextArgs {
     path: String,
-    content: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    content: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    content_ref: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     overwrite: Option<bool>
 });
@@ -430,7 +433,10 @@ tool_args!(ApplyEditsArgs {
     coordinate_system: chatcmd_runtime::EditCoordinateSystem,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     column_encoding: Option<chatcmd_runtime::EditColumnEncoding>,
-    edits: Vec<chatcmd_runtime::TextEdit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    edits: Option<Vec<chatcmd_runtime::TextEdit>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    content_ref: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     dry_run: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -442,9 +448,38 @@ tool_args!(ApplyEditsArgs {
 });
 tool_args!(WriteRawArgs {
     path: String,
-    base64: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    base64: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    content_ref: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     overwrite: Option<bool>
+});
+tool_args!(BlobBeginArgs {
+    purpose: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    expected_size_bytes: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    content_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    expected_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    chunk_size_bytes: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ttl_seconds: Option<u64>
+});
+tool_args!(BlobChunkArgs {
+    upload_id: String,
+    offset: u64,
+    data_base64: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    chunk_sha256: Option<String>
+});
+tool_args!(BlobStatusArgs { upload_id: String });
+tool_args!(BlobSealArgs {
+    upload_id: String,
+    final_size_bytes: u64,
+    sha256: String
 });
 tool_args!(GitDiffArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -697,6 +732,31 @@ tool_methods!(
         "List roots granted to the current task/conversation. When the task has a project folder, this returns that folder rather than a process-wide or Agent workspace. No tool-specific fields."
     ),
     (
+        blob_begin,
+        BlobBeginArgs,
+        "Begin an owner-scoped sequential blob upload. Required purpose=fsWriteText|fsWriteRaw|fsApplyEdits|artifact; optional expectedSizeBytes, contentType, expectedSha256, chunkSizeBytes, ttlSeconds. Returns opaque contentRef and uploadId."
+    ),
+    (
+        blob_write_chunk,
+        BlobChunkArgs,
+        "Append one bounded Base64 chunk. Required uploadId, offset, dataBase64; optional chunkSha256. Offset must equal nextOffset; an identical retry is idempotent."
+    ),
+    (
+        blob_status,
+        BlobStatusArgs,
+        "Inspect an owner-scoped upload and resume from nextOffset. Required uploadId."
+    ),
+    (
+        blob_seal,
+        BlobSealArgs,
+        "Verify size and SHA-256, then make an upload immutable. Required uploadId, finalSizeBytes, sha256."
+    ),
+    (
+        blob_abort,
+        BlobStatusArgs,
+        "Idempotently abort an owner-scoped upload and remove its temporary bytes. Required uploadId."
+    ),
+    (
         fs_list,
         ListArgs,
         "Compatibility directory listing with legacy offset/limit and global sorting. Required field: path; optional offset, limit. Prefer fs_list_v2 for large directories and cursor pagination."
@@ -729,7 +789,7 @@ tool_methods!(
     (
         fs_write_text,
         WriteTextArgs,
-        "Atomically write UTF-8 workspace text. Required fields: path, content; optional overwrite."
+        "Atomically write UTF-8 workspace text. Required path and exactly one of content or contentRef; optional overwrite. Inline content is capped at 256 KiB."
     ),
     (
         fs_replace_text,
@@ -739,12 +799,12 @@ tool_methods!(
     (
         fs_apply_edits,
         ApplyEditsArgs,
-        "Apply one or more non-overlapping UTF-8 range edits with optimistic concurrency and bounded memory. Required: path, expectedVersion, coordinateSystem=byte|lineColumn, edits. Byte edits use startByte/endByte; lineColumn positions are 1-based Unicode scalar columns and end-exclusive, with columnEncoding=utf8CodePoint. Optional dryRun, preserveLineEndings, preserveBom, budget {timeoutMs,maxBytesRead,maxBytesWritten,maxEdits}. The target version is checked before processing and immediately before atomic commit. Prefer this tool over fs_replace_text for large files."
+        "Apply one or more non-overlapping UTF-8 range edits with optimistic concurrency. Required path, expectedVersion, coordinateSystem and exactly one of edits or contentRef; an fsApplyEdits blob contains the JSON edits array. Optional dryRun, preserveLineEndings, preserveBom, budget."
     ),
     (
         fs_write_raw,
         WriteRawArgs,
-        "Atomically write Base64-decoded workspace bytes. Required fields: path, base64; optional overwrite."
+        "Atomically write workspace bytes. Required path and exactly one of bounded inline base64 or an fsWriteRaw contentRef; optional overwrite."
     ),
     (
         fs_stat,

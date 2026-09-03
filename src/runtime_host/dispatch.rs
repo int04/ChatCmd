@@ -225,6 +225,26 @@ impl RuntimeHost {
                 Some(project_folder) => value(vec![project_folder]),
                 None => value(task_path_scopes),
             },
+            "blob_begin" => value(self.blob_store.begin(
+                &context,
+                parse::<chatcmd_runtime::BlobBeginRequest>(arguments)?,
+            )?),
+            "blob_write_chunk" => value(self.blob_store.write_chunk(
+                &context,
+                parse::<chatcmd_runtime::BlobChunkRequest>(arguments)?,
+            )?),
+            "blob_status" => {
+                let input: BlobStatusInput = parse(arguments)?;
+                value(self.blob_store.status(&context, &input.upload_id)?)
+            }
+            "blob_seal" => value(self.blob_store.seal(
+                &context,
+                parse::<chatcmd_runtime::BlobSealRequest>(arguments)?,
+            )?),
+            "blob_abort" => {
+                let input: BlobStatusInput = parse(arguments)?;
+                value(self.blob_store.abort(&context, &input.upload_id)?)
+            }
             "fs_list" => {
                 let input: ListInput = parse(arguments)?;
                 value(
@@ -420,21 +440,17 @@ impl RuntimeHost {
                 value(workspace.read_text_v2(Some(&context), &input).await?)
             }
             "fs_write_text" => {
-                filesystem_dispatch::write_text(workspace, &context, parse(arguments)?).await
+                filesystem_dispatch::write_text(self, workspace, &context, parse(arguments)?).await
             }
             "fs_replace_text" => {
                 filesystem_dispatch::replace_text(workspace, &context, parse(arguments)?).await
             }
             "fs_apply_edits" => {
-                filesystem_dispatch::apply_edits(workspace, &context, parse(arguments)?).await
+                filesystem_dispatch::apply_edits(self, workspace, &context, parse(arguments)?).await
             }
             "fs_write_raw" => {
                 let input: WriteRawInput = parse(arguments)?;
-                value(
-                    workspace
-                        .write_raw(&context, &input.path, &input.base64, input.overwrite)
-                        .await?,
-                )
+                filesystem_dispatch::write_raw(self, workspace, &context, input).await
             }
             "fs_stat" => {
                 let input: StatInput = parse(arguments)?;

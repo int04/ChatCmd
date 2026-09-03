@@ -31,8 +31,8 @@ pub(crate) mod user_message_tests;
 use chatcmd_core::{LocalDevice, Task, TaskId, TaskStore as _};
 use chatcmd_mcp::RuntimeApi;
 use chatcmd_runtime::{
-    BoxFuture, CursorCodec, DeviceDescriptor, GitService, OperationContext, ProcessService,
-    RuntimeError, RuntimeResult, ShellRuntime, SkillService, WorkspaceService,
+    BlobStore, BoxFuture, CursorCodec, DeviceDescriptor, GitService, OperationContext,
+    ProcessService, RuntimeError, RuntimeResult, ShellRuntime, SkillService, WorkspaceService,
 };
 use chatcmd_storage::SqliteRepository;
 use serde::de::DeserializeOwned;
@@ -53,6 +53,7 @@ pub(crate) struct RuntimeHost {
     device: LocalDevice,
     shell: ShellRuntime,
     workspace: WorkspaceService,
+    blob_store: BlobStore,
     git: GitService,
     process: ProcessService,
     skills: SkillService,
@@ -70,6 +71,7 @@ impl RuntimeHost {
         device: LocalDevice,
         shell: ShellRuntime,
         workspace: WorkspaceService,
+        blob_store: BlobStore,
         git: GitService,
         process: ProcessService,
         skills: SkillService,
@@ -80,6 +82,7 @@ impl RuntimeHost {
             device,
             shell,
             workspace,
+            blob_store,
             git,
             process,
             skills,

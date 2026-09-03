@@ -174,6 +174,21 @@ async fn run_server(ready: Option<std::sync::mpsc::Sender<()>>) -> Result<()> {
     };
     let workspace = WorkspaceService::new(&config.roots, policy_engine.clone())
         .context("initialize workspace service")?;
+    let blob_root = database_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join("blobs-v1");
+    let blob_store = chatcmd_runtime::BlobStore::new(blob_root).context("initialize blob store")?;
+    let blob_gc = blob_store.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            if let Err(error) = blob_gc.gc() {
+                tracing::warn!(error = ?error, "blob garbage collection failed");
+            }
+        }
+    });
     let shell = ShellRuntime::new(config.clone(), policy_engine.clone(), event_sink);
     let git = GitService::new(workspace.clone(), 200_000);
     let process = ProcessService::new(policy_engine);
@@ -187,6 +202,7 @@ async fn run_server(ready: Option<std::sync::mpsc::Sender<()>>) -> Result<()> {
         bootstrap.device.clone(),
         shell.clone(),
         workspace,
+        blob_store,
         git,
         process,
         skills.clone(),
@@ -324,7 +340,8 @@ async fn seed_catalog(repository: &SqliteRepository) -> Result<(), chatcmd_core:
             .contains(&name.as_str())
             {
                 vec![ToolCapability::Destructive]
-            } else if name.starts_with("fs_write")
+            } else if name.starts_with("blob_")
+                || name.starts_with("fs_write")
                 || matches!(name.as_str(), "fs_replace_text" | "fs_apply_edits")
             {
                 vec![ToolCapability::Write]
@@ -387,7 +404,7 @@ fn tool_group_id(name: &str) -> &'static str {
         "group-device"
     } else if name.starts_with("shell_") {
         "group-terminal"
-    } else if name.starts_with("fs_") || name == "workspace_roots" {
+    } else if name.starts_with("fs_") || name.starts_with("blob_") || name == "workspace_roots" {
         "group-files"
     } else if name.starts_with("git_") {
         "group-git"

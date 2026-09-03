@@ -1,6 +1,10 @@
 use super::*;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use std::{fs, io::Write, path::Path};
+use std::{
+    fs,
+    io::{BufReader, BufWriter, Read, Write},
+    path::{Path, PathBuf},
+};
 
 impl WorkspaceService {
     pub async fn write_text(
@@ -25,6 +29,67 @@ impl WorkspaceService {
             RuntimeError::new("invalid_base64", "raw file content is not valid Base64")
         })?;
         self.write_bytes(context, path, &bytes, overwrite).await
+    }
+
+    /// Streams an already-authorized temporary blob into the destination's
+    /// same-directory temporary file before committing it.
+    pub async fn write_blob(
+        &self,
+        context: &OperationContext,
+        path: &Path,
+        blob_path: &Path,
+        overwrite: bool,
+        require_utf8: bool,
+    ) -> RuntimeResult<FsEntry> {
+        let target = self.creation_for(
+            path,
+            if overwrite {
+                PathAccess::Replace
+            } else {
+                PathAccess::Create
+            },
+        )?;
+        let target_path = target.path();
+        self.policy
+            .authorize(&PolicyContext {
+                agent_id: context.agent_id.clone(),
+                tool_name: context.tool_name.clone(),
+                root: Some(target.root.clone()),
+                destructive: target_path.exists() && overwrite,
+            })
+            .await?;
+        if target_path.exists() && !overwrite {
+            return Err(RuntimeError::new(
+                "already_exists",
+                "destination exists and overwrite is false",
+            ));
+        }
+        let existing_target = if target_path.exists() {
+            Some(self.existing_for(&target_path, PathAccess::Replace)?)
+        } else {
+            None
+        };
+        let source = blob_path.to_path_buf();
+        let parent = target.canonical_parent.clone();
+        let target_clone = target_path.clone();
+        tokio::task::spawn_blocking(move || -> RuntimeResult<()> {
+            stream_blob_to_temporary(&source, &parent, require_utf8, |temporary| {
+                target.revalidate_parent()?;
+                if overwrite && target_clone.exists() {
+                    if let Some(existing) = existing_target.as_ref() {
+                        existing.revalidate()?;
+                    }
+                    fs::remove_file(&target_clone).map_err(io_error)?;
+                }
+                temporary
+                    .persist(&target_clone)
+                    .map_err(|error| io_error(error.error))?;
+                Ok(())
+            })
+        })
+        .await
+        .map_err(join_error)??;
+        self.stat(&target_path).await
     }
 
     async fn write_bytes(
@@ -248,4 +313,57 @@ impl WorkspaceService {
         .await
         .map_err(join_error)?
     }
+}
+
+fn stream_blob_to_temporary(
+    source: &PathBuf,
+    parent: &Path,
+    require_utf8: bool,
+    commit: impl FnOnce(tempfile::NamedTempFile) -> RuntimeResult<()>,
+) -> RuntimeResult<()> {
+    let input = fs::File::open(source).map_err(io_error)?;
+    let mut reader = BufReader::with_capacity(64 * 1024, input);
+    let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(io_error)?;
+    let mut writer = BufWriter::with_capacity(64 * 1024, temporary.as_file_mut());
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut utf8_tail = Vec::with_capacity(4);
+    loop {
+        let count = reader.read(&mut buffer).map_err(io_error)?;
+        if count == 0 {
+            break;
+        }
+        if require_utf8 {
+            utf8_tail.extend_from_slice(&buffer[..count]);
+            match std::str::from_utf8(&utf8_tail) {
+                Ok(_) => utf8_tail.clear(),
+                Err(error) if error.error_len().is_none() => {
+                    let valid = error.valid_up_to();
+                    if utf8_tail.len().saturating_sub(valid) > 3 {
+                        return Err(RuntimeError::new(
+                            "invalid_utf8",
+                            "text blob is not valid UTF-8",
+                        ));
+                    }
+                    utf8_tail.drain(..valid);
+                }
+                Err(_) => {
+                    return Err(RuntimeError::new(
+                        "invalid_utf8",
+                        "text blob is not valid UTF-8",
+                    ));
+                }
+            }
+        }
+        writer.write_all(&buffer[..count]).map_err(io_error)?;
+    }
+    if require_utf8 && !utf8_tail.is_empty() {
+        return Err(RuntimeError::new(
+            "invalid_utf8",
+            "text blob ends with an incomplete UTF-8 sequence",
+        ));
+    }
+    writer.flush().map_err(io_error)?;
+    drop(writer);
+    temporary.as_file().sync_all().map_err(io_error)?;
+    commit(temporary)
 }
