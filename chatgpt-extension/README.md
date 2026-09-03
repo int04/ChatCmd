@@ -1,28 +1,81 @@
 # ChatCMD ChatGPT Bridge
 
-Extension Manifest V3 cho Chrome/Edge, dùng tab `chatgpt.com` mà người dùng đã đăng nhập để gửi/tiếp tục/dừng tin nhắn từ ChatCMD local web.
+ChatCMD ChatGPT Bridge is an optional Chromium Manifest V3 extension that connects the local ChatCMD console to an already signed-in `chatgpt.com` tab.
 
-## Cài development
+It is an unofficial browser UI integration, not the OpenAI API and not a replacement for a normal MCP connection. It automates the current ChatGPT page DOM in the same browser profile as the user.
 
-1. Mở `chrome://extensions` hoặc `edge://extensions`.
-2. Bật **Developer mode**.
-3. Chọn **Load unpacked**.
-4. Chọn folder `chatgpt-extension` này.
-5. Đăng nhập `https://chatgpt.com` trong cùng profile trình duyệt.
-6. Reload trang ChatCMD local web rồi vào **Tasks → Tin nhắn mới**.
+## Capabilities
 
-## Quyền và bảo mật
+- Start a ChatGPT conversation from the local ChatCMD UI.
+- Continue an existing conversation while retaining its browser identity.
+- Select a model by its visible ChatGPT label.
+- Queue, reorder, edit, send immediately, or delete follow-up messages.
+- Stop an active response.
+- Relay assistant output and conversation URLs to the matching local task.
+- Surface ChatCMD conversation, tool, and plan-question approvals in ChatGPT.
+- Provide a browser fallback for sub-agent work when host sampling is unavailable.
+- Keep bounded diagnostic logs in extension storage for local troubleshooting.
 
-- Extension **không** có quyền `cookies` và không đọc/ghi token đăng nhập.
-- Nó thao tác DOM của trang ChatGPT đang đăng nhập, tương tự thao tác của người dùng.
-- Nếu chưa có tab ChatGPT, bridge tạo tab nền không giành focus và tự đóng tab đó sau khi request hoàn tất; tab ChatGPT do người dùng mở sẵn sẽ chỉ được tái sử dụng và không tự đóng.
-- Callback chỉ được gửi tới HTTP origin `localhost` hoặc `127.0.0.1` và luôn kèm `X-ChatCmdClient: chatgpt-extension`.
-- Selector ChatGPT được cô lập trong `content-chatgpt.js`; nếu ChatGPT đổi UI thì sửa adapter này.
+## Install for development
 
-## Model
+1. Start ChatCMD on `http://127.0.0.1:8080` or `http://localhost:8080`.
+2. Open `chrome://extensions/`, `edge://extensions/`, or `brave://extensions/`.
+3. Enable **Developer mode**.
+4. Select **Load unpacked**.
+5. Choose this `chatgpt-extension` directory.
+6. Sign in to <https://chatgpt.com> in the same browser profile.
+7. Reload the ChatGPT and local ChatCMD pages.
 
-`Auto` giữ nguyên model hiện tại của ChatGPT. Với model khác, extension mở model switcher và chọn theo text hiển thị. Tên model trên ChatGPT có thể thay đổi theo tài khoản/plan, vì vậy ô model trong ChatCMD cho phép nhập label tùy ý.
+For the complete MCP profile, public address, ChatGPT plugin, and extension workflow, read [Plugin and ChatGPT setup](../docs/PLUGIN_SETUP.md).
 
-## Lưu ý
+## Permissions and trust model
 
-Đây là browser UI bridge, không phải OpenAI API chính thức. Việc gửi và đọc phản hồi phụ thuộc vào DOM hiện tại của `chatgpt.com`; nên kiểm thử lại extension sau các thay đổi lớn của giao diện ChatGPT.
+The manifest requests:
+
+- `tabs` to find, open, focus, and close ChatGPT conversation tabs;
+- `storage` for conversation bindings, request context, preferences, and bounded diagnostics;
+- `scripting` to restore content scripts after extension or page lifecycle changes;
+- host access to `https://chatgpt.com/*` and local HTTP `localhost`/`127.0.0.1` origins.
+
+The extension does **not** request the `cookies` permission and does not read or write ChatGPT login tokens. It can still read and interact with the visible ChatGPT page because that is its purpose. Use a dedicated browser profile if stronger separation is required.
+
+Callbacks are restricted to local HTTP origins and include:
+
+```text
+X-ChatCmdClient: chatgpt-extension
+```
+
+The approval WebSocket uses the same ephemeral encrypted session model as the local UI. This does not protect data from a compromised browser profile, malicious extension, injected page code, or local administrator.
+
+## Tab behavior
+
+- An existing ChatGPT conversation tab is reused when possible.
+- If ChatCMD creates a background tab for a request, the extension can close that generated tab after completion.
+- A tab that the user already had open is not automatically closed.
+- Conversation IDs and provisional-to-final URL aliases are stored so follow-up messages return to the correct tab.
+
+## Model selection
+
+`Auto` keeps the current/default ChatGPT model. For another value, the extension opens the model switcher and selects the visible label. Available names depend on the account, workspace, plan, and current ChatGPT UI, so ChatCMD accepts a custom label.
+
+## Diagnostics
+
+Open **ChatCMD → Settings → Data & logs → Extension logs**. For background failures, also inspect the extension service worker from the browser extensions page.
+
+Logs and bug reports must not contain private conversations, MCP endpoints, cookies, credentials, or proprietary source data.
+
+## Test
+
+```bash
+node --test content-chatgpt.test.cjs
+```
+
+The automated suite covers DOM-adapter behavior with fixtures. After changing selectors or message flow, manually verify start, continue, model selection, stop, approvals, queue handling, tab reuse, and final-response capture in a disposable browser profile.
+
+## Maintenance limitation
+
+ChatGPT's page structure, labels, and interaction behavior can change without notice. Selectors are split across `content-chatgpt-ui.js`, `content-chatgpt-dom.js`, `content-chatgpt-approval-ui.js`, and `content-chatgpt.js` to keep updates localized, but every significant ChatGPT UI change should trigger a manual compatibility test.
+
+## License
+
+This extension is part of ChatCMD and is distributed under the repository's [MIT License](../LICENSE).
