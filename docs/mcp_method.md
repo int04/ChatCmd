@@ -7,7 +7,7 @@ Nguồn đối chiếu chính:
 - `crates/chatcmd-mcp/src/tool_catalog.rs` — danh sách method ổn định được expose.
 - `crates/chatcmd-mcp/src/lib.rs` — schema/description của từng method.
 
-> Tổng số hiện tại: **45 methods**.
+> Tổng số hiện tại: **46 methods**.
 
 ## Quy ước chung
 
@@ -137,6 +137,7 @@ Các Git method được thiết kế để tránh shell interpolation và truy�
 |---|---|---|
 | `agent_user_message` | `content` | **Bắt buộc là MCP call đầu tiên và chỉ gọi đúng một lần trong mỗi user turn.** Đồng bộ nguyên văn user message lên ChatCMD và thiết lập/correlate `taskId` + `turnId`. `content` phải đúng nguyên văn message hiện tại. Không dùng method này cho progress/reflection/finding sau tool result; các cập nhật đó phải dùng `agent_progress`. |
 | `agent_progress` | `message`, `suggestedTitle?` | **Rule phía AI cho mọi turn project không-trivial.** Ngay sau `agent_user_message` nên gửi progress tóm tắt yêu cầu + hành động kế tiếp. Sau các kết quả `fs_*` có ý nghĩa (đặc biệt `fs_find`, `fs_search`, `fs_read_text`, edit/write/delete), Git/process, `shell_read`/`shell_wait` còn pending, sub-agent wait chưa xong, hoặc failure/non-zero, AI nên gửi progress mô tả kết quả quan sát được và bước tiếp theo trước khi tiếp tục. Đây không phải runtime gate: server không reject tool chỉ vì thiếu progress; các thao tác low-level liên quan chặt có thể gom thành một checkpoint để tránh làm chậm tiến độ và tránh callback MCP không cần thiết. Không gửi private chain-of-thought. |
+| `agent_plan_question` | `question`, `options` | Tạm dừng plan để hỏi người dùng một câu hỏi có hai lựa chọn rõ ràng; câu trả lời được tiếp tục qua hàng đợi phê duyệt của ChatCMD. |
 | `agent_subagent_start` | `name`, `request` | Tạo và dispatch một child agent khi ChatGPT chủ động chia việc hoặc người dùng yêu cầu chia agent. Chỉ sử dụng model sampling do ChatGPT/MCP host cung cấp; nếu host không hỗ trợ sampling thì trả `samplingUnavailable`/`failed` và tuyệt đối không khởi chạy Codex hay executor local. |
 | `agent_subagent_wait` | `timeoutMs?` | Chờ các child agent của parent turn. Nếu `allFinished=false` thì tiếp tục gọi lại trước khi finalize. |
 | `agent_turn_complete` | `content`, `suggestedTitle?` | **Bắt buộc là MCP call cuối cùng.** Xác nhận turn đã hoàn tất và gửi đúng nội dung cuối cùng agent sẽ trả cho user. Chỉ được gọi đúng một lần sau khi mọi tool/sub-agent đã xong. |
@@ -192,9 +193,10 @@ Thứ tự ổn định hiện tại trong `TOOL_NAMES`:
 40. task_artifact_read
 41. agent_user_message
 42. agent_progress
-43. agent_subagent_start
-44. agent_subagent_wait
-45. agent_turn_complete
+43. agent_plan_question
+44. agent_subagent_start
+45. agent_subagent_wait
+46. agent_turn_complete
 ```
 
 ---

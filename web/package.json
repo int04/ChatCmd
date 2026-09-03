@@ -2,6 +2,8 @@
   "name": "chat-cmd-client-web",
   "private": true,
   "version": "0.1.0",
+  "license": "MIT",
+  "repository": "https://github.com/int04/ChatCmdClient",
   "type": "module",
   "scripts": {
     "dev": "vite",
