@@ -239,10 +239,9 @@ fn apply_blocking(
             max_bytes_read: request.budget.max_bytes_read,
         },
     )?;
-    temporary
-        .persist(target)
-        .map_err(|error| io_error(error.error))?;
-    sync_parent(parent)?;
+    atomic_writer::atomic_replace(temporary, target, crate::DurabilityMode::Full)?;
+    let mut warnings = Vec::new();
+    atomic_writer::sync_parent(parent, &mut warnings)?;
     Ok(ApplyEditsResult {
         path: target.to_path_buf(),
         applied: true,
@@ -648,16 +647,4 @@ fn check_deadline(started: Instant, timeout_ms: u64) -> RuntimeResult<()> {
     } else {
         Ok(())
     }
-}
-
-#[cfg(unix)]
-fn sync_parent(parent: &Path) -> RuntimeResult<()> {
-    File::open(parent)
-        .and_then(|directory| directory.sync_all())
-        .map_err(io_error)
-}
-
-#[cfg(not(unix))]
-fn sync_parent(_parent: &Path) -> RuntimeResult<()> {
-    Ok(())
 }

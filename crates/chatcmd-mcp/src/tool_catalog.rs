@@ -152,6 +152,9 @@ fn result_schema(name: &str) -> Value {
         "fs_apply_edits" => {
             serde_json::to_value(schemars::schema_for!(chatcmd_runtime::ApplyEditsResult))
         }
+        "fs_write_text" | "fs_write_raw" => {
+            serde_json::to_value(schemars::schema_for!(chatcmd_runtime::AtomicWriteResult))
+        }
         _ => return Value::Null,
     }
     .expect("result schema must serialize");

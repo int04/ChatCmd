@@ -13,6 +13,8 @@ use std::{
 
 #[path = "filesystem_apply_edits.rs"]
 mod apply_edits;
+#[path = "filesystem_atomic_writer.rs"]
+mod atomic_writer;
 mod file_version;
 #[path = "filesystem_find.rs"]
 mod find;

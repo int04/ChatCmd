@@ -298,7 +298,15 @@ input!(WriteTextInput {
     #[serde(default)]
     content_ref: Option<String>,
     #[serde(default)]
-    overwrite: bool
+    overwrite: bool,
+    #[serde(default)]
+    expected_version: Option<String>,
+    #[serde(default)]
+    metadata_policy: chatcmd_runtime::MetadataPolicy,
+    #[serde(default)]
+    durability: chatcmd_runtime::DurabilityMode,
+    #[serde(default)]
+    require_atomic: bool
 });
 input!(ReplaceTextInput {
     path: PathBuf,
@@ -314,7 +322,15 @@ input!(WriteRawInput {
     #[serde(default)]
     content_ref: Option<String>,
     #[serde(default)]
-    overwrite: bool
+    overwrite: bool,
+    #[serde(default)]
+    expected_version: Option<String>,
+    #[serde(default)]
+    metadata_policy: chatcmd_runtime::MetadataPolicy,
+    #[serde(default)]
+    durability: chatcmd_runtime::DurabilityMode,
+    #[serde(default)]
+    require_atomic: bool
 });
 
 input!(BlobStatusInput { upload_id: String });

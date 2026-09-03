@@ -823,6 +823,66 @@ pub struct TextReadResultV2 {
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub enum DurabilityMode {
+    None,
+    #[default]
+    Data,
+    Full,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum MetadataPolicy {
+    #[default]
+    Preserve,
+    Default,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AtomicWriteOptions {
+    #[serde(default)]
+    pub overwrite: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_version: Option<String>,
+    #[serde(default)]
+    pub metadata_policy: MetadataPolicy,
+    #[serde(default)]
+    pub durability: DurabilityMode,
+    #[serde(default)]
+    pub require_atomic: bool,
+}
+
+impl Default for AtomicWriteOptions {
+    fn default() -> Self {
+        Self {
+            overwrite: false,
+            expected_version: None,
+            metadata_policy: MetadataPolicy::Preserve,
+            durability: DurabilityMode::Data,
+            require_atomic: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AtomicWriteResult {
+    pub path: PathBuf,
+    pub committed: bool,
+    pub created: bool,
+    pub atomic: bool,
+    pub durability_requested: DurabilityMode,
+    pub durability_achieved: DurabilityMode,
+    pub bytes_written: u64,
+    pub old_version: Option<String>,
+    pub new_version: String,
+    pub metadata_preserved: bool,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub enum EditCoordinateSystem {
     #[default]
     Byte,

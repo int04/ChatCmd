@@ -185,7 +185,14 @@ pub(super) async fn write_text(
     input: WriteTextInput,
 ) -> RuntimeResult<Value> {
     let before = snapshot(workspace, &input.path).await;
-    let entry = match (input.content, input.content_ref) {
+    let options = chatcmd_runtime::AtomicWriteOptions {
+        overwrite: input.overwrite,
+        expected_version: input.expected_version,
+        metadata_policy: input.metadata_policy,
+        durability: input.durability,
+        require_atomic: input.require_atomic,
+    };
+    let result = match (input.content, input.content_ref) {
         (Some(content), None) => {
             if content.len() > MAX_INLINE_BYTES {
                 return Err(RuntimeError::new(
@@ -194,7 +201,7 @@ pub(super) async fn write_text(
                 ));
             }
             workspace
-                .write_text(context, &input.path, &content, input.overwrite)
+                .write_text_atomic(context, &input.path, &content, options.clone())
                 .await?
         }
         (None, Some(content_ref)) => {
@@ -202,7 +209,7 @@ pub(super) async fn write_text(
                 .blob_store
                 .lease(context, &content_ref, "fsWriteText")?;
             let result = workspace
-                .write_blob(context, &input.path, lease.path(), input.overwrite, true)
+                .write_blob_atomic(context, &input.path, lease.path(), options.clone(), true)
                 .await;
             match result {
                 Ok(entry) => {
@@ -218,7 +225,7 @@ pub(super) async fn write_text(
         _ => return Err(content_choice_error("content")),
     };
     let after = snapshot(workspace, &input.path).await;
-    Ok(with_text_diff(value(entry)?, &input.path, before, after))
+    Ok(with_text_diff(value(result)?, &input.path, before, after))
 }
 
 pub(super) async fn write_raw(
@@ -227,7 +234,14 @@ pub(super) async fn write_raw(
     context: &OperationContext,
     input: WriteRawInput,
 ) -> RuntimeResult<Value> {
-    let entry = match (input.base64, input.content_ref) {
+    let options = chatcmd_runtime::AtomicWriteOptions {
+        overwrite: input.overwrite,
+        expected_version: input.expected_version,
+        metadata_policy: input.metadata_policy,
+        durability: input.durability,
+        require_atomic: input.require_atomic,
+    };
+    let result = match (input.base64, input.content_ref) {
         (Some(base64), None) => {
             if base64.len() > MAX_INLINE_BYTES.saturating_mul(4) / 3 + 4 {
                 return Err(RuntimeError::new(
@@ -235,14 +249,18 @@ pub(super) async fn write_raw(
                     "inline Base64 exceeds the bounded limit; upload with blob_begin/blob_write_chunk/blob_seal and pass contentRef",
                 ));
             }
+            let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, base64)
+                .map_err(|_| {
+                    RuntimeError::new("invalid_base64", "raw file content is not valid Base64")
+                })?;
             workspace
-                .write_raw(context, &input.path, &base64, input.overwrite)
+                .write_raw_bytes_atomic(context, &input.path, bytes, options.clone())
                 .await?
         }
         (None, Some(content_ref)) => {
             let lease = host.blob_store.lease(context, &content_ref, "fsWriteRaw")?;
             let result = workspace
-                .write_blob(context, &input.path, lease.path(), input.overwrite, false)
+                .write_blob_atomic(context, &input.path, lease.path(), options.clone(), false)
                 .await;
             match result {
                 Ok(entry) => {
@@ -257,7 +275,7 @@ pub(super) async fn write_raw(
         }
         _ => return Err(content_choice_error("base64")),
     };
-    value(entry)
+    value(result)
 }
 
 pub(super) async fn replace_text(

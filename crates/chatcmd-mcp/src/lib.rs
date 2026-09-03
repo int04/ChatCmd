@@ -418,7 +418,15 @@ tool_args!(WriteTextArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     content_ref: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    overwrite: Option<bool>
+    overwrite: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    expected_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    metadata_policy: Option<chatcmd_runtime::MetadataPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    durability: Option<chatcmd_runtime::DurabilityMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    require_atomic: Option<bool>
 });
 tool_args!(ReplaceTextArgs {
     path: String,
@@ -453,7 +461,15 @@ tool_args!(WriteRawArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     content_ref: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    overwrite: Option<bool>
+    overwrite: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    expected_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    metadata_policy: Option<chatcmd_runtime::MetadataPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    durability: Option<chatcmd_runtime::DurabilityMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    require_atomic: Option<bool>
 });
 tool_args!(BlobBeginArgs {
     purpose: String,
@@ -789,7 +805,7 @@ tool_methods!(
     (
         fs_write_text,
         WriteTextArgs,
-        "Atomically write UTF-8 workspace text. Required path and exactly one of content or contentRef; optional overwrite. Inline content is capped at 256 KiB."
+        "Atomically write UTF-8 workspace text. Required path and exactly one of content or contentRef; optional overwrite, expectedVersion, metadataPolicy=preserve|default, durability=none|data|full, requireAtomic. Inline content is capped at 256 KiB."
     ),
     (
         fs_replace_text,
@@ -804,7 +820,7 @@ tool_methods!(
     (
         fs_write_raw,
         WriteRawArgs,
-        "Atomically write workspace bytes. Required path and exactly one of bounded inline base64 or an fsWriteRaw contentRef; optional overwrite."
+        "Atomically write workspace bytes. Required path and exactly one of bounded inline base64 or an fsWriteRaw contentRef; optional overwrite, expectedVersion, metadataPolicy=preserve|default, durability=none|data|full, requireAtomic."
     ),
     (
         fs_stat,

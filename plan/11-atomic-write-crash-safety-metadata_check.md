@@ -208,3 +208,13 @@ Chạy platform-specific tests trên macOS hiện tại và bảo đảm Windows
 - ExpectedVersion/revalidation flow.
 - Fault-injection/crash test result.
 - Benchmark throughput/RAM.
+
+## Kiểm tra còn lại
+
+- Chưa chạy test/CI trên macOS và Linux; cần xác nhận atomic rename, POSIX mode và directory fsync trực tiếp trên hai nền tảng này.
+- Chưa có crash-process harness và fault injection cho từng phase (short write, disk full, sync failure, rename failure, Windows sharing violation và crash ngay trước/sau commit).
+- Chưa benchmark nguồn blob/file 10 MB, 100 MB và 1 GB để ghi nhận throughput, peak memory và chi phí của từng durability mode.
+- Chưa kiểm thử filesystem mạng/non-atomic để quyết định `requireAtomic`; hiện writer chỉ cam kết atomic replace theo primitive cùng thư mục của OS và không dò loại filesystem.
+- Metadata `preserve` hiện bảo toàn POSIX mode hoặc Windows readonly permissions do `std::fs::Permissions` hỗ trợ; ACL, xattr, owner, resource fork và Windows attributes khác chưa được bảo toàn/cảnh báo riêng.
+- Chưa triển khai policy explicit metadata, `lineEndingPolicy`, `bomPolicy`, journal và startup orphan cleanup. Temp trong lỗi/cancel cùng process đã được RAII cleanup và có test.
+- Chưa có test race đồng thời hai create writer, symlink swap/parent replacement ở commit, cross-device misconfiguration, readonly overwrite trên Windows và BOM/CRLF/LF cho write facade mới.
