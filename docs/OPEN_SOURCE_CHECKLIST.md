@@ -46,7 +46,7 @@ Use this checklist before changing the GitHub repository visibility to public. R
 
 ## Documentation and community
 
-- [ ] Replace the blank screenshot sections in `README.md` with redacted current images.
+- [ ] Review current README screenshots before every release and redact personal or sensitive information when necessary.
 - [ ] Verify all relative links and public URLs after the repository becomes public.
 - [ ] Review `README.md`, `SECURITY.md`, `SUPPORT.md`, `CONTRIBUTING.md`, `GOVERNANCE.md`, and the Code of Conduct.
 - [ ] Confirm the private security and conduct-reporting channels actually work.
