@@ -2,6 +2,8 @@
 
 This guide is for maintainers preparing source and desktop releases.
 
+The repository also provides **Actions → Build desktop release → Run workflow** for a complete automated release from `main`. It is manual-only: pushes, pull requests, and tags do not trigger a build. The workflow generates a version in `yy.MM.dd.HHmm` format using the Asia/Ho_Chi_Minh time zone, builds Windows x64/x86 and macOS Intel/Apple Silicon packages, publishes checksums, and marks the new GitHub release as latest.
+
 ## 1. Prepare the release
 
 1. Start from reviewed stable history and ensure `dev` contains the intended changes.

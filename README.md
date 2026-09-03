@@ -19,6 +19,21 @@ ChatCMD is a self-hosted bridge between MCP-compatible AI clients and your compu
 
 The core application runs on your machine. It has no ChatCMD account, subscription, payment, quota, or hosted authentication dependency. Optional features can still make outbound connections—for example to ChatGPT, a Git repository used to install a skill, a Google Font, or a tunnel address that you configure.
 
+## Download the latest release
+
+<p>
+  <a href="https://github.com/int04/ChatCmd/releases/latest/download/ChatCMD-windows-x64.zip"><img alt="Download ChatCMD for Windows 64-bit" src="https://img.shields.io/badge/Download-Windows%2064--bit-0078d4?style=for-the-badge&amp;logo=windows11&amp;logoColor=white"></a>
+  <a href="https://github.com/int04/ChatCmd/releases/latest/download/ChatCMD-windows-x86.zip"><img alt="Download ChatCMD for Windows 32-bit" src="https://img.shields.io/badge/Download-Windows%2032--bit-0078d4?style=for-the-badge&amp;logo=windows11&amp;logoColor=white"></a>
+</p>
+<p>
+  <a href="https://github.com/int04/ChatCmd/releases/latest/download/ChatCMD-macos-apple-silicon.zip"><img alt="Download ChatCMD for macOS Apple Silicon" src="https://img.shields.io/badge/Download-macOS%20Apple%20Silicon-000000?style=for-the-badge&amp;logo=apple&amp;logoColor=white"></a>
+  <a href="https://github.com/int04/ChatCmd/releases/latest/download/ChatCMD-macos-intel.zip"><img alt="Download ChatCMD for macOS Intel" src="https://img.shields.io/badge/Download-macOS%20Intel-000000?style=for-the-badge&amp;logo=apple&amp;logoColor=white"></a>
+</p>
+
+[View release notes and SHA-256 checksums](https://github.com/int04/ChatCmd/releases/latest).
+
+The automated macOS packages are ad-hoc signed and are not Apple-notarized.
+
 > [!CAUTION]
 > ChatCMD can expose terminals, files, Git repositories, and local processes to an AI client. Start with the smallest tool allowlist, keep approval mode enabled, review every public endpoint, and never publish a tokenized MCP URL.
 
@@ -196,6 +211,8 @@ CHATCMD_BUILD_VERSION=0.1.0 ./scripts/build-macos.sh
 ```
 
 The macOS script supports `MACOS_SIGN_IDENTITY` and `MACOS_NOTARY_PROFILE`. Full release instructions are in [docs/RELEASING.md](docs/RELEASING.md).
+
+To publish all four packages, open **Actions → Build desktop release → Run workflow** on GitHub and select `main`. The workflow runs only when started manually, generates a `yy.MM.dd.HHmm` version, and updates the repository's latest release; pushes and pull requests do not trigger it.
 
 ## Verify a change
 
