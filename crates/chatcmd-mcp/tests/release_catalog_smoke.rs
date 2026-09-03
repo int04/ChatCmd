@@ -93,6 +93,7 @@ async fn packaged_process_advertises_exact_manifest_contract_deterministically()
         .collect::<Vec<_>>();
     assert_eq!(names.as_slice(), TOOL_NAMES.as_slice());
     assert!(names.iter().any(|name| name == "fs_replace_text"));
+    assert!(names.iter().any(|name| name == "fs_apply_edits"));
 
     let manifest = canonical_manifest();
     let manifest_tools = manifest["tools"].as_array().expect("manifest tools");

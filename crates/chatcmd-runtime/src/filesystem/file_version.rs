@@ -68,6 +68,17 @@ impl WorkspaceService {
         token: &str,
         context: Option<&OperationContext>,
     ) -> RuntimeResult<FileVersion> {
+        self.verify_expected_version_with_budget(path, token, context, FsStatBudget::default())
+            .await
+    }
+
+    pub(super) async fn verify_expected_version_with_budget(
+        &self,
+        path: &Path,
+        token: &str,
+        context: Option<&OperationContext>,
+        budget: FsStatBudget,
+    ) -> RuntimeResult<FileVersion> {
         let expected = decode_token(&self.version_key, token)?;
         let resolved = self.existing(path).map_err(|error| {
             if error.code == "not_found" {
@@ -80,9 +91,59 @@ impl WorkspaceService {
             path: resolved.canonical_path.clone(),
             version_strength: expected.strength,
             hash_algorithm: expected.content_hash.as_ref().map(|_| "sha256".to_owned()),
-            budget: FsStatBudget::default(),
+            budget,
         };
         let current_result = self.stat_v2(context, &request).await?;
+        let current = decode_token(&self.version_key, &current_result.version_token)?;
+        if current.path_fingerprint != expected.path_fingerprint {
+            return Err(RuntimeError::new(
+                "versionMismatch",
+                "version token belongs to a different path or scope",
+            ));
+        }
+        if current.identity_fingerprint != expected.identity_fingerprint {
+            return Err(RuntimeError::new(
+                "targetReplaced",
+                "path now refers to a different filesystem entry",
+            ));
+        }
+        if current != expected {
+            return Err(RuntimeError::new(
+                "versionMismatch",
+                "filesystem entry changed since the version token was captured",
+            ));
+        }
+        Ok(current)
+    }
+
+    pub(super) fn verify_expected_version_blocking(
+        &self,
+        path: &Path,
+        token: &str,
+        cancellation: &CancellationToken,
+        budget: FsStatBudget,
+    ) -> RuntimeResult<FileVersion> {
+        let expected = decode_token(&self.version_key, token)?;
+        let resolved = self.existing(path).map_err(|error| {
+            if error.code == "not_found" {
+                RuntimeError::new("targetMissing", "versioned target no longer exists")
+            } else {
+                error
+            }
+        })?;
+        let request = FsStatRequest {
+            path: resolved.canonical_path.clone(),
+            version_strength: expected.strength,
+            hash_algorithm: expected.content_hash.as_ref().map(|_| "sha256".to_owned()),
+            budget,
+        };
+        let current_result = capture(
+            &resolved.canonical_path,
+            &resolved.root,
+            &self.version_key,
+            &request,
+            cancellation,
+        )?;
         let current = decode_token(&self.version_key, &current_result.version_token)?;
         if current.path_fingerprint != expected.path_fingerprint {
             return Err(RuntimeError::new(

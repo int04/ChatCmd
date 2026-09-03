@@ -125,7 +125,7 @@ fn capability_flags(name: &str) -> ToolCapabilityFlags {
         supports_cursor: matches!(name, "fs_list_v2" | "fs_find" | "fs_search" | "shell_read"),
         supports_content_ref: name == "fs_list_v2",
         mutating: is_mutating(name),
-        streaming: matches!(name, "shell_read" | "fs_read_text_v2"),
+        streaming: matches!(name, "shell_read" | "fs_read_text_v2" | "fs_apply_edits"),
         result_schema_version: matches!(name, "fs_list_v2" | "fs_find" | "fs_search")
             .then_some(chatcmd_runtime::TOOL_RESULT_SCHEMA_VERSION),
         deprecated_aliases: Vec::new(),
@@ -146,6 +146,9 @@ fn result_schema(name: &str) -> Value {
         "fs_read_text_v2" => {
             serde_json::to_value(schemars::schema_for!(chatcmd_runtime::TextReadResultV2))
         }
+        "fs_apply_edits" => {
+            serde_json::to_value(schemars::schema_for!(chatcmd_runtime::ApplyEditsResult))
+        }
         _ => return Value::Null,
     }
     .expect("result schema must serialize");
@@ -155,6 +158,7 @@ fn result_schema(name: &str) -> Value {
 fn is_mutating(name: &str) -> bool {
     name.starts_with("fs_write")
         || name.starts_with("fs_replace")
+        || name == "fs_apply_edits"
         || name.starts_with("fs_create")
         || matches!(
             name,

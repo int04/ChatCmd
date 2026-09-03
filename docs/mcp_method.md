@@ -71,6 +71,7 @@ Các method `fs_*` thao tác trực tiếp trong canonical workspace scope và t
 | `fs_read_text_v2` | `path`, `range { unit: line\|byte, start, limit }`, `maxBytes?`, `includeLineEndings?`, `expectedVersion?`, `budget { timeoutMs?, maxBytesRead? }?` | Reader streaming/range bounded-memory. Trả `range`, `nextStartLine`/`nextByteOffset`, `truncated` + `truncationReason`, `bytesRead`, `sizeBytes`, `versionToken`, UTF-8/BOM và newline metadata; `expectedVersion` chặn continuation stale khi file đã đổi. |
 | `fs_write_text` | `path`, `content`, `overwrite?` | Ghi nguyên tử nội dung UTF-8 vào file; dùng cho tạo mới hoặc thay toàn bộ file. |
 | `fs_replace_text` | `path`, `oldText`, `newText`, `expectedOccurrences?` | Chỉnh sửa an toàn bằng exact text replacement. `oldText` phải khớp nội dung hiện tại. |
+| `fs_apply_edits` | `path`, `expectedVersion`, `coordinateSystem`, `edits`, `columnEncoding?`, `dryRun?`, `preserveLineEndings?`, `preserveBom?`, `budget?` | Sửa nhiều range UTF-8 không chồng lấn bằng streaming temp-file transaction; kiểm tra version trước xử lý và ngay trước atomic commit. |
 | `fs_write_raw` | `path`, `base64`, `overwrite?` | Decode Base64 và ghi atomically dữ liệu binary/raw vào workspace. |
 | `fs_stat` | `path` | Xem metadata của một file/thư mục: loại entry, size, readonly, v.v. |
 | `fs_create_directory` | `path` | Tạo thư mục trong workspace. |

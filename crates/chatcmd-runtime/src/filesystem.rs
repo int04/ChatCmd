@@ -11,6 +11,8 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+#[path = "filesystem_apply_edits.rs"]
+mod apply_edits;
 mod file_version;
 #[path = "filesystem_find.rs"]
 mod find;
@@ -462,6 +464,13 @@ impl WorkspaceService {
         }
         let resolved = self.existing(path)?;
         resolved.revalidate()?;
+        const LEGACY_REPLACE_MAX_BYTES: u64 = 8 * 1024 * 1024;
+        if resolved.identity.len > LEGACY_REPLACE_MAX_BYTES {
+            return Err(RuntimeError::new(
+                "legacyReplaceFileTooLarge",
+                "fs_replace_text is limited to 8 MiB; use fs_apply_edits with expectedVersion",
+            ));
+        }
         let content = tokio::fs::read_to_string(&resolved)
             .await
             .map_err(io_error)?;

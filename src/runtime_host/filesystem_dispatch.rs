@@ -8,8 +8,8 @@ use std::{
 };
 
 use chatcmd_runtime::{
-    OperationContext, RuntimeError, RuntimeResult, SearchProgress, TextReadBudget, TextReadRange,
-    TextReadRequestV2, WorkspaceService,
+    ApplyEditsRequest, OperationContext, RuntimeError, RuntimeResult, SearchProgress,
+    TextReadBudget, TextReadRange, TextReadRequestV2, WorkspaceService,
 };
 use serde_json::{Value, json};
 
@@ -210,6 +210,14 @@ pub(super) async fn replace_text(
         .await?;
     let after = snapshot(workspace, &input.path).await;
     Ok(with_text_diff(value(entry)?, &input.path, before, after))
+}
+
+pub(super) async fn apply_edits(
+    workspace: &WorkspaceService,
+    context: &OperationContext,
+    input: ApplyEditsRequest,
+) -> RuntimeResult<Value> {
+    value(workspace.apply_edits(context, &input).await?)
 }
 
 pub(super) async fn delete(

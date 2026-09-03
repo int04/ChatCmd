@@ -119,8 +119,48 @@ fn catalog_names_are_sorted_stable_and_unique() {
     assert_eq!(sorted.len(), TOOL_NAMES.len());
     assert!(TOOL_NAMES.iter().any(|name| name == "agent_user_message"));
     assert!(TOOL_NAMES.iter().any(|name| name == "fs_replace_text"));
+    assert!(TOOL_NAMES.iter().any(|name| name == "fs_apply_edits"));
     assert!(TOOL_NAMES.iter().any(|name| name == "fs_list_v2"));
     assert!(TOOL_NAMES.iter().any(|name| name == "fs_read_text_v2"));
+}
+
+#[test]
+fn fs_apply_edits_advertises_versioned_streaming_contract() {
+    let manifest = canonical_manifest();
+    let tools = manifest["tools"].as_array().expect("manifest tools");
+    let apply = tools
+        .iter()
+        .find(|tool| tool["name"] == "fs_apply_edits")
+        .expect("fs_apply_edits");
+    let properties = &apply["schema"]["properties"];
+    for field in [
+        "path",
+        "expectedVersion",
+        "coordinateSystem",
+        "columnEncoding",
+        "edits",
+        "dryRun",
+        "preserveLineEndings",
+        "preserveBom",
+        "budget",
+    ] {
+        assert!(
+            properties.get(field).is_some(),
+            "missing fs_apply_edits field {field}"
+        );
+    }
+    assert_eq!(apply["capabilities"]["mutating"], true);
+    assert_eq!(apply["capabilities"]["streaming"], true);
+    assert!(
+        apply["resultSchema"]["properties"]
+            .get("newVersion")
+            .is_some()
+    );
+    assert!(
+        apply["resultSchema"]["properties"]
+            .get("commitState")
+            .is_some()
+    );
 }
 
 #[tokio::test]

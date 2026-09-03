@@ -424,6 +424,22 @@ tool_args!(ReplaceTextArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     expected_occurrences: Option<usize>
 });
+tool_args!(ApplyEditsArgs {
+    path: String,
+    expected_version: String,
+    coordinate_system: chatcmd_runtime::EditCoordinateSystem,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    column_encoding: Option<chatcmd_runtime::EditColumnEncoding>,
+    edits: Vec<chatcmd_runtime::TextEdit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    dry_run: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    preserve_line_endings: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    preserve_bom: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    budget: Option<chatcmd_runtime::ApplyEditsBudget>
+});
 tool_args!(WriteRawArgs {
     path: String,
     base64: String,
@@ -719,6 +735,11 @@ tool_methods!(
         fs_replace_text,
         ReplaceTextArgs,
         "Safely edit an existing UTF-8 file by exact text replacement. Required fields: path, oldText, newText; optional expectedOccurrences (default 1). oldText must exactly match current file contents; read the target range first when content may have changed."
+    ),
+    (
+        fs_apply_edits,
+        ApplyEditsArgs,
+        "Apply one or more non-overlapping UTF-8 range edits with optimistic concurrency and bounded memory. Required: path, expectedVersion, coordinateSystem=byte|lineColumn, edits. Byte edits use startByte/endByte; lineColumn positions are 1-based Unicode scalar columns and end-exclusive, with columnEncoding=utf8CodePoint. Optional dryRun, preserveLineEndings, preserveBom, budget {timeoutMs,maxBytesRead,maxBytesWritten,maxEdits}. The target version is checked before processing and immediately before atomic commit. Prefer this tool over fs_replace_text for large files."
     ),
     (
         fs_write_raw,

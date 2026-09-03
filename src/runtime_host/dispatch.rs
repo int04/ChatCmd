@@ -425,6 +425,9 @@ impl RuntimeHost {
             "fs_replace_text" => {
                 filesystem_dispatch::replace_text(workspace, &context, parse(arguments)?).await
             }
+            "fs_apply_edits" => {
+                filesystem_dispatch::apply_edits(workspace, &context, parse(arguments)?).await
+            }
             "fs_write_raw" => {
                 let input: WriteRawInput = parse(arguments)?;
                 value(

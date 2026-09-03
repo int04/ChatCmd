@@ -324,7 +324,9 @@ async fn seed_catalog(repository: &SqliteRepository) -> Result<(), chatcmd_core:
             .contains(&name.as_str())
             {
                 vec![ToolCapability::Destructive]
-            } else if name.starts_with("fs_write") || name.as_str() == "fs_replace_text" {
+            } else if name.starts_with("fs_write")
+                || matches!(name.as_str(), "fs_replace_text" | "fs_apply_edits")
+            {
                 vec![ToolCapability::Write]
             } else {
                 vec![ToolCapability::Read]
@@ -350,10 +352,19 @@ async fn seed_catalog(repository: &SqliteRepository) -> Result<(), chatcmd_core:
 
     let write_id = seeded_tool_id("fs_write_text");
     let replace_id = seeded_tool_id("fs_replace_text");
+    let apply_edits_id = seeded_tool_id("fs_apply_edits");
     for agent in repository.list_agents().await? {
         let mut allowed = repository.agent_allowed_tool_ids(&agent.id).await?;
+        let mut changed = false;
         if allowed.contains(&write_id) && !allowed.contains(&replace_id) {
             allowed.push(replace_id.clone());
+            changed = true;
+        }
+        if allowed.contains(&write_id) && !allowed.contains(&apply_edits_id) {
+            allowed.push(apply_edits_id.clone());
+            changed = true;
+        }
+        if changed {
             repository
                 .set_agent_allowed_tools(&agent.id, &allowed)
                 .await?;

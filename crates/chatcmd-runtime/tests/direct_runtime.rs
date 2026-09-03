@@ -1,7 +1,9 @@
 use chatcmd_runtime::{
-    ApprovalDecision, BoxFuture, ExecutionPolicy, NullEventSink, OperationContext, PolicyDecision,
-    PolicyEngine, RuntimeConfig, RuntimeResult, ShellCreateRequest, ShellRuntime,
-    ShellWriteRequest, SystemLocalDevice, WorkspaceService,
+    ApplyEditsBudget, ApplyEditsRequest, ApprovalDecision, BoxFuture, EditColumnEncoding,
+    EditCoordinateSystem, ExecutionPolicy, FsStatBudget, FsStatRequest, NullEventSink,
+    OperationContext, PolicyDecision, PolicyEngine, RuntimeConfig, RuntimeResult,
+    ShellCreateRequest, ShellRuntime, ShellWriteRequest, SystemLocalDevice, TextEdit, TextPosition,
+    VersionStrength, WorkspaceService,
 };
 use std::{
     collections::BTreeMap,
@@ -19,6 +21,182 @@ impl ApprovalDecision for Approve {
     ) -> BoxFuture<'a, RuntimeResult<bool>> {
         Box::pin(async { Ok(true) })
     }
+}
+
+async fn metadata_version(workspace: &WorkspaceService, path: &std::path::Path) -> String {
+    workspace
+        .stat_v2(
+            None,
+            &FsStatRequest {
+                path: path.to_path_buf(),
+                version_strength: VersionStrength::Metadata,
+                hash_algorithm: None,
+                budget: FsStatBudget::default(),
+            },
+        )
+        .await
+        .expect("capture version")
+        .version_token
+}
+
+#[tokio::test]
+async fn apply_edits_handles_byte_ranges_dry_run_and_stale_versions() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let workspace =
+        WorkspaceService::new(&[directory.path().to_path_buf()], policy()).expect("workspace");
+    let file = directory.path().join("edits.txt");
+    std::fs::write(&file, "zero one two three").expect("write sample");
+    let version = metadata_version(&workspace, &file).await;
+    let request = ApplyEditsRequest {
+        path: file.clone(),
+        expected_version: version.clone(),
+        coordinate_system: EditCoordinateSystem::Byte,
+        column_encoding: None,
+        edits: vec![
+            TextEdit {
+                start_byte: Some(13),
+                end_byte: Some(18),
+                start: None,
+                end: None,
+                text: "THREE".to_owned(),
+            },
+            TextEdit {
+                start_byte: Some(0),
+                end_byte: Some(4),
+                start: None,
+                end: None,
+                text: "ZERO".to_owned(),
+            },
+            TextEdit {
+                start_byte: Some(8),
+                end_byte: Some(8),
+                start: None,
+                end: None,
+                text: "small ".to_owned(),
+            },
+        ],
+        dry_run: true,
+        preserve_line_endings: true,
+        preserve_bom: true,
+        budget: ApplyEditsBudget::default(),
+    };
+    let dry_run = workspace
+        .apply_edits(
+            &OperationContext::new("dry", "agent", "fs_apply_edits"),
+            &request,
+        )
+        .await
+        .expect("dry run");
+    assert!(!dry_run.applied);
+    assert_eq!(
+        std::fs::read_to_string(&file).expect("unchanged file"),
+        "zero one two three"
+    );
+
+    let applied = workspace
+        .apply_edits(
+            &OperationContext::new("apply", "agent", "fs_apply_edits"),
+            &ApplyEditsRequest {
+                dry_run: false,
+                ..request.clone()
+            },
+        )
+        .await
+        .expect("apply edits");
+    assert!(applied.applied);
+    assert_ne!(applied.old_version, applied.new_version);
+    assert_eq!(
+        std::fs::read_to_string(&file).expect("edited file"),
+        "ZERO onesmall  two THREE"
+    );
+    let stale = workspace
+        .apply_edits(
+            &OperationContext::new("retry", "agent", "fs_apply_edits"),
+            &ApplyEditsRequest {
+                dry_run: false,
+                ..request
+            },
+        )
+        .await
+        .expect_err("stale retry");
+    assert_eq!(stale.code, "targetReplaced");
+}
+
+#[tokio::test]
+async fn apply_edits_supports_unicode_line_columns_crlf_and_rejects_overlap() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let workspace =
+        WorkspaceService::new(&[directory.path().to_path_buf()], policy()).expect("workspace");
+    let file = directory.path().join("unicode.txt");
+    std::fs::write(
+        &file,
+        b"\xef\xbb\xbfalpha\r\na\xf0\x9f\x98\x80e\xcc\x81\r\nomega",
+    )
+    .expect("write UTF-8 sample");
+    let version = metadata_version(&workspace, &file).await;
+    let request = ApplyEditsRequest {
+        path: file.clone(),
+        expected_version: version,
+        coordinate_system: EditCoordinateSystem::LineColumn,
+        column_encoding: Some(EditColumnEncoding::Utf8CodePoint),
+        edits: vec![TextEdit {
+            start_byte: None,
+            end_byte: None,
+            start: Some(TextPosition { line: 2, column: 2 }),
+            end: Some(TextPosition { line: 2, column: 3 }),
+            text: "EMOJI\nNEXT".to_owned(),
+        }],
+        dry_run: false,
+        preserve_line_endings: true,
+        preserve_bom: true,
+        budget: ApplyEditsBudget::default(),
+    };
+    workspace
+        .apply_edits(
+            &OperationContext::new("unicode", "agent", "fs_apply_edits"),
+            &request,
+        )
+        .await
+        .expect("unicode edit");
+    assert_eq!(
+        std::fs::read(&file).expect("edited bytes"),
+        b"\xef\xbb\xbfalpha\r\naEMOJI\r\nNEXTe\xcc\x81\r\nomega"
+    );
+
+    let version = metadata_version(&workspace, &file).await;
+    let overlap = workspace
+        .apply_edits(
+            &OperationContext::new("overlap", "agent", "fs_apply_edits"),
+            &ApplyEditsRequest {
+                path: file,
+                expected_version: version,
+                coordinate_system: EditCoordinateSystem::Byte,
+                column_encoding: None,
+                edits: vec![
+                    TextEdit {
+                        start_byte: Some(3),
+                        end_byte: Some(8),
+                        start: None,
+                        end: None,
+                        text: String::new(),
+                    },
+                    TextEdit {
+                        start_byte: Some(7),
+                        end_byte: Some(9),
+                        start: None,
+                        end: None,
+                        text: String::new(),
+                    },
+                ],
+                dry_run: true,
+                preserve_line_endings: true,
+                preserve_bom: true,
+                budget: ApplyEditsBudget::default(),
+            },
+        )
+        .await
+        .expect_err("overlap rejected");
+    assert_eq!(overlap.code, "overlappingEdits");
 }
 
 fn policy() -> PolicyEngine {

@@ -196,3 +196,15 @@ Chạy benchmark/stress file lớn và báo peak memory/bytes read/write.
 - Concurrency/atomicity guarantees.
 - Legacy `fs_replace_text` behavior.
 - Test/benchmark và số liệu.
+
+## CHECK — Validation còn cần thực hiện
+
+Implementation, unit/integration tests và packaged catalog smoke đã hoàn tất, nhưng các mục sau chưa được xác nhận đầy đủ và cần kiểm tra lại:
+
+- Chạy stress/benchmark edit nhỏ trên file 100 MB và 1 GB, ghi peak RSS thực tế và throughput; test hiện tại chỉ chứng minh thuật toán dùng buffer cố định 64 KiB.
+- Bổ sung deterministic concurrency barriers cho concurrent writer trước stream, giữa stream và ngay trước rename; xác nhận mọi trường hợp trả conflict và không ghi đè writer.
+- Bổ sung cancellation injection giữa stream và kiểm tra target không đổi, temp file được cleanup.
+- Bổ sung crash/interruption fault-injection quanh flush, file sync, parent-directory sync và rename sau khi Plan 11 cung cấp atomic-writer harness.
+- Chạy ma trận permissions/read-only và symlink-swap trên cả Windows và macOS; hiện path revalidation dùng cơ chế Plan 07 nhưng chưa có test end-to-end riêng cho tool mới.
+- Xác nhận approval UI hiển thị path, expectedVersion, số edit và estimated bytes mà không chứa full replacement payload.
+- `cargo clippy --workspace --all-targets -- -D warnings` còn fail do lint tồn tại ngoài phạm vi Plan 09 trong `filesystem_find.rs`, `filesystem_read.rs`, `filesystem.rs`, `file_version.rs`, `subagent_worker_tests.rs`, `api/folders.rs`, `api/system.rs` và `finalization_watchdog.rs`; `chatcmd-runtime --lib` pass khi allow đúng các lint nền đã liệt kê.
