@@ -3,9 +3,12 @@ use chatcmd_core::{
     TerminalEventChunk, TerminalEventStore as _, TerminalSession, TerminalSessionStatus,
     TimelineEvent, TurnId,
 };
-use chatcmd_runtime::{OperationContext, RuntimeError, RuntimeResult};
+use chatcmd_runtime::{
+    OperationContext, RuntimeError, RuntimeResult, ToolPhase, ToolStatus, ToolUsage,
+};
 use serde_json::{Value, json};
 use sqlx::Row as _;
+use tracing::Instrument as _;
 use uuid::Uuid;
 
 use super::{
@@ -18,8 +21,48 @@ impl RuntimeHost {
     pub(super) async fn call_persisted(
         &self,
         tool: &str,
+        context: OperationContext,
+        arguments: Value,
+    ) -> RuntimeResult<Value> {
+        let telemetry = self.telemetry.start(&context, tool);
+        telemetry.set_phase(ToolPhase::Authorizing);
+        let span = telemetry.span();
+        let result = self
+            .call_persisted_inner(tool, context, arguments, &telemetry)
+            .instrument(span)
+            .await;
+        if tool.starts_with("blob_") {
+            self.telemetry.set_blob_bytes(self.blob_store.usage_bytes());
+        }
+        let (status, error_code) = match &result {
+            Ok(_) => (ToolStatus::Success, None),
+            Err(error) if is_timeout_code(&error.code) => {
+                (ToolStatus::Timeout, Some(error.code.as_str()))
+            }
+            Err(error) if is_cancel_code(&error.code) => {
+                (ToolStatus::Cancelled, Some(error.code.as_str()))
+            }
+            Err(error) => (ToolStatus::Failure, Some(error.code.as_str())),
+        };
+        let usage = result
+            .as_ref()
+            .ok()
+            .map(tool_usage_from_value)
+            .unwrap_or_default();
+        if result.as_ref().ok().is_some_and(tool_result_has_artifact) {
+            telemetry.mark_artifact_created();
+        }
+        let truncated = result.as_ref().ok().is_some_and(tool_result_is_truncated);
+        telemetry.finish(status, usage, error_code, truncated);
+        result
+    }
+
+    async fn call_persisted_inner(
+        &self,
+        tool: &str,
         mut context: OperationContext,
         arguments: Value,
+        telemetry: &chatcmd_runtime::ToolCallTelemetry,
     ) -> RuntimeResult<Value> {
         self.authorize_tool(&context.agent_id, tool).await?;
         let first_user_message = (tool == "agent_user_message")
@@ -27,10 +70,11 @@ impl RuntimeHost {
             .flatten();
         self.ensure_call_identity(&mut context, first_user_message)
             .await?;
+        telemetry.update_context(&context);
         if let Some(task_id) = context.task_id.as_deref()
             && let Err(error) = self.heartbeat_subagent(task_id).await
         {
-            tracing::warn!(task_id, code = %error.code, "sub-agent activity heartbeat failed");
+            tracing::warn!(code = %error.code, "sub-agent activity heartbeat failed");
         }
         if tool != "agent_user_message" {
             self.ensure_user_message_synced(&context).await?;
@@ -40,6 +84,7 @@ impl RuntimeHost {
                 .await?;
             return Err(error);
         }
+        telemetry.set_phase(phase_for_tool(tool));
         let _activity_guard = self.activities.register(&context, tool, &arguments);
         self.append_call_event(&context, tool, "started", Some(&arguments), None, None)
             .await?;
@@ -75,13 +120,15 @@ impl RuntimeHost {
                 if let Some(task_id) = context.task_id.as_deref()
                     && let Err(error) = self.heartbeat_subagent(task_id).await
                 {
-                    tracing::warn!(task_id, code = %error.code, "sub-agent timer heartbeat failed");
+                    tracing::warn!(code = %error.code, "sub-agent timer heartbeat failed");
                 }
             },
             }
         };
         match result {
             Ok(output) => {
+                telemetry.update_usage(tool_usage_from_value(&output));
+                telemetry.set_phase(ToolPhase::CleaningUp);
                 if let Err(error) = self
                     .append_call_event(&context, tool, "succeeded", None, Some(&output), None)
                     .await
@@ -98,6 +145,11 @@ impl RuntimeHost {
                 Ok(enrich_tool_result(output, &context, tool))
             }
             Err(error) => {
+                telemetry.set_phase(if is_cancel_code(&error.code) {
+                    ToolPhase::RollingBack
+                } else {
+                    ToolPhase::CleaningUp
+                });
                 let status = if error.code == "activity_stopped" {
                     "stopped"
                 } else {
@@ -466,6 +518,72 @@ impl RuntimeHost {
             json!({"accepted": true, "taskId": task_id.as_str(), "status": status, "titleUpdated": applied_title.is_some(), "title": applied_title}),
         )
     }
+}
+
+fn phase_for_tool(tool: &str) -> ToolPhase {
+    if matches!(tool, "fs_search" | "fs_find" | "fs_list" | "fs_list_v2") {
+        ToolPhase::Scanning
+    } else if matches!(tool, "fs_read_text" | "fs_read_text_v2" | "fs_stat") {
+        ToolPhase::Reading
+    } else if tool.starts_with("fs_") {
+        ToolPhase::Staging
+    } else if tool.starts_with("git_") {
+        ToolPhase::Committing
+    } else if tool.starts_with("shell_") || tool.starts_with("process_") {
+        ToolPhase::ProcessRunning
+    } else if tool.starts_with("blob_") || tool.starts_with("task_artifact_") {
+        ToolPhase::ArtifactWriting
+    } else if tool == "agent_plan_question" {
+        ToolPhase::WaitingApproval
+    } else if tool.starts_with("agent_subagent_") {
+        ToolPhase::WaitingSubagent
+    } else {
+        ToolPhase::Syncing
+    }
+}
+
+fn tool_usage_from_value(value: &Value) -> ToolUsage {
+    let mut usage: ToolUsage = value
+        .get("usage")
+        .cloned()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default();
+    if usage.output_bytes == 0 {
+        usage.output_bytes = serde_json::to_vec(value)
+            .map(|bytes| u64::try_from(bytes.len()).unwrap_or(u64::MAX))
+            .unwrap_or(0);
+    }
+    usage
+}
+
+fn tool_result_is_truncated(value: &Value) -> bool {
+    value
+        .get("truncation")
+        .and_then(|value| value.get("truncated"))
+        .and_then(Value::as_bool)
+        .unwrap_or_else(|| {
+            value
+                .get("truncated")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        })
+}
+
+fn tool_result_has_artifact(value: &Value) -> bool {
+    ["contentRef", "content_ref", "artifactRef", "artifact_ref"]
+        .into_iter()
+        .any(|key| value.get(key).is_some_and(|value| !value.is_null()))
+}
+
+fn is_cancel_code(code: &str) -> bool {
+    matches!(
+        code,
+        "operationCancelled" | "cancelled" | "activity_stopped"
+    )
+}
+
+fn is_timeout_code(code: &str) -> bool {
+    matches!(code, "timeBudgetExceeded" | "timeout" | "timed_out")
 }
 
 fn add_projection_metadata(

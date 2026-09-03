@@ -157,6 +157,8 @@ pub enum TruncationReason {
 pub struct ToolUsage {
     #[serde(default, skip_serializing_if = "is_zero")]
     pub elapsed_ms: u64,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub queue_wait_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub files_scanned: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -168,9 +170,17 @@ pub struct ToolUsage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bytes_written: Option<u64>,
     pub output_bytes: u64,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub progress_events: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub retries: u32,
 }
 
 const fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
+const fn is_zero_u32(value: &u32) -> bool {
     *value == 0
 }
 

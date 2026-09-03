@@ -65,6 +65,7 @@ pub(crate) struct RuntimeHost {
     subagent_registration_gate: Arc<Mutex<()>>,
     subagent_worker_id: Arc<str>,
     cursor_codec: CursorCodec,
+    telemetry: chatcmd_runtime::ToolTelemetryRegistry,
 }
 
 impl RuntimeHost {
@@ -95,6 +96,10 @@ impl RuntimeHost {
             subagent_registration_gate: Arc::new(Mutex::new(())),
             subagent_worker_id: Arc::from(format!("boot-{}", uuid::Uuid::new_v4())),
             cursor_codec: CursorCodec::ephemeral(),
+            telemetry: chatcmd_runtime::ToolTelemetryRegistry::new(
+                std::env::var("CHATCMD_TELEMETRY")
+                    .map_or(true, |value| !matches!(value.trim(), "0" | "off" | "false")),
+            ),
         }
     }
 
@@ -104,6 +109,10 @@ impl RuntimeHost {
 
     pub(crate) fn plan_prompt_registry(&self) -> PlanPromptRegistry {
         self.plan_prompts.clone()
+    }
+
+    pub(crate) fn telemetry_registry(&self) -> chatcmd_runtime::ToolTelemetryRegistry {
+        self.telemetry.clone()
     }
 
     #[cfg(test)]
@@ -118,6 +127,7 @@ impl RuntimeHost {
             self.skills.clone(),
             self.activity_registry(),
             self.plan_prompt_registry(),
+            self.telemetry_registry(),
             self.events.clone(),
         )
     }

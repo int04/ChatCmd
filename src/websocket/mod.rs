@@ -92,6 +92,7 @@ pub(crate) struct AppState {
     pub skills: chatcmd_runtime::SkillService,
     pub activities: crate::runtime_host::ActivityRegistry,
     pub plan_prompts: crate::runtime_host::PlanPromptRegistry,
+    pub telemetry: chatcmd_runtime::ToolTelemetryRegistry,
     events: broadcast::Sender<AppEvent>,
     connected_clients: AtomicUsize,
     api_crypto_sessions: RwLock<HashMap<String, Arc<Aes256Gcm>>>,
@@ -109,6 +110,7 @@ impl AppState {
         skills: chatcmd_runtime::SkillService,
         activities: crate::runtime_host::ActivityRegistry,
         plan_prompts: crate::runtime_host::PlanPromptRegistry,
+        telemetry: chatcmd_runtime::ToolTelemetryRegistry,
         events: broadcast::Sender<AppEvent>,
     ) -> Self {
         Self {
@@ -122,6 +124,7 @@ impl AppState {
             skills,
             activities,
             plan_prompts,
+            telemetry,
             events,
             connected_clients: AtomicUsize::new(0),
             api_crypto_sessions: RwLock::new(HashMap::new()),

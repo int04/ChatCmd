@@ -210,6 +210,7 @@ async fn run_server(ready: Option<std::sync::mpsc::Sender<()>>) -> Result<()> {
     ));
     let activity_registry = runtime.activity_registry();
     let plan_prompt_registry = runtime.plan_prompt_registry();
+    let telemetry_registry = runtime.telemetry_registry();
     let _finalization_watchdog = runtime.start_finalization_watchdog();
     let security = HttpSecurity::new(
         Arc::new(DatabaseAuth(repository.clone())),
@@ -233,6 +234,7 @@ async fn run_server(ready: Option<std::sync::mpsc::Sender<()>>) -> Result<()> {
         skills,
         activity_registry,
         plan_prompt_registry,
+        telemetry_registry,
         event_tx,
     ));
     api::start_data_cleanup_scheduler(state.clone());

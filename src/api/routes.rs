@@ -131,6 +131,7 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/skills/{id}/icon", get(skill_icon))
         .route("/settings", get(settings).put(save_settings))
         .route("/diagnostics/database", get(database_diagnostics))
+        .route("/diagnostics/tools", get(tool_diagnostics))
         .route("/diagnostics/logs", get(diagnostic_logs))
         .route(
             "/diagnostics/user-data",

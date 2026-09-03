@@ -1,6 +1,6 @@
 //! Shared resource budgets, cooperative cancellation, and admission control.
 
-use crate::{RuntimeError, RuntimeResult};
+use crate::{RuntimeError, RuntimeResult, ToolUsage};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
@@ -81,6 +81,21 @@ pub struct BudgetUsage {
     pub output_bytes: u64,
     pub progress_events: u64,
     pub elapsed_ms: u64,
+}
+
+impl From<BudgetUsage> for ToolUsage {
+    fn from(usage: BudgetUsage) -> Self {
+        Self {
+            elapsed_ms: usage.elapsed_ms,
+            files_scanned: (usage.files > 0).then_some(usage.files),
+            entries_scanned: (usage.entries > 0).then_some(usage.entries),
+            bytes_read: (usage.bytes_read > 0).then_some(usage.bytes_read),
+            bytes_written: (usage.bytes_written > 0).then_some(usage.bytes_written),
+            output_bytes: usage.output_bytes,
+            progress_events: u32::try_from(usage.progress_events).unwrap_or(u32::MAX),
+            ..Self::default()
+        }
+    }
 }
 
 struct BudgetCounters {

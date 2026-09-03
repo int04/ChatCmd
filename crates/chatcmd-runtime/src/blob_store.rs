@@ -160,6 +160,17 @@ impl Drop for BlobLease {
 }
 
 impl BlobStore {
+    /// Returns the bounded in-memory byte count without exposing blob metadata.
+    #[must_use]
+    pub fn usage_bytes(&self) -> u64 {
+        self.entries.lock().map_or(0, |entries| {
+            entries
+                .values()
+                .filter(|entry| !matches!(entry.state, BlobState::Consumed | BlobState::Aborted))
+                .fold(0_u64, |total, entry| total.saturating_add(entry.received))
+        })
+    }
+
     pub fn new(root: PathBuf) -> RuntimeResult<Self> {
         fs::create_dir_all(&root).map_err(io_error)?;
         for item in fs::read_dir(&root).map_err(io_error)? {

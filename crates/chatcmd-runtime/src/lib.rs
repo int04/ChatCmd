@@ -9,6 +9,7 @@ mod process_runner;
 mod services;
 mod shell;
 mod skill_service;
+mod telemetry;
 mod tool_result;
 mod types;
 mod workspace_ignore;
@@ -27,6 +28,7 @@ pub use skill_service::{
     ManagedSkill, SkillInstallCandidate, SkillInstallPreview, SkillOption, SkillOptionChoice,
     SkillService,
 };
+pub use telemetry::*;
 pub use tool_result::*;
 pub use types::*;
 pub use workspace_ignore::{TraversalOptions, WorkspaceIgnorePolicy, is_default_ignored_component};

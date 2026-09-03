@@ -49,6 +49,15 @@ follow-up because it changes their public response schemas.
 
 ## Operational diagnostics
 
+Tool execution telemetry is available from the authenticated local management API at
+`GET /api/local/diagnostics/tools`. It reports bounded active-operation phase/usage snapshots and
+finite-label aggregate metrics without arguments, paths, content, raw errors, or private IDs.
+Correlation values are one-way hashed and truncated. See
+[`ADR 0019`](adr/0019-local-tool-telemetry.md) for taxonomy, retention, and export policy.
+
+Set `CHATCMD_TELEMETRY=off` (or `0`/`false`) before launch to disable tool telemetry. The default is
+local in-memory telemetry; ChatCMD does not configure a remote exporter.
+
 Budget errors include the phase and consumed counters. Admission errors are retryable and should
 be counted by tool and actor. Progress events contain paths and counters only; they never include
 file content. CI tests assert cap precedence, exact boundaries, cancellation usage, permit release,

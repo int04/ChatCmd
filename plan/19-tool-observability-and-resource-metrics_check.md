@@ -207,3 +207,17 @@ Chạy frontend test/build nếu thêm diagnostics UI.
 - Cách tích hợp ToolUsage/BudgetTracker.
 - Test privacy/correctness và benchmark overhead.
 - Cách bật/tắt/export telemetry.
+
+## Cần kiểm tra lại — Clippy workspace chưa thành công
+
+Lệnh `cargo clippy --workspace --all-targets -- -D warnings` chưa pass do sáu lint đã tồn
+tại ngoài phần mã Plan 19. Các validation bắt buộc (`cargo fmt --check`,
+`cargo check --workspace`, `cargo test --workspace`) vẫn pass. Cần xử lý và chạy lại Clippy sau:
+
+1. `crates/chatcmd-runtime/src/filesystem_find.rs:213` — `clippy::collapsible_if`.
+2. `crates/chatcmd-runtime/src/filesystem_read.rs:115` — `clippy::too_many_arguments`.
+3. `crates/chatcmd-runtime/src/filesystem_read.rs:540` — `clippy::redundant_guards`.
+4. `crates/chatcmd-runtime/src/filesystem.rs:332` — `clippy::too_many_arguments`.
+5. `crates/chatcmd-runtime/src/process_runner.rs:77` — `clippy::manual_clamp`.
+6. `crates/chatcmd-runtime/src/filesystem/file_version.rs:524` —
+   `clippy::items_after_test_module` (các test helper ở dòng 824 trở đi).

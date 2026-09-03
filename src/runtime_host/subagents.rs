@@ -533,6 +533,18 @@ impl RuntimeHost {
             if affected == 0 {
                 continue;
             }
+            self.telemetry.record_subagent_lease_expired(
+                if worker_id
+                    .as_deref()
+                    .is_some_and(|owner| owner != self.subagent_worker_id.as_ref())
+                {
+                    chatcmd_runtime::SubagentLeaseExpiryReason::WorkerRestart
+                } else if hard_deadline {
+                    chatcmd_runtime::SubagentLeaseExpiryReason::HardDeadline
+                } else {
+                    chatcmd_runtime::SubagentLeaseExpiryReason::Heartbeat
+                },
+            );
             expired += 1;
             if let Some(child_task_id) = child_task_id.as_deref() {
                 self.cleanup_timed_out_subagent(child_task_id, reason, now)
