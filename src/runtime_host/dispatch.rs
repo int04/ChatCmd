@@ -10,6 +10,7 @@ use chatcmd_runtime::{
 };
 use serde_json::{Value, json};
 
+use super::turn_file_changes::{FileChangeKind, capture_snapshot};
 use super::{
     RuntimeHost, filesystem_dispatch, inputs::*, invalid, now_ms, parse, storage_error, task_json,
     value,
@@ -128,6 +129,7 @@ impl RuntimeHost {
                         .clone()
                         .ok_or_else(project_folder_required_for_shell)?,
                 };
+                self.enable_shell_file_watcher(&context);
                 let info = self
                     .shell
                     .create_with_additional_scopes(
@@ -444,7 +446,8 @@ impl RuntimeHost {
                 filesystem_dispatch::write_text(self, workspace, &context, parse(arguments)?).await
             }
             "fs_replace_text" => {
-                filesystem_dispatch::replace_text(workspace, &context, parse(arguments)?).await
+                filesystem_dispatch::replace_text(self, workspace, &context, parse(arguments)?)
+                    .await
             }
             "fs_apply_edits" => {
                 filesystem_dispatch::apply_edits(self, workspace, &context, parse(arguments)?).await
@@ -471,58 +474,104 @@ impl RuntimeHost {
             }
             "fs_create_directory" => {
                 let input: PathInput = parse(arguments)?;
-                value(workspace.create_directory(&input.path).await?)
+                let existed = input.path.exists();
+                let entry = workspace.create_directory(&input.path).await?;
+                if !existed {
+                    self.record_committed_change(
+                        &context,
+                        &input.path,
+                        None,
+                        FileChangeKind::DirectoryCreated,
+                        Default::default(),
+                        capture_snapshot(&input.path),
+                        None,
+                        None,
+                    );
+                }
+                value(entry)
             }
             "fs_copy" => {
                 let input: TransferInput = parse(arguments)?;
                 let conflict_policy = transfer_conflict_policy(&input)?;
-                value(
-                    workspace
-                        .copy_safe(
-                            &context,
-                            &FsTransferRequest {
-                                source: input.source,
-                                destination: input.destination,
-                                conflict_policy,
-                                atomic_publish: input.atomic_publish,
-                                verify: input.verify,
-                                preserve_metadata: input.preserve_metadata,
-                                follow_symlinks: input.follow_symlinks,
-                                dry_run: input.dry_run,
-                                expected_source_version: input.expected_source_version,
-                                expected_destination_version: input.expected_destination_version,
-                                budget: input.budget,
-                            },
-                        )
-                        .await?,
-                )
+                let destination = input.destination.clone();
+                let destination_existed = destination.exists();
+                let before = capture_snapshot(&destination);
+                let result = workspace
+                    .copy_safe(
+                        &context,
+                        &FsTransferRequest {
+                            source: input.source,
+                            destination: input.destination,
+                            conflict_policy,
+                            atomic_publish: input.atomic_publish,
+                            verify: input.verify,
+                            preserve_metadata: input.preserve_metadata,
+                            follow_symlinks: input.follow_symlinks,
+                            dry_run: input.dry_run,
+                            expected_source_version: input.expected_source_version,
+                            expected_destination_version: input.expected_destination_version,
+                            budget: input.budget,
+                        },
+                    )
+                    .await?;
+                if result.destination_published && !result.dry_run {
+                    self.record_committed_change(
+                        &context,
+                        &destination,
+                        None,
+                        if destination_existed {
+                            FileChangeKind::Modified
+                        } else {
+                            FileChangeKind::Added
+                        },
+                        before,
+                        capture_snapshot(&destination),
+                        None,
+                        result.detail_artifact_ref.clone(),
+                    );
+                }
+                value(result)
             }
             "fs_move" => {
                 let input: TransferInput = parse(arguments)?;
                 let conflict_policy = transfer_conflict_policy(&input)?;
-                value(
-                    workspace
-                        .move_safe(
-                            &context,
-                            &FsTransferRequest {
-                                source: input.source,
-                                destination: input.destination,
-                                conflict_policy,
-                                atomic_publish: input.atomic_publish,
-                                verify: input.verify,
-                                preserve_metadata: input.preserve_metadata,
-                                follow_symlinks: input.follow_symlinks,
-                                dry_run: input.dry_run,
-                                expected_source_version: input.expected_source_version,
-                                expected_destination_version: input.expected_destination_version,
-                                budget: input.budget,
-                            },
-                        )
-                        .await?,
-                )
+                let source = input.source.clone();
+                let destination = input.destination.clone();
+                let before = capture_snapshot(&source);
+                let result = workspace
+                    .move_safe(
+                        &context,
+                        &FsTransferRequest {
+                            source: input.source,
+                            destination: input.destination,
+                            conflict_policy,
+                            atomic_publish: input.atomic_publish,
+                            verify: input.verify,
+                            preserve_metadata: input.preserve_metadata,
+                            follow_symlinks: input.follow_symlinks,
+                            dry_run: input.dry_run,
+                            expected_source_version: input.expected_source_version,
+                            expected_destination_version: input.expected_destination_version,
+                            budget: input.budget,
+                        },
+                    )
+                    .await?;
+                if result.destination_published && result.source_removed && !result.dry_run {
+                    self.record_committed_change(
+                        &context,
+                        &destination,
+                        Some(source),
+                        FileChangeKind::Moved,
+                        before,
+                        capture_snapshot(&destination),
+                        None,
+                        result.detail_artifact_ref.clone(),
+                    );
+                }
+                value(result)
             }
             "fs_delete" => {
-                filesystem_dispatch::delete(workspace, &context, parse(arguments)?).await
+                filesystem_dispatch::delete(self, workspace, &context, parse(arguments)?).await
             }
             "git_status" => {
                 let input: CwdInput = parse(arguments)?;

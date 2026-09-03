@@ -112,9 +112,6 @@ impl RuntimeHost {
             payload["input"] = projection.public_summary;
         }
         if let Some(value) = output {
-            if status == "succeeded" {
-                self.record_tool_diff(context, value);
-            }
             let projection = project(tool, value, limits);
             add_projection_metadata(&mut payload, "output", &projection);
             payload["output"] = projection.public_summary;
@@ -397,12 +394,15 @@ impl RuntimeHost {
         } else {
             EventKind::Progress
         };
-        let file_changes = if status == "completed" {
-            self.finish_turn_file_tracking(context).await
-        } else {
-            Vec::new()
-        };
-        let payload = json!({"tool": context.tool_name, "status": status, "content": content, "title": applied_title.as_deref(), "fileChanges": file_changes});
+        let (file_changes, file_change_tracking_incomplete, file_change_events_dropped) =
+            if status == "completed" {
+                self.finish_turn_file_tracking(context).await
+            } else {
+                (Vec::new(), false, 0)
+            };
+        let payload = json!({"tool": context.tool_name, "status": status, "content": content, "title": applied_title.as_deref(),
+            "fileChanges": file_changes, "fileChangeTrackingIncomplete": file_change_tracking_incomplete,
+            "fileChangeEventsDropped": file_change_events_dropped, "fileChangeSchemaVersion": 2});
         self.repository
             .append_timeline_events(&[TimelineEvent {
                 id: EventId::new(key.clone()).map_err(|error| invalid("eventId", error))?,

@@ -53,6 +53,7 @@ export function TaskTurnBubble({ turn, taskId, subagents = [], agentLabel = 'Cod
   const [thinkingOpen, setThinkingOpen] = useState(() => !response);
   const hasThinkingContent = subagents.length > 0 || activities.length > 0 || blocks.some((block) => block.type === 'progress') || isThinking || status === 'failed' || status === 'incomplete' || (status === 'completed' && autoFinalized && !response);
   const fileChanges = response ? responseFileChanges(response.event) : [];
+  const fileChangeTrackingIncomplete = response ? responseFileChangeTrackingIncomplete(response.event) : false;
 
   useEffect(() => {
     setThinkingOpen(!response);
@@ -99,6 +100,7 @@ export function TaskTurnBubble({ turn, taskId, subagents = [], agentLabel = 'Cod
       </section>}
       {status === 'completed' && response && <section className="turn-final-section">
         <div className="turn-response"><div className="turn-response-label"><CheckCircle2 /> {tr('Final response')}</div><div className="turn-response-content"><RichText content={response.text} /></div></div>
+        {fileChangeTrackingIncomplete && <div className="turn-warning" role="status"><CircleAlert /><div><strong>{tr('File change tracking was incomplete')}</strong><p>{tr('Some shell file events were dropped. The list below may not include every changed file.')}</p></div></div>}
         {fileChanges.length > 0 && <TurnFileChanges changes={fileChanges} onOpen={(activity) => setChangeTarget(activity)} />}
       </section>}
     </article>
@@ -107,18 +109,26 @@ export function TaskTurnBubble({ turn, taskId, subagents = [], agentLabel = 'Cod
   </div>;
 }
 
-type TurnFileChange = { path: string; fileName: string; extension: string; kind: 'added' | 'deleted' | 'modified'; additions: number; deletions: number; activity: ToolActivity };
+export type TurnFileChange = { path: string; fileName: string; extension: string; kind: 'added' | 'deleted' | 'modified' | 'moved' | 'directoryCreated'; additions: number | null; deletions: number | null; confidence: string; diffArtifactRef?: string; activity: ToolActivity };
 
-function responseFileChanges(event: TimelineEvent): TurnFileChange[] {
+export function responseFileChangeTrackingIncomplete(event: TimelineEvent): boolean {
+  const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload) ? event.payload as Record<string, unknown> : {};
+  return payload.fileChangeTrackingIncomplete === true;
+}
+
+export function responseFileChanges(event: TimelineEvent): TurnFileChange[] {
   const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload) ? event.payload as Record<string, unknown> : {};
   const raw = Array.isArray(payload.fileChanges) ? payload.fileChanges : [];
   return raw.flatMap((item, index) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
     const value = item as Record<string, unknown>;
     const path = typeof value.path === 'string' ? value.path : '';
-    const before = typeof value.before === 'string' ? value.before : '';
-    const after = typeof value.after === 'string' ? value.after : '';
-    const kind = value.kind === 'added' || value.kind === 'deleted' ? value.kind : 'modified';
+    const preview = value.preview && typeof value.preview === 'object' && !Array.isArray(value.preview) ? value.preview as Record<string, unknown> : {};
+    const before = typeof preview.before === 'string' ? preview.before : '';
+    const after = typeof preview.after === 'string' ? preview.after : '';
+    const kind = value.kind === 'added' || value.kind === 'deleted' || value.kind === 'moved' || value.kind === 'directoryCreated' ? value.kind : 'modified';
+    const confidence = typeof value.confidence === 'string' ? value.confidence : 'metadataOnly';
+    const diffArtifactRef = typeof value.diffArtifactRef === 'string' ? value.diffArtifactRef : undefined;
     if (!path) return [];
     const fileName = path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
     const extension = fileName.includes('.') ? fileName.split('.').at(-1)?.toUpperCase() || 'FILE' : 'FILE';
@@ -128,13 +138,16 @@ function responseFileChanges(event: TimelineEvent): TurnFileChange[] {
       tool,
       kind: kind === 'deleted' ? 'delete' : 'edit',
       input: { path },
-      output: { __chatcmdDiff: { path, before, after, beforeAvailable: value.beforeAvailable !== false } },
+      output: { __chatcmdDiff: { path, before, after, beforeAvailable: typeof preview.before === 'string' } },
       status: 'succeeded',
       startedAt: event.occurredAt,
       finishedAt: event.occurredAt,
       turnId: event.turnId,
     };
-    return [{ path, fileName, extension, kind, additions: Number(value.additions) || 0, deletions: Number(value.deletions) || 0, activity }];
+    return [{ path, fileName, extension, kind,
+      additions: typeof value.additions === 'number' ? value.additions : null,
+      deletions: typeof value.deletions === 'number' ? value.deletions : null,
+      confidence, diffArtifactRef, activity }];
   });
 }
 
@@ -142,11 +155,11 @@ function TurnFileChanges({ changes, onOpen }: { changes: TurnFileChange[]; onOpe
   return <section className="turn-file-changes" aria-label={tr('Changed files')}>
     <div className="turn-file-changes-heading"><FilePenLine aria-hidden="true" /><strong>{tr('Changed files')}</strong><span>{changes.length}</span></div>
     <div className="turn-file-change-list">{changes.map((change, index) => {
-      const action = change.kind === 'added' ? tr('Added') : change.kind === 'deleted' ? tr('Deleted') : tr('Modified');
+      const action = change.kind === 'added' ? tr('Added') : change.kind === 'deleted' ? tr('Deleted') : change.kind === 'moved' ? tr('Moved') : change.kind === 'directoryCreated' ? tr('Created') : tr('Modified');
       return <button type="button" className={`turn-file-change-card ${change.kind}`} onClick={() => onOpen(change.activity)} key={`${change.path}:${index}`}>
         <span className="turn-file-change-icon"><FileCode2 aria-hidden="true" /><small>{change.extension}</small></span>
         <span className="turn-file-change-copy"><strong>{action} {change.fileName}</strong><small>{change.path}</small></span>
-        <span className="turn-file-change-lines"><b>+{change.additions}</b><i>-{change.deletions}</i></span>
+        <span className="turn-file-change-lines" title={change.confidence}><b>+{change.additions ?? '?'}</b><i>-{change.deletions ?? '?'}</i></span>
       </button>;
     })}</div>
   </section>;

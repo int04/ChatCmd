@@ -1,5 +1,15 @@
 # Plan 14 — Tối ưu TurnFileChangeTracker cho monorepo và diff lớn
 
+## Cần kiểm tra lại sau triển khai
+
+- Full frontend suite `npm test -- --run` còn 7 lỗi trong `src/test/App.test.tsx` ở các assertion API health/routing/agent workflow; các test timeline/tool-output liên quan đều pass và `npm run build` pass. Cần xác nhận/fix riêng trạng thái test harness của `App.test.tsx`.
+- Chạy benchmark thủ công trên từng platform watcher với workspace 100.000 file và shell build 100.000 event để đo CPU/RAM/backend event loss thực tế. Unit stress 100.000 event đã xác nhận queue giữ cap và đếm drop.
+- Chạy fixture sparse 1 GiB với native range edit và instrument OS reads để xác nhận tổng snapshot read không vượt 200.000 byte trên Windows/macOS/Linux. Unit snapshot hiện xác nhận bounded prefix/suffix với file 1 MB.
+- Backend watcher có thể mất event im lặng trước callback. Hiện lỗi backend/queue overflow được báo `fileChangeTrackingIncomplete`, nhưng full manifest reconciliation cần workspace index của Plan 20 để kiểm chứng completeness.
+- Directory-scale copy/move/delete đã dùng `detailArtifactRef` khi runtime cung cấp; UI lazy-fetch/render diff artifact riêng chưa có API artifact download phù hợp và cần kiểm tra sau khi artifact persistence contract hoàn tất.
+- Exact internal-temp registration từ atomic writer chưa có cross-crate callback; tracker hiện coalesce mọi path create-then-delete trong debounce window. Cần nối operation-ID/temp-path registry nếu UI vẫn thấy staging path trên backend watcher cụ thể, đồng thời test file người dùng có tên giống tempfile.
+- `cargo clippy --workspace --all-targets -- -D warnings` còn lỗi có sẵn ngoài Plan 14 trong `filesystem_find.rs`, `filesystem_read.rs`, `filesystem.rs` và `filesystem/file_version.rs`; không sửa chéo phạm vi plan này.
+
 ## Nhiệm vụ dùng cho chat mới
 
 Trong project `/Users/ducnghia/Downloads/dev/ChatCmdClient`, hãy thiết kế lại cơ chế theo dõi “Các file đã thay đổi” theo turn. Native filesystem tools phải phát change record trực tiếp; recursive OS watcher chỉ dùng như fallback cho shell/external process và phải có debounce, quota, overflow recovery, ignore policy chung và snapshot bounded. Không commit.

@@ -9,11 +9,11 @@ use std::{
 
 use chatcmd_runtime::{
     ApplyEditsRequest, FsDeleteRequest, MAX_INLINE_BYTES, OperationContext, RuntimeError,
-    RuntimeResult, SearchProgress, TextReadBudget, TextReadRange, TextReadRequestV2,
-    WorkspaceService,
+    RuntimeResult, SearchProgress, WorkspaceService,
 };
 use serde_json::{Value, json};
 
+use super::turn_file_changes::{FileChangeKind, capture_snapshot};
 use super::{
     RuntimeHost,
     inputs::{
@@ -185,7 +185,13 @@ pub(super) async fn write_text(
     context: &OperationContext,
     input: WriteTextInput,
 ) -> RuntimeResult<Value> {
-    let before = snapshot(workspace, &input.path).await;
+    let path = input.path.clone();
+    let before = capture_snapshot(&path);
+    let kind = if path.exists() {
+        FileChangeKind::Modified
+    } else {
+        FileChangeKind::Added
+    };
     let options = chatcmd_runtime::AtomicWriteOptions {
         overwrite: input.overwrite,
         expected_version: input.expected_version,
@@ -225,8 +231,9 @@ pub(super) async fn write_text(
         }
         _ => return Err(content_choice_error("content")),
     };
-    let after = snapshot(workspace, &input.path).await;
-    Ok(with_text_diff(value(result)?, &input.path, before, after))
+    let after = capture_snapshot(&path);
+    host.record_committed_change(context, &path, None, kind, before, after, None, None);
+    value(result)
 }
 
 pub(super) async fn write_raw(
@@ -235,6 +242,13 @@ pub(super) async fn write_raw(
     context: &OperationContext,
     input: WriteRawInput,
 ) -> RuntimeResult<Value> {
+    let path = input.path.clone();
+    let before = capture_snapshot(&path);
+    let kind = if path.exists() {
+        FileChangeKind::Modified
+    } else {
+        FileChangeKind::Added
+    };
     let options = chatcmd_runtime::AtomicWriteOptions {
         overwrite: input.overwrite,
         expected_version: input.expected_version,
@@ -276,15 +290,18 @@ pub(super) async fn write_raw(
         }
         _ => return Err(content_choice_error("base64")),
     };
+    let after = capture_snapshot(&path);
+    host.record_committed_change(context, &path, None, kind, before, after, None, None);
     value(result)
 }
 
 pub(super) async fn replace_text(
+    host: &RuntimeHost,
     workspace: &WorkspaceService,
     context: &OperationContext,
     input: ReplaceTextInput,
 ) -> RuntimeResult<Value> {
-    let before = snapshot(workspace, &input.path).await;
+    let before = capture_snapshot(&input.path);
     let entry = workspace
         .replace_text(
             context,
@@ -294,8 +311,18 @@ pub(super) async fn replace_text(
             input.expected_occurrences,
         )
         .await?;
-    let after = snapshot(workspace, &input.path).await;
-    Ok(with_text_diff(value(entry)?, &input.path, before, after))
+    let after = capture_snapshot(&input.path);
+    host.record_committed_change(
+        context,
+        &input.path,
+        None,
+        FileChangeKind::Modified,
+        before,
+        after,
+        None,
+        None,
+    );
+    value(entry)
 }
 
 pub(super) async fn apply_edits(
@@ -304,6 +331,8 @@ pub(super) async fn apply_edits(
     context: &OperationContext,
     input: ApplyEditsInput,
 ) -> RuntimeResult<Value> {
+    let path = input.path.clone();
+    let before = capture_snapshot(&path);
     let (edits, lease) = match (input.edits, input.content_ref) {
         (Some(edits), None) => (edits, None),
         (None, Some(content_ref)) => {
@@ -340,7 +369,21 @@ pub(super) async fn apply_edits(
     if let Some(lease) = lease {
         lease.finish(result.is_ok())?;
     }
-    value(result?)
+    let result = result?;
+    if result.applied && !result.dry_run {
+        let after = capture_snapshot(&path);
+        host.record_committed_change(
+            context,
+            &path,
+            None,
+            FileChangeKind::Modified,
+            before,
+            after,
+            Some((result.additions, result.deletions)),
+            result.diff_artifact_ref.clone(),
+        );
+    }
+    value(result)
 }
 
 fn content_choice_error(inline_field: &str) -> RuntimeError {
@@ -351,11 +394,12 @@ fn content_choice_error(inline_field: &str) -> RuntimeError {
 }
 
 pub(super) async fn delete(
+    host: &RuntimeHost,
     workspace: &WorkspaceService,
     context: &OperationContext,
     input: DeleteInput,
 ) -> RuntimeResult<Value> {
-    let before = snapshot(workspace, &input.path).await;
+    let before = capture_snapshot(&input.path);
     let deleted = workspace
         .delete_safe(
             context,
@@ -369,66 +413,27 @@ pub(super) async fn delete(
             },
         )
         .await?;
-    let after = if deleted.source_removed {
-        Some(String::new())
-    } else {
-        before.clone()
-    };
-    Ok(with_text_diff(
-        serde_json::to_value(deleted)
-            .map_err(|error| RuntimeError::new("serialization_failed", error.to_string()))?,
-        &input.path,
-        before,
-        after,
-    ))
-}
-
-fn snapshot_request(path: &std::path::Path) -> TextReadRequestV2 {
-    TextReadRequestV2 {
-        path: path.to_path_buf(),
-        range: TextReadRange::Byte {
-            start: 0,
-            limit: 1_000_000,
-        },
-        max_bytes: 1_000_000,
-        include_line_endings: true,
-        expected_version: None,
-        budget: TextReadBudget {
-            timeout_ms: 10_000,
-            max_bytes_read: 1_000_003,
-        },
+    if deleted.source_removed && !deleted.dry_run {
+        host.record_committed_change(
+            context,
+            &input.path,
+            None,
+            FileChangeKind::Deleted,
+            before,
+            Default::default(),
+            None,
+            deleted.detail_artifact_ref.clone(),
+        );
     }
-}
-
-async fn snapshot(workspace: &WorkspaceService, path: &std::path::Path) -> Option<String> {
-    let request = snapshot_request(path);
-    workspace
-        .read_text_v2(None, &request)
-        .await
-        .ok()
-        .map(|value| value.content)
+    serde_json::to_value(deleted)
+        .map_err(|error| RuntimeError::new("serialization_failed", error.to_string()))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_relative_paths, snapshot_request};
-    use chatcmd_runtime::TextReadRange;
+    use super::resolve_relative_paths;
     use serde_json::json;
     use std::path::Path;
-
-    #[test]
-    fn snapshot_request_is_bounded_to_one_megabyte() {
-        let request = snapshot_request(Path::new("large.txt"));
-        assert_eq!(request.max_bytes, 1_000_000);
-        assert_eq!(request.budget.max_bytes_read, 1_000_003);
-        assert!(matches!(
-            request.range,
-            TextReadRange::Byte {
-                start: 0,
-                limit: 1_000_000
-            }
-        ));
-    }
 
     #[test]
     fn relative_filesystem_paths_are_anchored_to_project_folder() {
@@ -474,26 +479,4 @@ mod tests {
             "relative filesystem path requires the task project folder or an explicit absolute work path"
         );
     }
-}
-
-fn with_text_diff(
-    mut output: Value,
-    path: &std::path::Path,
-    before: Option<String>,
-    after: Option<String>,
-) -> Value {
-    if before.is_none() && after.is_none() {
-        return output;
-    }
-    if let Value::Object(ref mut object) = output {
-        object.insert(
-            "__chatcmdDiff".to_owned(),
-            json!({
-                "path": path,
-                "before": before.unwrap_or_default(),
-                "after": after.unwrap_or_default()
-            }),
-        );
-    }
-    output
 }

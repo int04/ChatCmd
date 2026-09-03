@@ -1,16 +1,28 @@
 use std::{
     collections::{BTreeMap, HashMap},
+    fs::File,
+    io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, Weak},
+    sync::{
+        Arc, Mutex, Weak,
+        atomic::{AtomicU64, Ordering},
+        mpsc::{Receiver, SyncSender, TrySendError, sync_channel},
+    },
+    thread::JoinHandle,
+    time::{Duration, UNIX_EPOCH},
 };
 
-use chatcmd_runtime::OperationContext;
+use chatcmd_runtime::{OperationContext, WorkspaceIgnorePolicy};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use serde_json::{Value, json};
+use serde::Serialize;
+use serde_json::Value;
 
 use super::RuntimeHost;
 
 const MAX_TEXT_SNAPSHOT_BYTES: usize = 200_000;
+const WATCHER_CHANNEL_CAPACITY: usize = 4_096;
+const WATCHER_DEBOUNCE: Duration = Duration::from_millis(100);
+const MAX_WATCHER_EVENTS_PER_BATCH: usize = 8_192;
 
 #[derive(Clone, Default)]
 pub(super) struct TurnFileChangeTracker {
@@ -20,20 +32,91 @@ pub(super) struct TurnFileChangeTracker {
 struct TurnState {
     root: PathBuf,
     watcher: Option<RecommendedWatcher>,
-    changes: BTreeMap<PathBuf, ChangeState>,
+    watcher_worker: Option<JoinHandle<()>>,
+    dropped_events: Arc<AtomicU64>,
+    changes: BTreeMap<PathBuf, FileChangeRecord>,
 }
 
-#[derive(Clone, Default)]
-struct ChangeState {
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) enum FileChangeKind {
+    Added,
+    Modified,
+    Deleted,
+    Moved,
+    DirectoryCreated,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) enum ChangeOrigin {
+    NativeTool,
+    ShellWatcher,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) enum ChangeConfidence {
+    Exact,
+    Sampled,
+    MetadataOnly,
+    UnknownDueToOverflow,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct DiffPreview {
+    #[serde(skip_serializing_if = "Option::is_none")]
     before: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     after: Option<String>,
-    kind_hint: Option<&'static str>,
-    exact_before: bool,
-    created_in_turn: bool,
-    removed_after_create: bool,
+    binary: bool,
+    truncated: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct FileChangeRecord {
+    path: PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    previous_path: Option<PathBuf>,
+    kind: FileChangeKind,
+    origin: ChangeOrigin,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    old_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    new_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    old_size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    new_size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    additions: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    deletions: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preview: Option<DiffPreview>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    diff_artifact_ref: Option<String>,
+    confidence: ChangeConfidence,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(super) struct Snapshot {
+    text: Option<String>,
+    size: Option<u64>,
+    version: Option<String>,
+    binary: bool,
+    truncated: bool,
+}
+
+struct RawWatcherEvent {
+    kind: EventKind,
+    paths: Vec<PathBuf>,
 }
 
 impl RuntimeHost {
+    /// Registers a turn without allocating an OS watcher.
     pub(super) async fn begin_turn_file_tracking(&self, context: &OperationContext) {
         let Some(turn_id) = context.turn_id.as_deref().filter(|value| !value.is_empty()) else {
             return;
@@ -41,82 +124,136 @@ impl RuntimeHost {
         let Some(root) = self.turn_workspace_root(context).await else {
             return;
         };
-
         if let Ok(mut state) = self.file_changes.state.lock() {
             state.insert(
                 turn_id.to_owned(),
                 TurnState {
-                    root: root.clone(),
+                    root,
                     watcher: None,
+                    watcher_worker: None,
+                    dropped_events: Arc::new(AtomicU64::new(0)),
                     changes: BTreeMap::new(),
                 },
             );
         }
+    }
 
+    /// Enables the recursive fallback immediately before a shell may mutate files.
+    pub(super) fn enable_shell_file_watcher(&self, context: &OperationContext) {
+        let Some(turn_id) = context.turn_id.as_deref() else {
+            return;
+        };
+        let (root, dropped_events) = {
+            let Ok(state) = self.file_changes.state.lock() else {
+                return;
+            };
+            let Some(turn) = state.get(turn_id) else {
+                return;
+            };
+            if turn.watcher.is_some() {
+                return;
+            }
+            (turn.root.clone(), Arc::clone(&turn.dropped_events))
+        };
+        let (sender, receiver) = sync_channel(WATCHER_CHANNEL_CAPACITY);
         let weak = Arc::downgrade(&self.file_changes.state);
         let tracked_turn = turn_id.to_owned();
+        let worker = std::thread::spawn(move || watcher_worker(weak, tracked_turn, receiver));
+        let callback_drops = Arc::clone(&dropped_events);
         let watcher = RecommendedWatcher::new(
             move |result: notify::Result<Event>| {
                 if let Ok(event) = result {
-                    record_watcher_event(&weak, &tracked_turn, event);
+                    enqueue_watcher_event(&sender, &callback_drops, event);
+                } else {
+                    callback_drops.fetch_add(1, Ordering::Relaxed);
                 }
             },
             notify::Config::default(),
         );
         let Ok(mut watcher) = watcher else {
+            dropped_events.fetch_add(1, Ordering::Relaxed);
+            drop(worker);
             return;
         };
         if watcher.watch(&root, RecursiveMode::Recursive).is_err() {
+            dropped_events.fetch_add(1, Ordering::Relaxed);
+            drop(watcher);
+            let _ = worker.join();
             return;
         }
         if let Ok(mut state) = self.file_changes.state.lock()
             && let Some(turn) = state.get_mut(turn_id)
         {
             turn.watcher = Some(watcher);
+            turn.watcher_worker = Some(worker);
         }
     }
 
-    pub(super) fn record_tool_diff(&self, context: &OperationContext, output: &Value) {
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn record_committed_change(
+        &self,
+        context: &OperationContext,
+        path: &Path,
+        previous_path: Option<PathBuf>,
+        kind: FileChangeKind,
+        before: Snapshot,
+        after: Snapshot,
+        line_delta: Option<(u64, u64)>,
+        diff_artifact_ref: Option<String>,
+    ) {
         let Some(turn_id) = context.turn_id.as_deref() else {
             return;
         };
-        let Some(diff) = output.get("__chatcmdDiff").and_then(Value::as_object) else {
-            return;
-        };
-        let Some(path) = diff.get("path").and_then(Value::as_str).map(PathBuf::from) else {
-            return;
-        };
-        let before = diff
-            .get("before")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        let after = diff
-            .get("after")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
         let Ok(mut state) = self.file_changes.state.lock() else {
             return;
         };
         let Some(turn) = state.get_mut(turn_id) else {
             return;
         };
-        let path = absolute_path(&turn.root, &path);
+        let path = normalized_path(&turn.root, path);
         if should_ignore_path(&turn.root, &path) {
             return;
         }
-        let change = turn.changes.entry(path).or_default();
-        if !change.exact_before {
-            change.before = before;
-            change.exact_before = true;
-        }
-        change.after = after;
+        let (additions, deletions) = line_delta
+            .map(|(a, d)| (Some(a), Some(d)))
+            .unwrap_or_else(|| text_line_delta(&before, &after));
+        let record = FileChangeRecord {
+            path: path.clone(),
+            previous_path,
+            kind,
+            origin: ChangeOrigin::NativeTool,
+            old_version: before.version.clone(),
+            new_version: after.version.clone(),
+            old_size: before.size,
+            new_size: after.size,
+            additions,
+            deletions,
+            preview: preview(&before, &after),
+            diff_artifact_ref,
+            confidence: snapshot_confidence(&before, &after),
+        };
+        merge_record(&mut turn.changes, path, record);
     }
 
-    pub(super) async fn finish_turn_file_tracking(&self, context: &OperationContext) -> Vec<Value> {
+    pub(super) async fn finish_turn_file_tracking(
+        &self,
+        context: &OperationContext,
+    ) -> (Vec<Value>, bool, u64) {
         let Some(turn_id) = context.turn_id.as_deref() else {
-            return Vec::new();
+            return (Vec::new(), false, 0);
         };
-        tokio::time::sleep(std::time::Duration::from_millis(35)).await;
+        let (watcher, worker) = if let Ok(mut state) = self.file_changes.state.lock() {
+            state
+                .get_mut(turn_id)
+                .map(|turn| (turn.watcher.take(), turn.watcher_worker.take()))
+                .unwrap_or_default()
+        } else {
+            (None, None)
+        };
+        drop(watcher);
+        if let Some(worker) = worker {
+            let _ = tokio::task::spawn_blocking(move || worker.join()).await;
+        }
         let turn = self
             .file_changes
             .state
@@ -124,194 +261,315 @@ impl RuntimeHost {
             .ok()
             .and_then(|mut state| state.remove(turn_id));
         let Some(mut turn) = turn else {
-            return Vec::new();
+            return (Vec::new(), false, 0);
         };
-        drop(turn.watcher.take());
-
-        let mut result = Vec::new();
-        for (path, mut change) in turn.changes {
-            if should_ignore_path(&turn.root, &path) {
-                continue;
+        let dropped = turn.dropped_events.load(Ordering::Relaxed);
+        if dropped > 0 {
+            for record in turn.changes.values_mut() {
+                if record.origin == ChangeOrigin::ShellWatcher {
+                    record.confidence = ChangeConfidence::UnknownDueToOverflow;
+                }
             }
-            let current = read_text_snapshot(&path);
-            let exists_now = path.is_file();
-            if change.created_in_turn && change.removed_after_create && !exists_now {
-                continue;
-            }
-            if change.after.is_none() {
-                change.after = current.clone();
-            }
-            let before = change.before.unwrap_or_default();
-            let after = change.after.unwrap_or_default();
-            let kind = if !exists_now {
-                "deleted"
-            } else if change.kind_hint == Some("added") && before.is_empty() {
-                "added"
-            } else {
-                "modified"
-            };
-            if before == after && change.kind_hint.is_none() {
-                continue;
-            }
-            let (additions, deletions) = if before == after {
-                (0, 0)
-            } else {
-                line_delta(&before, &after)
-            };
-            result.push(json!({
-                "path": path,
-                "kind": kind,
-                "additions": additions,
-                "deletions": deletions,
-                "before": before,
-                "after": after,
-                "beforeAvailable": change.exact_before || kind == "added"
-            }));
         }
-        result
+        let values = turn
+            .changes
+            .into_values()
+            .filter_map(|record| serde_json::to_value(record).ok())
+            .collect();
+        (values, dropped > 0, dropped)
     }
 
     async fn turn_workspace_root(&self, context: &OperationContext) -> Option<PathBuf> {
-        if let Ok(Some(project_folder)) =
+        if let Ok(Some(folder)) =
             <Self as chatcmd_mcp::RuntimeApi>::project_folder(self, context.task_id.as_deref())
                 .await
         {
-            let path = PathBuf::from(project_folder);
+            let path = PathBuf::from(folder);
             if path.is_dir() {
-                return Some(path);
+                return std::fs::canonicalize(&path).ok().or(Some(path));
             }
         }
         None
     }
 }
 
-fn record_watcher_event(
+pub(super) fn capture_snapshot(path: &Path) -> Snapshot {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return Snapshot::default();
+    };
+    let size = metadata.len();
+    let version = metadata_version(&metadata);
+    if !metadata.is_file() {
+        return Snapshot {
+            size: Some(size),
+            version: Some(version),
+            ..Snapshot::default()
+        };
+    }
+    let Ok(mut file) = File::open(path) else {
+        return Snapshot {
+            size: Some(size),
+            version: Some(version),
+            ..Snapshot::default()
+        };
+    };
+    let mut bytes = Vec::with_capacity(
+        MAX_TEXT_SNAPSHOT_BYTES.min(usize::try_from(size).unwrap_or(MAX_TEXT_SNAPSHOT_BYTES)),
+    );
+    let truncated = size > MAX_TEXT_SNAPSHOT_BYTES as u64;
+    if truncated {
+        let half = MAX_TEXT_SNAPSHOT_BYTES / 2;
+        let mut prefix = vec![0; half];
+        let prefix_len = file.read(&mut prefix).unwrap_or(0);
+        prefix.truncate(prefix_len);
+        let mut suffix = vec![0; half];
+        let suffix_len = file
+            .seek(SeekFrom::Start(size.saturating_sub(half as u64)))
+            .and_then(|_| file.read(&mut suffix))
+            .unwrap_or(0);
+        suffix.truncate(suffix_len);
+        bytes.extend(prefix);
+        bytes.extend_from_slice(b"\n... [bounded snapshot] ...\n");
+        bytes.extend(suffix);
+    } else if file.read_to_end(&mut bytes).is_err() {
+        bytes.clear();
+    }
+    match String::from_utf8(bytes) {
+        Ok(text) => Snapshot {
+            text: Some(text),
+            size: Some(size),
+            version: Some(version),
+            binary: false,
+            truncated,
+        },
+        Err(_) => Snapshot {
+            text: None,
+            size: Some(size),
+            version: Some(version),
+            binary: true,
+            truncated,
+        },
+    }
+}
+
+fn metadata_version(metadata: &std::fs::Metadata) -> String {
+    let modified_ns = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |value| value.as_nanos());
+    format!("metadata:{}:{modified_ns}", metadata.len())
+}
+
+fn enqueue_watcher_event(sender: &SyncSender<RawWatcherEvent>, dropped: &AtomicU64, event: Event) {
+    let raw = RawWatcherEvent {
+        kind: event.kind,
+        paths: event.paths,
+    };
+    if let Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) = sender.try_send(raw) {
+        dropped.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+fn watcher_worker(
+    state: Weak<Mutex<HashMap<String, TurnState>>>,
+    turn_id: String,
+    receiver: Receiver<RawWatcherEvent>,
+) {
+    while let Ok(first) = receiver.recv() {
+        let mut batch = vec![first];
+        while batch.len() < MAX_WATCHER_EVENTS_PER_BATCH {
+            match receiver.recv_timeout(WATCHER_DEBOUNCE) {
+                Ok(event) => batch.push(event),
+                Err(_) => break,
+            }
+        }
+        record_watcher_batch(&state, &turn_id, batch);
+    }
+}
+
+fn record_watcher_batch(
     state: &Weak<Mutex<HashMap<String, TurnState>>>,
     turn_id: &str,
-    event: Event,
+    batch: Vec<RawWatcherEvent>,
 ) {
     let Some(state) = state.upgrade() else {
         return;
     };
+    let root = {
+        let Ok(state) = state.lock() else {
+            return;
+        };
+        let Some(turn) = state.get(turn_id) else {
+            return;
+        };
+        turn.root.clone()
+    };
+    let mut coalesced = BTreeMap::<PathBuf, FileChangeKind>::new();
+    for event in batch {
+        let Some(kind) = watcher_kind(&event.kind) else {
+            continue;
+        };
+        for path in event.paths.into_iter().take(MAX_WATCHER_EVENTS_PER_BATCH) {
+            let path = normalized_path(&root, &path);
+            if should_ignore_path(&root, &path) {
+                continue;
+            }
+            coalesced
+                .entry(path)
+                .and_modify(|current| *current = coalesce_kind(*current, kind))
+                .or_insert(kind);
+        }
+    }
+    // Snapshot outside the tracker mutex: slow or locked files cannot block
+    // native records or another concurrent turn.
+    let captured = coalesced
+        .into_iter()
+        .filter_map(|(path, kind)| {
+            let after = capture_snapshot(&path);
+            // A path created and removed entirely inside the debounce window is
+            // not a user-visible turn change (this also removes atomic staging files).
+            if kind == FileChangeKind::Added && after.size.is_none() {
+                None
+            } else {
+                Some((path, kind, after))
+            }
+        })
+        .collect::<Vec<_>>();
     let Ok(mut state) = state.lock() else {
         return;
     };
     let Some(turn) = state.get_mut(turn_id) else {
         return;
     };
-    let hint = event_kind_hint(&event.kind);
-    for path in event.paths {
-        let path = absolute_path(&turn.root, &path);
-        if should_ignore_path(&turn.root, &path) {
+    for (path, kind, after) in captured {
+        if turn
+            .changes
+            .get(&path)
+            .is_some_and(|record| record.origin == ChangeOrigin::NativeTool)
+        {
             continue;
         }
-        if path.is_dir() {
+        if kind == FileChangeKind::Deleted
+            && turn
+                .changes
+                .get(&path)
+                .is_some_and(|record| record.kind == FileChangeKind::Added)
+        {
+            turn.changes.remove(&path);
             continue;
         }
-        let change = turn.changes.entry(path.clone()).or_default();
-        if hint == Some("added") {
-            change.created_in_turn = true;
-            change.removed_after_create = false;
-        } else if hint == Some("deleted") && change.created_in_turn {
-            change.removed_after_create = true;
-        }
-        if change.before.is_none() {
-            if hint == Some("added") {
-                change.before = Some(String::new());
-                change.exact_before = true;
-            } else if let Some(snapshot) = read_text_snapshot(&path) {
-                change.before = Some(snapshot);
-            }
-        }
-        change.kind_hint = merge_hint(change.kind_hint, hint);
+        let record = FileChangeRecord {
+            path: path.clone(),
+            previous_path: None,
+            kind,
+            origin: ChangeOrigin::ShellWatcher,
+            old_version: None,
+            new_version: after.version.clone(),
+            old_size: None,
+            new_size: after.size,
+            additions: None,
+            deletions: None,
+            preview: preview(&Snapshot::default(), &after),
+            diff_artifact_ref: None,
+            confidence: if after.text.is_some() {
+                ChangeConfidence::Sampled
+            } else {
+                ChangeConfidence::MetadataOnly
+            },
+        };
+        merge_record(&mut turn.changes, path, record);
     }
 }
 
-fn event_kind_hint(kind: &EventKind) -> Option<&'static str> {
+fn merge_record(
+    changes: &mut BTreeMap<PathBuf, FileChangeRecord>,
+    path: PathBuf,
+    mut next: FileChangeRecord,
+) {
+    let Some(previous) = changes.remove(&path) else {
+        changes.insert(path, next);
+        return;
+    };
+    if previous.kind == FileChangeKind::Added && next.kind == FileChangeKind::Deleted {
+        return;
+    }
+    next.old_version = previous.old_version;
+    next.old_size = previous.old_size;
+    if let (Some(old_preview), Some(new_preview)) = (previous.preview, next.preview.as_mut()) {
+        new_preview.before = old_preview.before;
+        new_preview.binary |= old_preview.binary;
+        new_preview.truncated |= old_preview.truncated;
+    }
+    if previous.kind == FileChangeKind::Added {
+        next.kind = FileChangeKind::Added;
+    }
+    changes.insert(path, next);
+}
+
+fn watcher_kind(kind: &EventKind) -> Option<FileChangeKind> {
     match kind {
-        EventKind::Create(_) => Some("added"),
-        EventKind::Remove(_) => Some("deleted"),
-        EventKind::Modify(_) => Some("modified"),
+        EventKind::Create(_) => Some(FileChangeKind::Added),
+        EventKind::Remove(_) => Some(FileChangeKind::Deleted),
+        EventKind::Modify(_) => Some(FileChangeKind::Modified),
         _ => None,
     }
 }
-
-fn merge_hint(current: Option<&'static str>, next: Option<&'static str>) -> Option<&'static str> {
+fn coalesce_kind(current: FileChangeKind, next: FileChangeKind) -> FileChangeKind {
     match (current, next) {
-        (_, Some("deleted")) => Some("deleted"),
-        (Some("added"), Some("modified")) => Some("added"),
-        (_, Some(value)) => Some(value),
-        (value, None) => value,
+        (FileChangeKind::Added, FileChangeKind::Modified) => FileChangeKind::Added,
+        (_, value) => value,
     }
 }
-
-fn absolute_path(root: &Path, path: &Path) -> PathBuf {
-    if path.is_absolute() {
+fn normalized_path(root: &Path, path: &Path) -> PathBuf {
+    let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
         root.join(path)
-    }
+    };
+    std::fs::canonicalize(&absolute).unwrap_or(absolute)
 }
-
 fn should_ignore_path(root: &Path, path: &Path) -> bool {
-    if !path.starts_with(root) || transient_file(path) {
+    if !path.starts_with(root) {
         return true;
     }
+    let policy = WorkspaceIgnorePolicy;
     path.strip_prefix(root)
         .ok()
         .into_iter()
         .flat_map(Path::components)
-        .filter_map(|component| component.as_os_str().to_str())
-        .any(chatcmd_runtime::is_default_ignored_component)
+        .any(|component| policy.should_ignore_default(Path::new(component.as_os_str())))
 }
-
-fn transient_file(path: &Path) -> bool {
-    let name = path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default();
-    let lower = name.to_ascii_lowercase();
-    lower.starts_with(".tmp_") || lower.starts_with("tmp_agent_") || is_named_tempfile_name(name)
+fn snapshot_confidence(before: &Snapshot, after: &Snapshot) -> ChangeConfidence {
+    if before.binary || after.binary || (before.text.is_none() && after.text.is_none()) {
+        ChangeConfidence::MetadataOnly
+    } else if before.truncated || after.truncated {
+        ChangeConfidence::Sampled
+    } else {
+        ChangeConfidence::Exact
+    }
 }
-
-fn is_named_tempfile_name(name: &str) -> bool {
-    let Some(suffix) = name.strip_prefix(".tmp") else {
-        return false;
+fn preview(before: &Snapshot, after: &Snapshot) -> Option<DiffPreview> {
+    if before.text.is_none() && after.text.is_none() && !before.binary && !after.binary {
+        return None;
+    }
+    Some(DiffPreview {
+        before: before.text.clone(),
+        after: after.text.clone(),
+        binary: before.binary || after.binary,
+        truncated: before.truncated || after.truncated,
+    })
+}
+fn text_line_delta(before: &Snapshot, after: &Snapshot) -> (Option<u64>, Option<u64>) {
+    if before.truncated || after.truncated {
+        return (None, None);
+    }
+    let (Some(before), Some(after)) = (before.text.as_deref(), after.text.as_deref()) else {
+        return (None, None);
     };
-    suffix.len() == 6 && suffix.bytes().all(|byte| byte.is_ascii_alphanumeric())
+    let (a, d) = line_delta(before, after);
+    (Some(a as u64), Some(d as u64))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::is_named_tempfile_name;
-
-    #[test]
-    fn recognizes_tempfile_named_temp_files() {
-        assert!(is_named_tempfile_name(".tmp0GV0Gk"));
-        assert!(is_named_tempfile_name(".tmp9wyOqd"));
-    }
-
-    #[test]
-    fn keeps_normal_dot_tmp_files_trackable() {
-        assert!(!is_named_tempfile_name(".tmp"));
-        assert!(!is_named_tempfile_name(".tmp_config"));
-        assert!(!is_named_tempfile_name(".tmp-long-lived-file"));
-    }
-}
-
-fn read_text_snapshot(path: &Path) -> Option<String> {
-    let bytes = std::fs::read(path).ok()?;
-    let value = String::from_utf8(bytes).ok()?;
-    if value.len() <= MAX_TEXT_SNAPSHOT_BYTES {
-        return Some(value);
-    }
-    let mut end = MAX_TEXT_SNAPSHOT_BYTES;
-    while !value.is_char_boundary(end) {
-        end = end.saturating_sub(1);
-    }
-    Some(format!("{}\n… [truncated]", &value[..end]))
-}
-
 fn line_delta(before: &str, after: &str) -> (usize, usize) {
     let before_lines: Vec<&str> = before.lines().collect();
     let after_lines: Vec<&str> = after.lines().collect();
@@ -334,4 +592,105 @@ fn line_delta(before: &str, after: &str) -> (usize, usize) {
         after_lines.len().saturating_sub(prefix + suffix),
         before_lines.len().saturating_sub(prefix + suffix),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn large_snapshot_is_bounded() {
+        let mut file = tempfile::NamedTempFile::new().expect("temp file");
+        file.as_file_mut()
+            .set_len(1024 * 1024 * 1024)
+            .expect("create sparse 1 GiB fixture");
+        file.write_all(b"start").expect("write prefix");
+        file.seek(SeekFrom::End(-3)).expect("seek suffix");
+        file.write_all(b"end").expect("write suffix");
+        let snapshot = capture_snapshot(file.path());
+        assert_eq!(snapshot.size, Some(1024 * 1024 * 1024));
+        assert!(snapshot.truncated);
+        assert!(snapshot.text.expect("text").len() < MAX_TEXT_SNAPSHOT_BYTES + 64);
+    }
+    #[test]
+    fn binary_snapshot_is_metadata_only() {
+        let mut file = tempfile::NamedTempFile::new().expect("temp file");
+        file.write_all(&[0xff, 0xfe, 0xfd]).expect("write");
+        let snapshot = capture_snapshot(file.path());
+        assert!(snapshot.binary);
+        assert!(snapshot.text.is_none());
+    }
+    #[test]
+    fn create_then_delete_is_hidden() {
+        let path = PathBuf::from("new.txt");
+        let mut changes = BTreeMap::new();
+        let base = FileChangeRecord {
+            path: path.clone(),
+            previous_path: None,
+            kind: FileChangeKind::Added,
+            origin: ChangeOrigin::NativeTool,
+            old_version: None,
+            new_version: None,
+            old_size: None,
+            new_size: Some(1),
+            additions: Some(1),
+            deletions: Some(0),
+            preview: None,
+            diff_artifact_ref: None,
+            confidence: ChangeConfidence::Exact,
+        };
+        merge_record(&mut changes, path.clone(), base.clone());
+        merge_record(
+            &mut changes,
+            path.clone(),
+            FileChangeRecord {
+                kind: FileChangeKind::Deleted,
+                ..base
+            },
+        );
+        assert!(changes.is_empty());
+    }
+    #[test]
+    fn watcher_queue_is_bounded_and_reports_drops() {
+        let (sender, _receiver) = sync_channel(1);
+        let dropped = AtomicU64::new(0);
+        let event = || Event::new(EventKind::Any);
+        enqueue_watcher_event(&sender, &dropped, event());
+        enqueue_watcher_event(&sender, &dropped, event());
+        assert_eq!(dropped.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn event_storm_memory_is_bounded_by_channel_capacity() {
+        let (sender, _receiver) = sync_channel(64);
+        let dropped = AtomicU64::new(0);
+        for _ in 0..100_000 {
+            enqueue_watcher_event(&sender, &dropped, Event::new(EventKind::Any));
+        }
+        assert_eq!(dropped.load(Ordering::Relaxed), 99_936);
+    }
+
+    #[test]
+    fn typed_record_uses_versioned_camel_case_schema() {
+        let record = FileChangeRecord {
+            path: PathBuf::from("changed.txt"),
+            previous_path: None,
+            kind: FileChangeKind::Modified,
+            origin: ChangeOrigin::NativeTool,
+            old_version: Some("old".to_owned()),
+            new_version: Some("new".to_owned()),
+            old_size: Some(1),
+            new_size: Some(2),
+            additions: Some(1),
+            deletions: Some(0),
+            preview: None,
+            diff_artifact_ref: Some("artifact-1".to_owned()),
+            confidence: ChangeConfidence::Exact,
+        };
+        let value = serde_json::to_value(record).expect("serialize record");
+        assert_eq!(value["origin"], "nativeTool");
+        assert_eq!(value["confidence"], "exact");
+        assert_eq!(value["diffArtifactRef"], "artifact-1");
+    }
 }
