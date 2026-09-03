@@ -1,0 +1,162 @@
+name: Build desktop release
+
+run-name: Build desktop release from ${{ github.ref_name }}
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare release version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: Require main branch
+        if: github.ref != 'refs/heads/main'
+        shell: bash
+        run: |
+          echo "Desktop releases must be built from the main branch." >&2
+          exit 1
+
+      - name: Generate timestamp version
+        id: version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(TZ=Asia/Ho_Chi_Minh date '+%y.%m.%d.%H%M')"
+          tag="v${version}"
+
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" >/dev/null 2>&1; then
+            echo "Release tag ${tag} already exists. Run the workflow again after the current minute." >&2
+            exit 1
+          fi
+
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "Building ChatCMD ${version}"
+
+  windows:
+    name: Build Windows x64 and x86
+    needs: prepare
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build Windows packages
+        shell: pwsh
+        run: ./scripts/build-windows.ps1 -Version '${{ needs.prepare.outputs.version }}'
+
+      - name: Give release assets stable names
+        shell: pwsh
+        run: |
+          $version = '${{ needs.prepare.outputs.version }}'
+          Move-Item -LiteralPath "release/${version}_64.zip" -Destination 'release/ChatCMD-windows-x64.zip'
+          Move-Item -LiteralPath "release/${version}_32.zip" -Destination 'release/ChatCMD-windows-x86.zip'
+
+      - name: Upload Windows packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-packages
+          path: |
+            release/ChatCMD-windows-x64.zip
+            release/ChatCMD-windows-x86.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  macos:
+    name: Build macOS Intel and Apple Silicon
+    needs: prepare
+    runs-on: macos-15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build macOS packages
+        shell: bash
+        env:
+          CHATCMD_BUILD_VERSION: ${{ needs.prepare.outputs.version }}
+        run: ./scripts/build-macos.sh
+
+      - name: Give release assets stable names
+        shell: bash
+        env:
+          CHATCMD_BUILD_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          mv "release/${CHATCMD_BUILD_VERSION}_intel.zip" "release/ChatCMD-macos-intel.zip"
+          mv "release/${CHATCMD_BUILD_VERSION}_silicon.zip" "release/ChatCMD-macos-apple-silicon.zip"
+
+      - name: Upload macOS packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-packages
+          path: |
+            release/ChatCMD-macos-intel.zip
+            release/ChatCMD-macos-apple-silicon.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish latest release
+    needs:
+      - prepare
+      - windows
+      - macos
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Windows packages
+        uses: actions/download-artifact@v8
+        with:
+          name: windows-packages
+          path: dist
+
+      - name: Download macOS packages
+        uses: actions/download-artifact@v8
+        with:
+          name: macos-packages
+          path: dist
+
+      - name: Generate SHA-256 checksums
+        shell: bash
+        working-directory: dist
+        run: sha256sum *.zip > SHA256SUMS.txt
+
+      - name: Publish GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          gh release create "$RELEASE_TAG" dist/*.zip dist/SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "ChatCMD ${RELEASE_VERSION}" \
+            --notes "Manually triggered desktop build from main. See SHA256SUMS.txt to verify downloads. The macOS packages are ad-hoc signed and are not notarized." \
+            --latest
