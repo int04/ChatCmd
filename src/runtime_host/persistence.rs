@@ -8,7 +8,11 @@ use serde_json::{Value, json};
 use sqlx::Row as _;
 use uuid::Uuid;
 
-use super::{RuntimeHost, invalid, now_ms, storage_error, user_message::compact_task_title};
+use super::{
+    RuntimeHost, invalid, now_ms, storage_error,
+    tool_event_projection::{EventLimits, bounded_error_message, project},
+    user_message::compact_task_title,
+};
 
 impl RuntimeHost {
     pub(super) async fn call_persisted(
@@ -32,16 +36,8 @@ impl RuntimeHost {
             return Err(error);
         }
         let _activity_guard = self.activities.register(&context, tool, &arguments);
-        let persisted_arguments = persistable_input(tool, &arguments);
-        self.append_call_event(
-            &context,
-            tool,
-            "started",
-            Some(&persisted_arguments),
-            None,
-            None,
-        )
-        .await?;
+        self.append_call_event(&context, tool, "started", Some(&arguments), None, None)
+            .await?;
 
         let result = tokio::select! {
             result = self.dispatch(tool, context.clone(), arguments) => result,
@@ -58,8 +54,16 @@ impl RuntimeHost {
         };
         match result {
             Ok(output) => {
-                self.append_call_event(&context, tool, "succeeded", None, Some(&output), None)
-                    .await?;
+                if let Err(error) = self
+                    .append_call_event(&context, tool, "succeeded", None, Some(&output), None)
+                    .await
+                {
+                    tracing::warn!(
+                        tool,
+                        error_code = error.code,
+                        "tool succeeded but its bounded timeline event could not be persisted"
+                    );
+                }
                 let output = self
                     .attach_immediate_messages(&context, tool, output)
                     .await?;
@@ -95,23 +99,33 @@ impl RuntimeHost {
             &context.agent_id,
             &format!("{}\0{status}", context.request_id),
         );
+        let limits = EventLimits::default();
         let mut payload = json!({
             "activityId": context.request_id,
             "tool": tool,
-            "status": status
+            "status": status,
+            "schemaVersion": 2
         });
         if let Some(value) = input {
-            payload["input"] = value.clone();
+            let projection = project(tool, value, limits);
+            add_projection_metadata(&mut payload, "input", &projection);
+            payload["input"] = projection.public_summary;
         }
         if let Some(value) = output {
             if status == "succeeded" {
                 self.record_tool_diff(context, value);
             }
-            payload["output"] = value.clone();
+            let projection = project(tool, value, limits);
+            add_projection_metadata(&mut payload, "output", &projection);
+            payload["output"] = projection.public_summary;
         }
         if let Some(value) = error {
             payload["errorCode"] = Value::String(value.code.clone());
-            payload["errorMessage"] = Value::String(value.message.clone());
+            let (message, truncated) = bounded_error_message(&value.message, limits);
+            payload["errorMessage"] = Value::String(message);
+            if truncated {
+                payload["errorTruncated"] = Value::Bool(true);
+            }
         }
         let event_kind = if status == "started" || status == "pending_approval" {
             EventKind::ToolCall
@@ -418,30 +432,19 @@ impl RuntimeHost {
     }
 }
 
-fn persistable_input(tool: &str, arguments: &Value) -> Value {
-    let mut safe = arguments.clone();
-    let Some(object) = safe.as_object_mut() else {
-        return safe;
-    };
-    let sensitive = match tool {
-        "blob_write_chunk" => &["dataBase64", "chunkSha256"][..],
-        "blob_seal" => &["sha256"][..],
-        "fs_write_text" => &["content"][..],
-        "fs_write_raw" => &["base64"][..],
-        "fs_apply_edits" => &["edits"][..],
-        _ => &[][..],
-    };
-    for key in sensitive {
-        if let Some(value) = object.get_mut(*key) {
-            let size = match value {
-                Value::String(text) => text.len(),
-                Value::Array(items) => items.len(),
-                _ => 0,
-            };
-            *value = json!({"redacted": true, "size": size});
-        }
+fn add_projection_metadata(
+    payload: &mut Value,
+    direction: &str,
+    projection: &super::tool_event_projection::ToolEventProjection,
+) {
+    payload[format!("{direction}BytesReceived")] = json!(projection.received_bytes);
+    payload[format!("{direction}BytesProjected")] = json!(projection.projected_bytes);
+    if projection.truncated {
+        payload["payloadTruncated"] = Value::Bool(true);
     }
-    safe
+    if !projection.redactions.is_empty() {
+        payload["redactions"] = json!(projection.redactions);
+    }
 }
 
 fn enrich_tool_result(value: Value, context: &OperationContext, tool: &str) -> Value {
@@ -486,7 +489,7 @@ fn enrich_tool_result(value: Value, context: &OperationContext, tool: &str) -> V
 
 #[cfg(test)]
 mod tests {
-    use super::{enrich_tool_result, persistable_input};
+    use super::enrich_tool_result;
     use chatcmd_runtime::OperationContext;
     use serde_json::json;
 
@@ -520,25 +523,6 @@ mod tests {
         assert_eq!(result["taskId"], "task");
         assert_eq!(result["turnId"], "turn");
         assert_eq!(result["sessionId"], "session");
-    }
-
-    #[test]
-    fn large_content_is_redacted_before_timeline_persistence() {
-        let chunk = persistable_input(
-            "blob_write_chunk",
-            &json!({"uploadId":"upload", "offset":0, "dataBase64":"secret", "chunkSha256":"hash"}),
-        );
-        assert_eq!(chunk["dataBase64"]["redacted"], true);
-        assert_eq!(chunk["dataBase64"]["size"], 6);
-        assert_eq!(chunk["chunkSha256"]["redacted"], true);
-        assert_eq!(chunk["uploadId"], "upload");
-
-        let write = persistable_input(
-            "fs_write_text",
-            &json!({"path":"large.txt", "content":"private", "contentRef":"blob:v1:opaque"}),
-        );
-        assert_eq!(write["content"]["redacted"], true);
-        assert_eq!(write["contentRef"], "blob:v1:opaque");
     }
 }
 

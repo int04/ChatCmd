@@ -105,6 +105,72 @@ pub(super) fn turn_context(
 }
 
 #[tokio::test]
+async fn large_tool_content_is_absent_from_sqlite_and_realtime() {
+    let (host, agent_id, _directory) = test_host().await;
+    let scope = "conversation-bounded-tool-events";
+    let turn = "turn-bounded-tool-events";
+    let accepted = host
+        .call_persisted(
+            "agent_user_message",
+            turn_context("bounded-user", &agent_id, "agent_user_message", turn, scope),
+            json!({"content":"Read the test file"}),
+        )
+        .await
+        .expect("sync user message");
+    let task_id = accepted["taskId"].as_str().expect("task ID").to_owned();
+    let turn_id = accepted["turnId"].as_str().expect("turn ID").to_owned();
+    let session_id = accepted["sessionId"]
+        .as_str()
+        .expect("session ID")
+        .to_owned();
+    let marker = "PRIVATE-TOOL-EVENT-MARKER";
+    let output = json!({
+        "path": "large.txt",
+        "content": marker.repeat(50_000),
+        "version": "v1:test"
+    });
+    let mut context = OperationContext::new("bounded-read", &agent_id, "fs_read_text");
+    context.task_id = Some(task_id.clone());
+    context.turn_id = Some(turn_id);
+    context.mcp_session_id = Some(session_id);
+    let mut realtime = host.events.subscribe();
+
+    host.append_call_event(
+        &context,
+        "fs_read_text",
+        "succeeded",
+        None,
+        Some(&output),
+        None,
+    )
+    .await
+    .expect("persist bounded event");
+
+    let stored: String = sqlx::query_scalar(
+        "SELECT payload_json FROM timeline_events WHERE task_id=? AND json_extract(payload_json,'$.activityId')='bounded-read' AND json_extract(payload_json,'$.status')='succeeded'",
+    )
+    .bind(&task_id)
+    .fetch_one(host.repository.pool())
+    .await
+    .expect("read bounded timeline event");
+    assert!(!stored.contains(marker));
+    assert!(
+        stored.len() <= 66 * 1024,
+        "stored event was {} bytes",
+        stored.len()
+    );
+
+    let event = realtime.recv().await.expect("realtime event");
+    let encoded = serde_json::to_string(&event).expect("serialize realtime event");
+    assert!(!encoded.contains(marker));
+    assert!(
+        encoded.len() <= 66 * 1024,
+        "realtime event was {} bytes",
+        encoded.len()
+    );
+}
+
+#[tokio::test]
 async fn user_message_is_required_first_and_is_idempotent_per_turn() {
     let (host, agent_id, _directory) = test_host().await;
     let scope = "conversation-user-message-sync";

@@ -210,3 +210,15 @@ Chạy frontend build/typecheck/test nếu sửa UI.
 - File/schema/migration/UI đã đổi.
 - Test marker/privacy và benchmark DB/RAM/realtime.
 - Compatibility với timeline cũ.
+
+## CHECK REQUIRED — Remaining implementation and validation
+
+The bounded schema-v2 projection, recursive sensitive-field redaction, SQLite/realtime marker test, terminal de-duplication policy, and degraded persistence behavior are implemented. The following Plan 13 items still require follow-up before full acceptance:
+
+- Implement a dedicated managed `ToolPayloadArtifactStore`. The existing artifact registry points to user-controlled workspace files and does not provide payload-specific atomic finalize, per-owner quota, TTL/GC, startup orphan reconciliation, or concurrent GC/read guarantees.
+- Add automatic streaming externalization for reloadable large read/Git/diff results. The current projection preserves an existing `contentRef` but otherwise safely redacts or truncates oversized timeline data instead of creating a new artifact.
+- Add database schema fields/indexes and a lazy summary query for historical multi-megabyte timeline rows. Schema-v2 events remain backward compatible through JSON, but old rows are not migrated or cleaned up.
+- Export projection counters to the application's metrics backend. Events currently include received/projected byte counters and redaction/truncation metadata, but there are no aggregate persisted/realtime/externalized/redacted metrics.
+- Run and record the required 1 MB, 100 MB, and 1 GB contentRef benchmarks for peak RAM, SQLite growth, realtime bytes, artifact bytes, and serialization time.
+- Exercise artifact failure after a successful mutation, database outage, slow/disconnected WebSocket subscribers, task deletion during artifact creation, and concurrent artifact GC/read.
+- Verify the timeline UI manually with both legacy full-payload events and schema-v2 projected events. No frontend code changed, and the Rust workspace tests passed, but browser-level rendering was not run.
