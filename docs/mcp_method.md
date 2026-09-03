@@ -4,10 +4,10 @@ Tài liệu này liệt kê các MCP tool/method mà `chatcmd-mcp` hiện expose
 
 Nguồn đối chiếu chính:
 
-- `crates/chatcmd-mcp/src/tool_catalog.rs` — danh sách method ổn định được expose.
-- `crates/chatcmd-mcp/src/lib.rs` — schema/description của từng method.
+- `crates/chatcmd-mcp/src/lib.rs` — đăng ký rmcp router + schema/description của từng method; đây là source of truth runtime.
+- `crates/chatcmd-mcp/src/tool_catalog.rs` — sinh canonical manifest, capability flags, metadata và `catalogHash` trực tiếp từ rmcp router; không duy trì danh sách tool thủ công thứ hai.
 
-> Tổng số hiện tại: **45 methods**.
+> Tổng số method phải lấy từ generated catalog/runtime thay vì hard-code trong tài liệu hoặc connector.
 
 ## Quy ước chung
 
@@ -145,57 +145,17 @@ Lưu ý: `fs_find`, `fs_search`, `fs_read_text`, các tool sửa file, shell, Gi
 
 ---
 
-## 9. Danh sách đầy đủ theo thứ tự server expose
+## 9. Generated catalog, version và cache invalidation
 
-Thứ tự ổn định hiện tại trong `TOOL_NAMES`:
+`TOOL_NAMES` được sinh từ chính `McpServer::tool_router().list_all()` và sort deterministic. Không copy danh sách tool sang connector, UI, release script hoặc tài liệu.
 
-```text
-01. device_list
-02. device_get
-03. shell_create
-04. shell_write
-05. shell_wait
-06. shell_read
-07. shell_signal
-08. shell_resize
-09. shell_close
-10. shell_list
-11. shell_inspect
-12. workspace_roots
-13. fs_list
-14. fs_search
-15. fs_find
-16. fs_read_text
-17. fs_write_text
-18. fs_replace_text
-19. fs_write_raw
-20. fs_stat
-21. fs_create_directory
-22. fs_copy
-23. fs_move
-24. fs_delete
-25. git_status
-26. git_diff
-27. git_log
-28. git_branch
-29. git_show
-30. git_commit
-31. process_list
-32. process_inspect
-33. process_kill
-34. skills_list
-35. skill_read
-36. task_get
-37. task_list
-38. task_set_execution_mode
-39. task_artifact_list
-40. task_artifact_read
-41. agent_user_message
-42. agent_progress
-43. agent_subagent_start
-44. agent_subagent_wait
-45. agent_turn_complete
-```
+Canonical manifest chứa `protocolVersion`, `catalogVersion` và với mỗi tool có `name`, normalized input schema cùng capability flags. Trước khi hash SHA-256, object keys được sort và metadata chỉ để mô tả như `description`/`title` được bỏ khỏi contract; vì vậy đổi wording không làm invalid cache, còn đổi property/type/required/capability sẽ làm đổi `catalogHash`.
+
+Metadata runtime gồm `appVersion`, `protocolVersion`, `catalogVersion`, `catalogHash`, `buildId`. MCP initialize trả metadata dưới prefix `CHATCMD_CATALOG_METADATA=...` trong server instructions. HTTP host cũng expose endpoint authenticated `GET /mcp/{token}/catalog` để diagnostics lấy metadata + canonical manifest; token vẫn chỉ ở auth boundary và không được ghi vào structured catalog log.
+
+Caller có thể gửi `clientCatalogHash` trong common tool arguments. Nếu hash khác server, request fail-fast với `error.code = "catalog_mismatch"`, kèm cả `clientCatalogHash`, `serverCatalogHash` và recovery instruction. Connector phải bỏ schema cache cũ, reconnect/initialize/list_tools lại và chỉ retry operation tối đa một lần sau refresh để tránh retry loop.
+
+Release gate cho catalog là `cargo test -p chatcmd-mcp --test release_catalog_smoke`: test spawn binary `catalog_smoke_server` qua stdio transport thật hai lần, gọi MCP initialize/list_tools, bắt buộc có `fs_replace_text`, và so names + normalized schema với canonical manifest. Gate này cần chạy trên cả Windows và macOS ở CI/release pipeline; repository hiện không có `.github/workflows`, nên command này được giữ trong Cargo test suite để pipeline hiện có/tương lai gọi trực tiếp.
 
 ---
 
@@ -258,8 +218,8 @@ Nếu command/tool trả lỗi hoặc exit code khác 0, `agent_progress` phải
 
 Khi thêm/xóa/đổi tên MCP tool, cần đồng bộ ít nhất:
 
-1. `crates/chatcmd-mcp/src/tool_catalog.rs` — cập nhật `TOOL_NAMES`.
-2. `crates/chatcmd-mcp/src/lib.rs` — schema argument + tool description + handler/router.
-3. Runtime dispatch/handler tương ứng ở phía ChatCMD nếu method cần xử lý mới.
-4. Test liên quan tới tool catalog/schema/dispatch.
-5. Cập nhật lại file `docs/mcp_method.md` này để tài liệu không lệch code.
+1. `crates/chatcmd-mcp/src/lib.rs` — thêm/sửa schema argument + tool description + handler trong rmcp router. `TOOL_NAMES` và canonical manifest sẽ tự sinh từ router này.
+2. Runtime dispatch/handler tương ứng ở phía ChatCMD nếu method cần xử lý mới.
+3. Xác định capability flags trong `tool_catalog.rs` nếu semantics mới không được rule hiện tại bao phủ.
+4. Chạy invariant tests catalog/schema/dispatcher và `release_catalog_smoke`; mọi thay đổi contract hợp lệ phải làm `catalogHash` thay đổi.
+5. Cập nhật tài liệu về semantics nếu cần, nhưng không copy lại full tool list để tránh drift.

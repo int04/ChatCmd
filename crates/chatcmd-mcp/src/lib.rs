@@ -7,12 +7,12 @@ mod subagent_worker;
 mod tool_catalog;
 
 use axum::{
-    Router,
+    Json, Router,
     body::Body,
     extract::{Path, Request, State},
     http::{HeaderMap, StatusCode, Uri},
     response::{IntoResponse, Response},
-    routing::any,
+    routing::{any, get},
 };
 use chatcmd_runtime::{BoxFuture, DeviceDescriptor, OperationContext, RuntimeError, RuntimeResult};
 use rmcp::{
@@ -31,7 +31,10 @@ use tower::ServiceExt;
 
 use server_contract::error_value;
 
-pub use tool_catalog::TOOL_NAMES;
+pub use tool_catalog::{
+    CATALOG_VERSION, CatalogMetadata, PROTOCOL_VERSION, TOOL_NAMES, canonical_manifest,
+    catalog_hash, catalog_metadata,
+};
 
 /// Path-token authentication dependency injected by the HTTP host.
 pub trait AuthProvider: Send + Sync {
@@ -95,6 +98,9 @@ pub struct ToolArguments {
     /// Turn correlation identifier.
     #[serde(default)]
     pub turn_id: Option<String>,
+    /// Catalog hash last observed by the caller. When present it must match this server build.
+    #[serde(default)]
+    pub client_catalog_hash: Option<String>,
     /// HTTP-bound, server-derived correlation. Hidden from MCP input schema.
     #[serde(default, rename = "__chatcmdMcpSessionId")]
     #[schemars(skip)]
@@ -123,6 +129,9 @@ struct CommonToolArgs {
     /// Turn correlation identifier reused for every call in the current user turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     turn_id: Option<String>,
+    /// Catalog hash last observed by the caller. Send it to detect stale cached schemas.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    client_catalog_hash: Option<String>,
     #[serde(
         default,
         rename = "__chatcmdMcpSessionId",
@@ -397,6 +406,9 @@ impl McpServer {
     }
 
     async fn invoke(&self, tool_name: &'static str, arguments: ToolArguments) -> CallToolResult {
+        if let Some(mismatch) = catalog_mismatch(&arguments) {
+            return mismatch;
+        }
         let (context, value) = self.prepare_call(tool_name, arguments);
         match self.runtime.call(tool_name, context, value).await {
             Ok(value) => CallToolResult::structured(value),
@@ -409,6 +421,9 @@ impl McpServer {
         arguments: ToolArguments,
         peer: Peer<RoleServer>,
     ) -> CallToolResult {
+        if let Some(mismatch) = catalog_mismatch(&arguments) {
+            return mismatch;
+        }
         let (context, value) = self.prepare_call("agent_subagent_start", arguments);
         let request = value
             .get("request")
@@ -464,6 +479,27 @@ impl McpServer {
             }
         }
     }
+}
+
+fn catalog_mismatch(arguments: &ToolArguments) -> Option<CallToolResult> {
+    let client_hash = arguments.client_catalog_hash.as_deref()?;
+    let metadata = catalog_metadata();
+    if client_hash == metadata.catalog_hash {
+        return None;
+    }
+    Some(CallToolResult::structured_error(serde_json::json!({
+        "error": {
+            "code": "catalog_mismatch",
+            "message": "MCP tool catalog changed; refresh tool schemas and reconnect before retrying",
+            "retryable": true,
+            "approvalRequired": false
+        },
+        "serverCatalogHash": metadata.catalog_hash,
+        "clientCatalogHash": client_hash,
+        "catalogVersion": metadata.catalog_version,
+        "protocolVersion": metadata.protocol_version,
+        "recovery": "discard cached tool schemas, reconnect, initialize, and list_tools again"
+    })))
 }
 
 macro_rules! tool_methods {
@@ -795,6 +831,19 @@ async fn mcp_handler(
         .get("mcp-session-id")
         .and_then(|value| value.to_str().ok());
     let session_id = local_mcp_session_id(&agent_id, header_session);
+    let metadata = catalog_metadata();
+    tracing::info!(
+        target: "chatcmd_mcp_catalog",
+        app_version = %metadata.app_version,
+        protocol_version = metadata.protocol_version,
+        catalog_version = metadata.catalog_version,
+        catalog_hash = %metadata.catalog_hash,
+        build_id = %metadata.build_id,
+        transport = "streamable_http",
+        agent_id = %agent_id,
+        mcp_session_id = %session_id,
+        "mcp_session_catalog"
+    );
 
     // Bind tool identity and safe correlation before rmcp moves work into its session task.
     // Client-provided `agent_id` values (for example a ChatGPT connector name) never win.
@@ -814,6 +863,27 @@ async fn mcp_handler(
         Ok(response) => response.into_response(),
         Err(infallible) => match infallible {},
     }
+}
+
+async fn catalog_handler(
+    State(state): State<McpHttpState>,
+    Path(token): Path<String>,
+    headers: HeaderMap,
+    uri: Uri,
+) -> Response {
+    if state
+        .security
+        .authorize(&token, &headers, uri.query())
+        .await
+        .is_err()
+    {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    Json(serde_json::json!({
+        "metadata": catalog_metadata(),
+        "manifest": canonical_manifest()
+    }))
+    .into_response()
 }
 
 fn local_mcp_session_id(agent_id: &str, header_session: Option<&str>) -> String {
@@ -869,6 +939,7 @@ pub fn axum_router_with_host_validation(
     };
     Router::new()
         .route("/mcp/{token}", any(mcp_handler))
+        .route("/mcp/{token}/catalog", get(catalog_handler))
         .with_state(state)
 }
 

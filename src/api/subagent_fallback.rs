@@ -404,12 +404,16 @@ fn fallback_request_value(row: &sqlx::sqlite::SqliteRow, attempt: i64) -> Value 
     })
 }
 
-fn fallback_submitted_content(agent_name: Option<&str>, request: &str, subagent_id: &str) -> String {
+fn fallback_submitted_content(
+    agent_name: Option<&str>,
+    request: &str,
+    subagent_id: &str,
+) -> String {
     let delegated_prompt = format!("{request}\n\nCMDGPT_SUBAGENT_ID={subagent_id}");
     match agent_name.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(agent_name) => format!(
-            "Sử dụng plugin @{agent_name} để thực hiện yêu cầu sau:\n\n{delegated_prompt}"
-        ),
+        Some(agent_name) => {
+            format!("Sử dụng plugin @{agent_name} để thực hiện yêu cầu sau:\n\n{delegated_prompt}")
+        }
         None => delegated_prompt,
     }
 }

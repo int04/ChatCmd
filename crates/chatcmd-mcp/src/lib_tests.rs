@@ -111,30 +111,96 @@ async fn list_tools_from_fresh_connection() -> Vec<String> {
 }
 
 #[test]
-fn catalog_names_are_stable_and_unique() {
-    let mut names = TOOL_NAMES.to_vec();
-    names.sort_unstable();
-    names.dedup();
-    assert_eq!(names.len(), TOOL_NAMES.len());
-    assert_eq!(TOOL_NAMES.first(), Some(&"device_list"));
-    assert_eq!(TOOL_NAMES.last(), Some(&"agent_turn_complete"));
-    assert!(TOOL_NAMES.contains(&"agent_user_message"));
-    assert!(TOOL_NAMES.contains(&"fs_replace_text"));
+fn catalog_names_are_sorted_stable_and_unique() {
+    let mut sorted = TOOL_NAMES.to_vec();
+    sorted.sort_unstable();
+    assert_eq!(TOOL_NAMES.as_slice(), sorted.as_slice());
+    sorted.dedup();
+    assert_eq!(sorted.len(), TOOL_NAMES.len());
+    assert!(TOOL_NAMES.iter().any(|name| name == "agent_user_message"));
+    assert!(TOOL_NAMES.iter().any(|name| name == "fs_replace_text"));
 }
 
 #[tokio::test]
 async fn fresh_mcp_connections_advertise_every_declared_tool() {
-    let mut declared = TOOL_NAMES
-        .iter()
-        .map(|name| (*name).to_owned())
-        .collect::<Vec<_>>();
-    declared.sort_unstable();
-
+    let declared = TOOL_NAMES.to_vec();
     let initial = list_tools_from_fresh_connection().await;
     let reconnected = list_tools_from_fresh_connection().await;
 
     assert_eq!(initial, declared);
     assert_eq!(reconnected, declared);
+}
+
+#[test]
+fn canonical_manifest_has_schema_for_every_tool() {
+    let manifest = canonical_manifest();
+    let tools = manifest["tools"].as_array().expect("manifest tools");
+    assert_eq!(tools.len(), TOOL_NAMES.len());
+    for (index, tool) in tools.iter().enumerate() {
+        assert_eq!(tool["name"].as_str(), Some(TOOL_NAMES[index].as_str()));
+        assert!(
+            !tool["schema"].is_null(),
+            "{} has no schema",
+            TOOL_NAMES[index]
+        );
+        assert!(tool["capabilities"].is_object());
+    }
+}
+
+#[test]
+fn contract_hash_changes_for_schema_changes_but_not_descriptions() {
+    let base = serde_json::json!({
+        "name": "demo",
+        "description": "first wording",
+        "schema": {"type":"object", "properties":{"path":{"type":"string", "description":"old"}}}
+    });
+    let wording_only = serde_json::json!({
+        "name": "demo",
+        "description": "different wording",
+        "schema": {"type":"object", "properties":{"path":{"type":"string", "description":"new"}}}
+    });
+    let schema_changed = serde_json::json!({
+        "name": "demo",
+        "description": "different wording",
+        "schema": {"type":"object", "properties":{"path":{"type":"integer", "description":"new"}}}
+    });
+    assert_eq!(
+        tool_catalog::hash_manifest_value(&base),
+        tool_catalog::hash_manifest_value(&wording_only)
+    );
+    assert_ne!(
+        tool_catalog::hash_manifest_value(&base),
+        tool_catalog::hash_manifest_value(&schema_changed)
+    );
+}
+
+#[test]
+fn metadata_hash_matches_canonical_manifest() {
+    let metadata = catalog_metadata();
+    assert_eq!(metadata.catalog_hash, catalog_hash());
+    assert_eq!(metadata.protocol_version, PROTOCOL_VERSION);
+    assert_eq!(metadata.catalog_version, CATALOG_VERSION);
+    assert!(metadata.catalog_hash.starts_with("sha256:"));
+}
+
+#[test]
+fn common_tool_schema_exposes_catalog_hash_for_stale_cache_detection() {
+    let schema = serde_json::to_value(schemars::schema_for!(CommonToolArgs))
+        .expect("serialize common schema");
+    assert!(schema["properties"].get("clientCatalogHash").is_some());
+}
+
+#[test]
+fn stale_catalog_diagnostic_contains_both_hashes() {
+    let arguments = ToolArguments {
+        client_catalog_hash: Some("sha256:stale".to_owned()),
+        ..ToolArguments::default()
+    };
+    let result = catalog_mismatch(&arguments).expect("stale hash must fail");
+    let structured = result.structured_content.expect("structured mismatch");
+    assert_eq!(structured["clientCatalogHash"], "sha256:stale");
+    assert_eq!(structured["serverCatalogHash"], catalog_hash());
+    assert_eq!(structured["error"]["code"], "catalog_mismatch");
 }
 
 #[test]

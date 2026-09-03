@@ -321,7 +321,7 @@ async fn seed_catalog(repository: &SqliteRepository) -> Result<(), chatcmd_core:
         .iter()
         .map(|name| ToolDefinition {
             id: seeded_tool_id(name),
-            key: (*name).to_owned(),
+            key: name.clone(),
             group_id: tool_group_id(name).to_owned(),
             title: name.replace('_', " "),
             description: format!("Local {name} operation"),
@@ -333,10 +333,10 @@ async fn seed_catalog(repository: &SqliteRepository) -> Result<(), chatcmd_core:
                 "process_kill",
                 "shell_close",
             ]
-            .contains(name)
+            .contains(&name.as_str())
             {
                 vec![ToolCapability::Destructive]
-            } else if name.starts_with("fs_write") || *name == "fs_replace_text" {
+            } else if name.starts_with("fs_write") || name.as_str() == "fs_replace_text" {
                 vec![ToolCapability::Write]
             } else {
                 vec![ToolCapability::Read]
@@ -511,5 +511,20 @@ mod tests {
     fn trace_route_never_logs_mcp_tokens() {
         assert_eq!(trace_route("/mcp/super-secret-token"), "/mcp/{token}");
         assert_eq!(trace_route("/api/health"), "/api/health");
+    }
+
+    #[test]
+    fn runtime_dispatcher_matches_generated_mcp_catalog() {
+        let mut dispatched = include_str!("runtime_host/dispatch.rs")
+            .lines()
+            .filter_map(|line| {
+                let rest = line.strip_prefix("            \"")?;
+                let (name, tail) = rest.split_once('"')?;
+                tail.trim_start().starts_with("=>").then(|| name.to_owned())
+            })
+            .collect::<Vec<_>>();
+        dispatched.sort_unstable();
+        dispatched.dedup();
+        assert_eq!(dispatched.as_slice(), chatcmd_mcp::TOOL_NAMES.as_slice());
     }
 }

@@ -15,8 +15,12 @@ const TASK_WORKSPACE_INSTRUCTIONS: &str = "TASK WORKSPACE RESULT RULE: treat pro
 #[tool_handler]
 impl ServerHandler for McpServer {
     fn get_info(&self) -> ServerInfo {
+        let metadata = serde_json::to_string(&super::catalog_metadata())
+            .expect("catalog metadata must serialize");
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
-            format!("{SERVER_INSTRUCTIONS} {TASK_WORKSPACE_INSTRUCTIONS}"),
+            format!(
+                "CHATCMD_CATALOG_METADATA={metadata} {SERVER_INSTRUCTIONS} {TASK_WORKSPACE_INSTRUCTIONS}"
+            ),
         )
     }
 }
