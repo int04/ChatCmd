@@ -48,7 +48,35 @@ pub(super) fn resolve_relative_paths(
             Value::String(base.join(path).to_string_lossy().into_owned()),
         );
     }
+    if let Some(paths) = object.get_mut("paths").and_then(Value::as_array_mut) {
+        for value in paths {
+            resolve_path_value(value, base)?;
+        }
+    }
+    if let Some(requests) = object.get_mut("requests").and_then(Value::as_array_mut) {
+        for request in requests {
+            if let Some(value) = request
+                .as_object_mut()
+                .and_then(|item| item.get_mut("path"))
+            {
+                resolve_path_value(value, base)?;
+            }
+        }
+    }
     Ok(arguments)
+}
+
+fn resolve_path_value(value: &mut Value, base: Option<&Path>) -> RuntimeResult<()> {
+    let Some(raw) = value.as_str() else {
+        return Ok(());
+    };
+    let path = Path::new(raw);
+    if path.is_absolute() {
+        return Ok(());
+    }
+    let base = base.ok_or_else(|| RuntimeError::new("project_folder_required", "relative filesystem path requires the task project folder or an explicit absolute work path"))?;
+    *value = Value::String(base.join(path).to_string_lossy().into_owned());
+    Ok(())
 }
 
 pub(super) async fn search(
@@ -454,6 +482,27 @@ mod tests {
         assert_eq!(
             Path::new(resolved["destination"].as_str().expect("destination")),
             base.join("web/b.ts")
+        );
+    }
+
+    #[test]
+    fn relative_batch_paths_are_anchored_to_project_folder() {
+        let base = Path::new("D:/DEV/CmdGPT/ChatCmdClient");
+        let resolved = resolve_relative_paths(
+            json!({
+                "paths": ["src/a.rs", "src/b.rs"],
+                "requests": [{"path": "docs/readme.md"}]
+            }),
+            Some(base),
+        )
+        .expect("resolve batch paths");
+        assert_eq!(
+            Path::new(resolved["paths"][0].as_str().expect("stat path")),
+            base.join("src/a.rs")
+        );
+        assert_eq!(
+            Path::new(resolved["requests"][0]["path"].as_str().expect("read path")),
+            base.join("docs/readme.md")
         );
     }
 

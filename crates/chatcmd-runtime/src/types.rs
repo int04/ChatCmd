@@ -493,6 +493,78 @@ pub struct FsStatResult {
     pub symlink: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FsBatchStatRequest {
+    pub paths: Vec<PathBuf>,
+    #[serde(default)]
+    pub version_strength: VersionStrength,
+    #[serde(default = "default_batch_stat_max_items")]
+    pub max_items: usize,
+    #[serde(default)]
+    pub budget: FsBatchStatBudget,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FsBatchStatBudget {
+    #[serde(default = "default_fs_stat_timeout_ms")]
+    pub timeout_ms: u64,
+    #[serde(default = "default_batch_stat_max_items")]
+    pub max_metadata_calls: usize,
+    #[serde(default = "default_fs_stat_max_bytes_read")]
+    pub max_bytes_read: u64,
+}
+
+impl Default for FsBatchStatBudget {
+    fn default() -> Self {
+        Self {
+            timeout_ms: default_fs_stat_timeout_ms(),
+            max_metadata_calls: default_batch_stat_max_items(),
+            max_bytes_read: default_fs_stat_max_bytes_read(),
+        }
+    }
+}
+
+const fn default_batch_stat_max_items() -> usize {
+    500
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FsBatchStatItem {
+    pub path: PathBuf,
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stat: Option<FsStatResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<BatchItemError>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchItemError {
+    pub code: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FsBatchUsage {
+    pub requested: usize,
+    pub succeeded: usize,
+    pub failed: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FsBatchStatResult {
+    pub items: Vec<FsBatchStatItem>,
+    pub usage: FsBatchUsage,
+    pub index_used: bool,
+    pub index_generation: Option<u64>,
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum FsListSort {
@@ -938,6 +1010,71 @@ pub struct TextReadResultV2 {
     pub line_ending_detection: String,
     pub total_lines: Option<usize>,
     pub total_lines_known: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FsBatchReadRequest {
+    pub requests: Vec<TextReadRequestV2>,
+    #[serde(default = "default_batch_read_max_items")]
+    pub max_items: usize,
+    #[serde(default = "default_batch_read_output_bytes")]
+    pub max_total_output_bytes: usize,
+    #[serde(default = "default_batch_read_concurrency")]
+    pub concurrency: usize,
+    #[serde(default)]
+    pub budget: TextReadBudget,
+}
+
+const fn default_batch_read_max_items() -> usize {
+    50
+}
+const fn default_batch_read_output_bytes() -> usize {
+    1024 * 1024
+}
+const fn default_batch_read_concurrency() -> usize {
+    4
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FsBatchReadItem {
+    pub path: PathBuf,
+    pub ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<TextReadResultV2>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<BatchItemError>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FsBatchReadResult {
+    pub items: Vec<FsBatchReadItem>,
+    pub usage: FsBatchUsage,
+    pub output_bytes: usize,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum IndexFreshness {
+    Fresh,
+    Stale,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceIndexStatus {
+    pub root: PathBuf,
+    pub available: bool,
+    pub generation: u64,
+    pub freshness: IndexFreshness,
+    pub entry_count: usize,
+    pub indexed_bytes: u64,
+    pub schema_version: u32,
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]

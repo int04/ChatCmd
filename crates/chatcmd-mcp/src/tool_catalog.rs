@@ -128,7 +128,10 @@ fn capability_flags(name: &str) -> ToolCapabilityFlags {
             "fs_write_text" | "fs_write_raw" | "fs_apply_edits" | "task_artifact_read"
         ),
         mutating: is_mutating(name),
-        streaming: matches!(name, "shell_read" | "fs_read_text_v2" | "fs_apply_edits"),
+        streaming: matches!(
+            name,
+            "shell_read" | "fs_read_text_v2" | "fs_batch_read" | "fs_apply_edits"
+        ),
         result_schema_version: matches!(name, "fs_list_v2" | "fs_find" | "fs_search")
             .then_some(chatcmd_runtime::TOOL_RESULT_SCHEMA_VERSION),
         deprecated_aliases: Vec::new(),
@@ -149,6 +152,15 @@ fn result_schema(name: &str) -> Value {
         "fs_read_text_v2" => {
             serde_json::to_value(schemars::schema_for!(chatcmd_runtime::TextReadResultV2))
         }
+        "fs_batch_read" => {
+            serde_json::to_value(schemars::schema_for!(chatcmd_runtime::FsBatchReadResult))
+        }
+        "fs_batch_stat" => {
+            serde_json::to_value(schemars::schema_for!(chatcmd_runtime::FsBatchStatResult))
+        }
+        "workspace_index_status" | "workspace_index_rebuild" => {
+            serde_json::to_value(schemars::schema_for!(chatcmd_runtime::WorkspaceIndexStatus))
+        }
         "fs_apply_edits" => {
             serde_json::to_value(schemars::schema_for!(chatcmd_runtime::ApplyEditsResult))
         }
@@ -166,6 +178,7 @@ fn is_mutating(name: &str) -> bool {
         || name.starts_with("fs_write")
         || name.starts_with("fs_replace")
         || name == "fs_apply_edits"
+        || name == "workspace_index_rebuild"
         || name.starts_with("fs_create")
         || matches!(
             name,

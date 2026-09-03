@@ -196,6 +196,15 @@ tool_args!(StatArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     hash_algorithm: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    budget: Option<chatcmd_runtime::FsBatchStatBudget>
+});
+tool_args!(BatchStatArgs {
+    paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    version_strength: Option<chatcmd_runtime::VersionStrength>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_items: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     budget: Option<chatcmd_runtime::FsStatBudget>
 });
 tool_args!(CwdArgs {
@@ -456,6 +465,17 @@ tool_args!(ReadV2Args {
     expected_version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     budget: Option<ReadBudgetArgs>
+});
+tool_args!(BatchReadArgs {
+    requests: Vec<chatcmd_runtime::TextReadRequestV2>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_items: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_total_output_bytes: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    concurrency: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    budget: Option<chatcmd_runtime::TextReadBudget>
 });
 tool_args!(WriteTextArgs {
     path: String,
@@ -892,6 +912,11 @@ tool_methods!(
         "Stream bounded UTF-8 workspace text without loading the whole file. Required fields: path and range {unit: line|byte, start, limit}. Optional maxBytes, includeLineEndings (default true), expectedVersion, and budget {timeoutMs,maxBytesRead}. Results include continuation offsets, truncation reason, bytesRead, sizeBytes, versionToken, encoding/BOM and newline metadata."
     ),
     (
+        fs_batch_read,
+        BatchReadArgs,
+        "Read multiple bounded text ranges with ordered per-item outcomes, bounded concurrency, and a hard aggregate output cap. Each request uses the fs_read_text_v2 streaming contract."
+    ),
+    (
         fs_write_text,
         WriteTextArgs,
         "Atomically write UTF-8 workspace text. Required path and exactly one of content or contentRef; optional overwrite, expectedVersion, metadataPolicy=preserve|default, durability=none|data|full, requireAtomic. Inline content is capped at 256 KiB."
@@ -915,6 +940,21 @@ tool_methods!(
         fs_stat,
         StatArgs,
         "Inspect workspace path metadata and return a signed optimistic-concurrency versionToken. Required field: path. Optional versionStrength=metadata|sampled|content (default metadata), hashAlgorithm=sha256, budget {timeoutMs,maxBytesRead}. Metadata mode does not read file content; sampled/content hashing is bounded and cancellable. Symlinks and reparse points are not followed."
+    ),
+    (
+        fs_batch_stat,
+        BatchStatArgs,
+        "Inspect up to 500 workspace paths in input order. Returns a success or structured error for every item and preserves fs_stat path authorization and version semantics."
+    ),
+    (
+        workspace_index_status,
+        PathArgs,
+        "Report the path/metadata repository index generation, freshness, entry count, schema version, and last build error for an authorized workspace root."
+    ),
+    (
+        workspace_index_rebuild,
+        PathArgs,
+        "Rebuild the bounded path/metadata repository index for an authorized workspace root. Content is never stored."
     ),
     (
         fs_create_directory,

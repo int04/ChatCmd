@@ -231,3 +231,12 @@ cargo test --workspace
 - File/migration/UI đã đổi.
 - Benchmark cold/warm/incremental/DB size.
 - Phase nào hoàn thành, phase nào chủ động để sau.
+
+## CHECK — Nội dung cần kiểm tra hoặc hoàn thiện sau
+
+- Lần chạy `cargo fmt --check` đầu tiên thất bại vì các file mới chưa được format; đã chạy `cargo fmt --all` và validation lại thành công.
+- `cargo test --workspace` có một failure ngoài phạm vi Plan 20: `shell_reader_retires_exited_session_without_wait` trả `session_not_found` tại `crates/chatcmd-runtime/tests/direct_runtime.rs:414`; cần kiểm tra race/flakiness của terminal replay lifecycle.
+- `cargo clippy -p chatcmd-runtime -p chatcmd-mcp --all-targets -- -D warnings` fail vì 6 lint pre-existing: `collapsible_if`, hai `too_many_arguments`, `redundant_guards`, `manual_clamp`, và `items_after_test_module` trong các file runtime hiện hữu; không có lỗi trỏ vào file Plan 20 mới.
+- Runtime index hiện hoàn thành crawl metadata in-memory, generation/status, cancellation, hard cap và stale marking cho native mutations. Chưa hydrate/publish snapshot qua SQLite schema 17, chưa có batch transaction, quota theo kích thước DB hoặc cleanup root lifecycle.
+- Chưa bật indexed `fs_find_v2`/candidate filtering cho search vì watcher update, overflow semantics, restart reconcile và direct stale verification chưa hoàn chỉnh; direct bounded walker vẫn là correctness fallback.
+- Chưa có benchmark bắt buộc 100k/1m paths, incremental 1/100/10.000 changes, DB size/memory/CPU p50/p95 và batch-vs-N-calls. Phase B text index và Phase C symbol index chủ động để sau.

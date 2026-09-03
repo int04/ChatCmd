@@ -25,6 +25,8 @@ mod list;
 mod mutations;
 #[path = "filesystem_read.rs"]
 mod read;
+#[path = "filesystem_repository_index.rs"]
+mod repository_index;
 #[path = "filesystem_search.rs"]
 mod search;
 #[path = "filesystem_search_helpers.rs"]
@@ -34,6 +36,7 @@ mod search_state;
 #[path = "filesystem_walk.rs"]
 mod walk;
 pub use file_version::FileVersion;
+pub use repository_index::RepositoryIndex;
 pub use search::SearchProgress;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -189,6 +192,7 @@ pub struct WorkspaceService {
     search_states: Arc<search::SearchStateStore>,
     version_key: Arc<[u8; 32]>,
     admission: AdmissionController,
+    repository_index: Arc<RepositoryIndex>,
 }
 
 impl WorkspaceService {
@@ -220,6 +224,7 @@ impl WorkspaceService {
             search_states: Arc::new(search::SearchStateStore::default()),
             version_key: Arc::new(version_key),
             admission: AdmissionController::new(8, 2, 1024 * 1024 * 1024),
+            repository_index: Arc::new(RepositoryIndex::default()),
         })
     }
 
@@ -257,6 +262,7 @@ impl WorkspaceService {
             search_states: self.search_states.clone(),
             version_key: self.version_key.clone(),
             admission: self.admission.clone(),
+            repository_index: self.repository_index.clone(),
         })
     }
 

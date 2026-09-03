@@ -201,6 +201,10 @@ impl RuntimeHost {
         line_delta: Option<(u64, u64)>,
         diff_artifact_ref: Option<String>,
     ) {
+        self.workspace.mark_index_stale(path);
+        if let Some(previous_path) = previous_path.as_deref() {
+            self.workspace.mark_index_stale(previous_path);
+        }
         let Some(turn_id) = context.turn_id.as_deref() else {
             return;
         };

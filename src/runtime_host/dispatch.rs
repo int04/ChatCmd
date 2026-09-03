@@ -442,6 +442,10 @@ impl RuntimeHost {
                 let input: chatcmd_runtime::TextReadRequestV2 = parse(arguments)?;
                 value(workspace.read_text_v2(Some(&context), &input).await?)
             }
+            "fs_batch_read" => {
+                let input: chatcmd_runtime::FsBatchReadRequest = parse(arguments)?;
+                value(workspace.batch_read(&context, &input).await?)
+            }
             "fs_write_text" => {
                 filesystem_dispatch::write_text(self, workspace, &context, parse(arguments)?).await
             }
@@ -471,6 +475,18 @@ impl RuntimeHost {
                         )
                         .await?,
                 )
+            }
+            "fs_batch_stat" => {
+                let input: chatcmd_runtime::FsBatchStatRequest = parse(arguments)?;
+                value(workspace.batch_stat(&context, &input).await?)
+            }
+            "workspace_index_status" => {
+                let input: PathInput = parse(arguments)?;
+                value(workspace.index_status(&input.path)?)
+            }
+            "workspace_index_rebuild" => {
+                let input: PathInput = parse(arguments)?;
+                value(workspace.rebuild_index(&context, &input.path).await?)
             }
             "fs_create_directory" => {
                 let input: PathInput = parse(arguments)?;
