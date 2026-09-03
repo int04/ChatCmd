@@ -90,6 +90,9 @@ cargo test -p chatcmd-runtime
 cargo test -p chatcmd-mcp
 ```
 
+Large generated fixtures, deterministic crash/race harnesses, Criterion commands, and the
+nightly platform matrix are documented in [adversarial-testing.md](adversarial-testing.md).
+
 ### React UI
 
 ```bash

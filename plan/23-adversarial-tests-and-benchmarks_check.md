@@ -330,3 +330,49 @@ Tên feature/command thực tế phải được tài liệu hóa, không bắt 
 - Benchmark cases, baseline và resource invariants.
 - Command chạy local/CI và kết quả đầy đủ.
 - Test nào còn platform/manual-only và lý do.
+
+## CHECK — Các hạng mục chưa được xác minh tự động
+
+Plan 23 đã thêm và chạy xanh fixture streaming/sparse, resource probe, named fault gate,
+deterministic versioned-writer race, subprocess kill/reap sau staging, bounded generated-tree
+search, Git large-output spill, packaged transport coverage hiện có, Criterion filesystem
+benchmarks và CI tiers. Tuy nhiên plan phải giữ hậu tố `_check` vì các hạng mục sau chưa thể chạy
+đầy đủ trên máy Windows hiện tại:
+
+- Chưa chạy dense 100 MiB/1 GiB, tree 100.000–1.000.000 file và soak test nhiều giờ. Cần chạy
+  trong disposable workspace bằng Tier 2 có đủ disk/time rồi lưu seed, cấu hình và report.
+- Named fault gate mới là test helper; chưa nối test-only seam vào mọi production commit phase.
+  Cần inject và chứng minh old-or-new state cho disk-full, short-write, sync, rename, journal,
+  publish, source-delete và rollback failures.
+- Chưa có mount thứ hai để test cross-device move; chưa có elevated permission matrix, Unix
+  non-UTF-8 path, macOS symlink và Windows junction/symlink-swap matrix.
+- Chưa fault-test hanging Git hook/credential helper và toàn bộ descendant process-tree cleanup.
+- Chưa đo peak RSS/open handles trên runner kiểm soát, database/subscriber slowdown, WebSocket
+  overflow, 100k Git status entries, shell one-byte storm và long-running concurrency soak.
+- Workflow mới chỉ được syntax/review và compile-path local; GitHub-hosted Ubuntu/macOS/Windows
+  jobs chưa được thực thi từ môi trường local này.
+
+Các lệnh đã chạy local:
+
+```text
+cargo fmt --all -- --check
+cargo check --workspace --all-targets
+cargo test -p chatcmd-runtime --test adversarial_filesystem --no-fail-fast
+cargo bench -p chatcmd-runtime --bench filesystem_workloads -- --sample-size 10 --measurement-time 1 --warm-up-time 1
+cargo bench -p chatcmd-runtime --bench tool_telemetry -- --sample-size 10 --measurement-time 1 --warm-up-time 1
+```
+
+Kết quả tại thời điểm ghi: fmt/check xanh; `cargo test --workspace --no-fail-fast` xanh (các
+suite lần lượt 102, 2, 39, 2, 82, 8, 3, 12, 7, 7, 2, 8, 1 và 9 passed; 6 ignored manual
+tests); Criterion hoàn tất 7 cases. `cargo clippy --workspace --all-targets -- -D warnings` fail
+với các lỗi đã tồn tại ngoài file Plan 23 và không được sửa vì phạm vi plan này chỉ thêm test:
+
+- `filesystem_find.rs:213`: `clippy::collapsible_if`;
+- `filesystem_read.rs:115`: `clippy::too_many_arguments`;
+- `filesystem_read.rs:540`: `clippy::redundant_guards`;
+- `filesystem.rs:338`: `clippy::too_many_arguments`;
+- `process_runner.rs:77`: `clippy::manual_clamp`;
+- `filesystem/file_version.rs:524`: `clippy::items_after_test_module`.
+
+User cần quyết định refactor hoặc allow lint cho các production APIs trên rồi chạy lại đúng lệnh
+Clippy. Do check này không xanh, file giữ hậu tố `_check.md` theo quy tắc bàn giao.

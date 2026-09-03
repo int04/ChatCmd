@@ -36,3 +36,7 @@ tracing-subscriber = { version = "0.3", features = ["fmt"] }
 [[bench]]
 name = "tool_telemetry"
 harness = false
+
+[[bench]]
+name = "filesystem_workloads"
+harness = false

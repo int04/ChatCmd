@@ -1,0 +1,58 @@
+name: Adversarial and performance tests
+
+on:
+  pull_request:
+  push:
+    branches: [dev]
+  schedule:
+    - cron: "17 19 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tier-0:
+    name: Tier 0 / correctness
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+      - run: cargo check --workspace --all-targets
+      - run: cargo test --workspace
+
+  tier-1-platform:
+    name: Tier 1 / ${{ matrix.os }}
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test -p chatcmd-runtime --test adversarial_filesystem
+      - run: cargo test -p chatcmd-mcp --test release_catalog_smoke
+
+  tier-2-benchmark:
+    name: Tier 2 / benchmark report
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo bench -p chatcmd-runtime --bench filesystem_workloads -- --sample-size 10 --measurement-time 1 --warm-up-time 1
+      - run: cargo bench -p chatcmd-runtime --bench tool_telemetry -- --sample-size 10 --measurement-time 1 --warm-up-time 1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: criterion-${{ github.run_id }}
+          path: target/criterion
+          if-no-files-found: warn
