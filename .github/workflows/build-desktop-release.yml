@@ -27,23 +27,17 @@ jobs:
           echo "Desktop releases must be built from the main branch." >&2
           exit 1
 
-      - name: Generate timestamp version
+      - name: Generate release version
         id: version
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           version="$(TZ=Asia/Ho_Chi_Minh date '+%y.%m.%d.%H%M')"
-          tag="v${version}"
-
-          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" >/dev/null 2>&1; then
-            echo "Release tag ${tag} already exists. Run the workflow again after the current minute." >&2
-            exit 1
-          fi
+          release_date="$(TZ=Asia/Ho_Chi_Minh date '+%y.%m.%d')"
+          tag="v.${release_date}"
 
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-          echo "Building ChatCMD ${version}"
+          echo "Building ChatCMD ${version} for release ${tag}"
 
   windows:
     name: Build Windows x64 and x86
@@ -154,9 +148,25 @@ jobs:
           RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
-          gh release create "$RELEASE_TAG" dist/*.zip dist/SHA256SUMS.txt \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --title "ChatCMD ${RELEASE_VERSION}" \
-            --notes "Manually triggered desktop build from main. See SHA256SUMS.txt to verify downloads. The macOS packages are ad-hoc signed and are not notarized." \
-            --latest
+          release_title="ChatCMD ${RELEASE_TAG#v.}"
+          release_notes="Automatically built from main. Build version: ${RELEASE_VERSION}. See SHA256SUMS.txt to verify downloads. The macOS packages are ad-hoc signed and are not notarized."
+
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release ${RELEASE_TAG} already exists; replacing assets."
+            gh release upload "$RELEASE_TAG" dist/*.zip dist/SHA256SUMS.txt \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
+            gh release edit "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$release_title" \
+              --notes "$release_notes" \
+              --latest
+          else
+            echo "Creating release ${RELEASE_TAG}."
+            gh release create "$RELEASE_TAG" dist/*.zip dist/SHA256SUMS.txt \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "$release_title" \
+              --notes "$release_notes" \
+              --latest
+          fi
