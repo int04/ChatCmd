@@ -181,6 +181,11 @@ pub struct RuntimeConfig {
     pub max_sessions: usize,
     pub max_concurrent_operations: usize,
     pub max_replay_bytes: usize,
+    pub max_replay_events: usize,
+    pub shell_output_chunk_bytes: usize,
+    pub shell_output_max_latency_ms: u64,
+    pub max_shell_interactive_input_bytes: usize,
+    pub max_shell_paste_input_bytes: usize,
     pub max_skill_characters: usize,
     pub default_shell: Option<PathBuf>,
     pub user_home: Option<PathBuf>,
@@ -194,6 +199,11 @@ impl Default for RuntimeConfig {
             max_sessions: 8,
             max_concurrent_operations: 4,
             max_replay_bytes: 2 * 1024 * 1024,
+            max_replay_events: 2_000,
+            shell_output_chunk_bytes: 16 * 1024,
+            shell_output_max_latency_ms: 25,
+            max_shell_interactive_input_bytes: 64 * 1024,
+            max_shell_paste_input_bytes: 256 * 1024,
             max_skill_characters: 200_000,
             default_shell: None,
             user_home: None,
@@ -239,6 +249,18 @@ pub struct ShellWriteRequest {
     pub text: String,
     #[serde(default = "default_true")]
     pub append_new_line: bool,
+    #[serde(default)]
+    pub input_kind: ShellInputKind,
+    #[serde(default)]
+    pub sensitive: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ShellInputKind {
+    #[default]
+    Interactive,
+    Paste,
 }
 
 const fn default_true() -> bool {
@@ -268,6 +290,7 @@ pub struct ShellEvent {
     pub event_type: String,
     pub stream: String,
     pub data: String,
+    pub encoding: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -277,6 +300,8 @@ pub struct ShellReadResult {
     pub oldest_available_sequence: u64,
     pub latest_available_sequence: u64,
     pub replay_truncated: bool,
+    pub dropped_bytes: u64,
+    pub dropped_events: u64,
     pub events: Vec<ShellEvent>,
 }
 

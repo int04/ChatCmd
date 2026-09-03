@@ -201,3 +201,11 @@ Chạy frontend terminal tests/build nếu sửa UI.
 - Persistence/realtime trước/sau.
 - File/UI đã đổi.
 - Benchmark events/DB/RAM/latency và lifecycle test.
+
+## Kiểm tra lại sau triển khai
+
+Plan được đánh dấu `_check` vì lần chạy đầu của `cargo fmt --check` phát hiện khác biệt định dạng trong mã mới. Các lần `cargo check --workspace` đầu cũng phát hiện một `Arc<Session>` bị move vào hai thread và cặp field input bị khai báo trùng; các lỗi compile này đã được sửa. Formatter và compiler sẽ được chạy kiểm tra lại, nhưng quy tắc của đợt triển khai yêu cầu giữ dấu kiểm tra khi bất kỳ check nào từng fail.
+
+Ngoài ra cần chạy benchmark production riêng để đo peak RAM, CPU, p50/p95 display latency và stop latency ở tải PTY 100 MB/s với consumer nhanh/chậm/không có. Unit test hiện bao phủ một triệu tiny reads, giới hạn chunk và bảo toàn byte stream; môi trường CI thông thường không cho kết quả benchmark latency/tài nguyên ổn định. Cần kiểm tra thủ công process-tree escalation trên Linux/macOS và child cố tình bỏ qua Ctrl-C; lượt triển khai này chỉ xác nhận đường force-close hiện có trên Windows và lifecycle test hiện hữu.
+
+Frontend cần kiểm tra lại: `npm run lint` fail do 8 lỗi/8 warning baseline (Node globals trong `scripts/obfuscate-build.mjs`, ref mutation trong `src/realtime.ts` và hook dependency warnings). `npm test -- --run` có 47 test pass, 7 test fail trong `src/test/App.test.tsx` do không tìm thấy các UI text mong đợi; jsdom cũng báo canvas `getContext` chưa được triển khai. `npm run build` vẫn pass. Rust workspace pass toàn bộ test được chạy, nhưng có các perf/fallback fixture `ignored` theo cấu hình test hiện tại.

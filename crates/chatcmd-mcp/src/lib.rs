@@ -14,7 +14,9 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{any, get},
 };
-use chatcmd_runtime::{BoxFuture, DeviceDescriptor, OperationContext, RuntimeError, RuntimeResult};
+use chatcmd_runtime::{
+    BoxFuture, DeviceDescriptor, OperationContext, RuntimeError, RuntimeResult, ShellInputKind,
+};
 use rmcp::{
     Peer, RoleServer,
     handler::server::wrapper::Parameters,
@@ -324,7 +326,11 @@ tool_args!(ShellWriteArgs {
     #[serde(alias = "input")]
     text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    append_new_line: Option<bool>
+    append_new_line: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    input_kind: Option<ShellInputKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sensitive: Option<bool>
 });
 tool_args!(ShellWaitArgs {
     session_id: String,
@@ -815,7 +821,7 @@ tool_methods!(
     (
         shell_write,
         ShellWriteArgs,
-        "Write literal input to a PTY session. Required fields: sessionId, text. input is accepted as a compatibility alias for text."
+        "Write bounded interactive input to a PTY session. Required fields: sessionId, text. Optional inputKind is interactive or paste; bulk file/script content must use filesystem/blob tools. input is accepted as a compatibility alias for text."
     ),
     (
         shell_wait,

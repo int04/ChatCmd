@@ -287,6 +287,8 @@ async fn shell_lifecycle_timeout_duplicate_and_force_close() {
                 session_id: created.session_id.clone(),
                 text: command.to_owned(),
                 append_new_line: true,
+                input_kind: chatcmd_runtime::ShellInputKind::Interactive,
+                sensitive: false,
             },
         )
         .await
@@ -334,6 +336,49 @@ async fn shell_lifecycle_timeout_duplicate_and_force_close() {
 }
 
 #[tokio::test]
+async fn shell_write_rejects_bulk_input_before_writing() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let config = RuntimeConfig {
+        roots: vec![directory.path().to_path_buf()],
+        max_sessions: 1,
+        max_shell_interactive_input_bytes: 8,
+        ..RuntimeConfig::default()
+    };
+    let runtime = ShellRuntime::new(config, policy(), Arc::new(NullEventSink));
+    let created = runtime
+        .create(
+            &OperationContext::new("bulk-create", "agent", "shell_create"),
+            create_request(directory.path().to_path_buf(), "bulk-create"),
+        )
+        .await
+        .expect("create shell");
+    let error = runtime
+        .write(
+            &OperationContext::new("bulk-write", "agent", "shell_write"),
+            ShellWriteRequest {
+                request_id: "bulk-write".to_owned(),
+                session_id: created.session_id.clone(),
+                text: "123456789".to_owned(),
+                append_new_line: false,
+                input_kind: chatcmd_runtime::ShellInputKind::Interactive,
+                sensitive: true,
+            },
+        )
+        .await
+        .expect_err("bulk input must be rejected");
+    assert_eq!(error.code, "shellInputTooLarge");
+    assert!(error.message.contains("fs_write_text/fs_write_raw"));
+    runtime
+        .close(
+            &OperationContext::new("bulk-close", "agent", "shell_close"),
+            &created.session_id,
+            true,
+        )
+        .await
+        .expect("close shell");
+}
+
+#[tokio::test]
 async fn shell_wait_retires_exited_session_and_keeps_replay() {
     let directory = tempfile::tempdir().expect("temp directory");
     let runtime = runtime(directory.path().to_path_buf(), 2);
@@ -352,6 +397,8 @@ async fn shell_wait_retires_exited_session_and_keeps_replay() {
                 session_id: created.session_id.clone(),
                 text: "exit".to_owned(),
                 append_new_line: true,
+                input_kind: chatcmd_runtime::ShellInputKind::Interactive,
+                sensitive: false,
             },
         )
         .await
@@ -387,6 +434,8 @@ async fn shell_reader_retires_exited_session_without_wait() {
                 session_id: created.session_id.clone(),
                 text: "exit".to_owned(),
                 append_new_line: true,
+                input_kind: chatcmd_runtime::ShellInputKind::Interactive,
+                sensitive: false,
             },
         )
         .await

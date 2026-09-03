@@ -412,6 +412,11 @@ fn tool_specific_schemas_expose_required_canonical_fields() {
             .is_some_and(|values| values.iter().any(|value| value == "sessionId"))
     );
 
+    let shell_write = serde_json::to_value(schemars::schema_for!(ShellWriteArgs))
+        .expect("serialize shell_write schema");
+    assert!(shell_write["properties"].get("inputKind").is_some());
+    assert!(shell_write["properties"].get("sensitive").is_some());
+
     let shell_create = serde_json::to_value(schemars::schema_for!(ShellCreateArgs))
         .expect("serialize shell_create schema");
     assert!(shell_create["properties"].get("workingDirectory").is_some());

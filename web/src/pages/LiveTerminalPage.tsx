@@ -7,6 +7,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api';
 import { ErrorState, Loading, ProblemBanner, StatusBadge } from '../components';
 import { tr } from '../i18n';
+import { decodeTerminalEvent } from '../terminalOutput';
 import type { Session } from '../types';
 import { useLoad } from '../useLoad';
 
@@ -102,7 +103,7 @@ export function LiveTerminalPage() {
         const result = await api.liveTerminalOutput(sessionId, lastSequenceRef.current);
         if (cancelled) return;
         if (result.replayTruncated && lastSequenceRef.current > 0) terminalRef.current?.writeln('\r\n\x1b[33m[ChatCMD: terminal replay was truncated]\x1b[0m');
-        for (const event of result.events) terminalRef.current?.write(event.data);
+        for (const event of result.events) terminalRef.current?.write(decodeTerminalEvent(event));
         lastSequenceRef.current = Math.max(lastSequenceRef.current, result.events.at(-1)?.sequence ?? lastSequenceRef.current);
       } catch (error) {
         if (!cancelled) setProblem(error instanceof Error ? error.message : tr('Terminal stream is unavailable'));

@@ -39,8 +39,8 @@ export interface TaskActivityDetail { input?: unknown; output?: unknown; status?
 export interface TaskTurn { id: Id; generation?: number; actor?: string; status?: string; startedAtUtc?: string; completedAtUtc?: string; events?: TimelineEvent[] }
 export interface Session { kind: 'mcp' | 'terminal'; id: Id; taskId?: Id; turnId?: Id; shell?: string; processId?: number; status: string; workingDirectory?: string; createdAtUtc?: string; updatedAtUtc?: string; closedAtUtc?: string; replayCursor?: string; cpuPercent?: number; memoryBytes?: number; busy?: boolean; lastSequence?: number }
 export interface SessionDetail { session: Session; events: TimelineEvent[]; nextCursor?: string; truncated?: boolean }
-export interface LiveTerminalEvent { sequence: number; occurredAtUtc: string; stream: string; data: string }
-export interface LiveTerminalOutput { sessionId: Id; oldestAvailableSequence: number; latestAvailableSequence: number; replayTruncated: boolean; events: LiveTerminalEvent[] }
+export interface LiveTerminalEvent { sequence: number; occurredAtUtc: string; stream: string; data: string; encoding: 'utf-8' | 'base64' }
+export interface LiveTerminalOutput { sessionId: Id; oldestAvailableSequence: number; latestAvailableSequence: number; replayTruncated: boolean; droppedBytes: number; droppedEvents: number; events: LiveTerminalEvent[] }
 export type SkillOptionValue = string | number | boolean;
 export interface SkillOptionChoice { value: string; label: string }
 export interface UserSkillOption { key: string; label: string; description?: string | null; type: 'select' | 'boolean' | 'text' | 'number'; value: SkillOptionValue; choices?: SkillOptionChoice[] | null }

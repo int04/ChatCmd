@@ -288,8 +288,15 @@ impl RuntimeHost {
                     turn_id: Some(turn_id.clone()),
                     kind: EventKind::TerminalOutput,
                     stream: Some(event.stream.clone()),
-                    payload: event.data.as_bytes().to_vec(),
-                    payload_encoding: "utf-8".to_owned(),
+                    payload: if event.encoding == "base64" {
+                        use base64::Engine as _;
+                        base64::engine::general_purpose::STANDARD
+                            .decode(&event.data)
+                            .map_err(|error| invalid("terminal event data", error))?
+                    } else {
+                        event.data.as_bytes().to_vec()
+                    },
+                    payload_encoding: event.encoding.clone(),
                     created_at_ms: i64::try_from(event.timestamp_unix_ms).unwrap_or(i64::MAX),
                 })
             })
@@ -305,7 +312,7 @@ impl RuntimeHost {
                 Some(task_id.as_str().to_owned()),
                 Some(session_id.as_str().to_owned()),
                 Some(turn_id.as_str().to_owned()),
-                json!({ "text": event.data, "stream": event.stream, "encoding": "utf-8" }),
+                json!({ "text": event.data, "stream": event.stream, "encoding": event.encoding }),
             );
         }
         Ok(())

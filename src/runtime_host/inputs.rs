@@ -159,6 +159,10 @@ pub(super) struct ShellWrite {
     pub(super) text: String,
     #[serde(default = "default_true")]
     pub(super) append_new_line: bool,
+    #[serde(default)]
+    pub(super) input_kind: chatcmd_runtime::ShellInputKind,
+    #[serde(default)]
+    pub(super) sensitive: bool,
 }
 
 const fn default_true() -> bool {
@@ -506,6 +510,11 @@ mod tests {
         .expect("legacy shell write input");
         assert_eq!(input.text, "echo ok");
         assert!(input.append_new_line);
+        assert_eq!(
+            input.input_kind,
+            chatcmd_runtime::ShellInputKind::Interactive
+        );
+        assert!(!input.sensitive);
     }
 
     #[test]

@@ -123,6 +123,8 @@ impl ShellRuntime {
                 bytes: 0,
                 latest: 0,
                 replay_truncated: false,
+                dropped_bytes: 0,
+                dropped_events: 0,
             }),
             notify: Notify::new(),
             exited: AtomicBool::new(false),
@@ -134,8 +136,19 @@ impl ShellRuntime {
             .map_err(lock_error)?
             .insert(id, session.clone());
         let session_for_reader = session.clone();
+        let session_for_coalescer = session.clone();
         let inner_for_reader = self.inner.clone();
         let max_bytes = self.inner.config.max_replay_bytes.max(4096);
+        let max_events = self.inner.config.max_replay_events.max(1);
+        let max_chunk_bytes = self
+            .inner
+            .config
+            .shell_output_chunk_bytes
+            .clamp(256, 64 * 1024);
+        let max_latency =
+            Duration::from_millis(self.inner.config.shell_output_max_latency_ms.clamp(1, 100));
+        let (raw_tx, raw_rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(128);
+        let reader_session = session.clone();
         std::thread::Builder::new()
             .name(format!("chatcmd-pty-{}", session.id))
             .spawn(move || {
@@ -151,34 +164,41 @@ impl ShellRuntime {
                                 let _ = writer.write_all(b"\x1b[1;1R");
                                 let _ = writer.flush();
                             }
-                            if let Ok(mut output) = session_for_reader.output.lock() {
-                                output.latest = output.latest.saturating_add(1);
-                                let event = ShellEvent {
-                                    sequence: output.latest,
-                                    timestamp_unix_ms: now_ms(),
-                                    event_type: "output".into(),
-                                    stream: "pty".into(),
-                                    data: String::from_utf8_lossy(&bytes[..count]).into_owned(),
-                                };
-                                output.bytes = output.bytes.saturating_add(event.data.len());
-                                output.events.push_back(event);
-                                while output.bytes > max_bytes {
-                                    if let Some(removed) = output.events.pop_front() {
-                                        output.bytes =
-                                            output.bytes.saturating_sub(removed.data.len());
-                                        output.replay_truncated = true;
-                                    } else {
-                                        break;
-                                    }
-                                }
+                            if raw_tx.send(bytes[..count].to_vec()).is_err() {
+                                break;
                             }
-                            session_for_reader.notify.notify_waiters();
                         }
                     }
                 }
-                session_for_reader.notify.notify_waiters();
-                if try_wait(&session_for_reader).ok().flatten().is_some() {
-                    let _ = retire_session(&inner_for_reader, &session_for_reader.id);
+                drop(raw_tx);
+                reader_session.notify.notify_waiters();
+            })
+            .map_err(|error| RuntimeError::new("pty_reader_failed", error.to_string()))?;
+        std::thread::Builder::new()
+            .name(format!("chatcmd-pty-coalesce-{}", session.id))
+            .spawn(move || {
+                let mut coalescer = TerminalOutputCoalescer::new(max_chunk_bytes);
+                loop {
+                    match raw_rx.recv_timeout(max_latency) {
+                        Ok(bytes) => {
+                            for chunk in coalescer.push(&bytes) {
+                                append_output(&session_for_coalescer, chunk, max_bytes, max_events);
+                            }
+                        }
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                            if let Some(chunk) = coalescer.flush() {
+                                append_output(&session_for_coalescer, chunk, max_bytes, max_events);
+                            }
+                        }
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                    }
+                }
+                if let Some(chunk) = coalescer.flush() {
+                    append_output(&session_for_coalescer, chunk, max_bytes, max_events);
+                }
+                session_for_coalescer.notify.notify_waiters();
+                if try_wait(&session_for_coalescer).ok().flatten().is_some() {
+                    let _ = retire_session(&inner_for_reader, &session_for_coalescer.id);
                 }
             })
             .map_err(|error| RuntimeError::new("pty_reader_failed", error.to_string()))?;
@@ -206,6 +226,27 @@ impl ShellRuntime {
         let _request_guard = self.begin_request(&request.request_id)?;
         if context.cancellation.is_cancelled() {
             return Err(RuntimeError::new("cancelled", "operation was cancelled"));
+        }
+        let received_bytes = request.text.len();
+        let max_input_bytes = match request.input_kind {
+            crate::ShellInputKind::Interactive => {
+                self.inner.config.max_shell_interactive_input_bytes
+            }
+            crate::ShellInputKind::Paste => self.inner.config.max_shell_paste_input_bytes,
+        };
+        if received_bytes > max_input_bytes {
+            return Err(RuntimeError::new(
+                "shellInputTooLarge",
+                format!(
+                    "shell_write is for interactive input; use fs_write_text/fs_write_raw with contentRef (maxBytes={max_input_bytes}, receivedBytes={received_bytes})"
+                ),
+            ));
+        }
+        if request.text.as_bytes().contains(&0) {
+            return Err(RuntimeError::new(
+                "shellInputInvalid",
+                "shell_write does not accept NUL bytes",
+            ));
         }
         let session = self.session(&request.session_id)?;
         let mut data = request.text.into_bytes();
@@ -238,19 +279,23 @@ impl ShellRuntime {
         let oldest = output
             .events
             .front()
-            .map_or(output.latest.saturating_add(1), |event| event.sequence);
+            .map_or(output.latest.saturating_add(1), |stored| {
+                stored.event.sequence
+            });
         let events = output
             .events
             .iter()
-            .filter(|event| event.sequence > after_sequence)
+            .filter(|stored| stored.event.sequence > after_sequence)
             .take(max_events.clamp(1, 2000))
-            .cloned()
+            .map(|stored| stored.event.clone())
             .collect();
         Ok(ShellReadResult {
             session_id: session_id.into(),
             oldest_available_sequence: oldest,
             latest_available_sequence: output.latest,
             replay_truncated: output.replay_truncated || after_sequence.saturating_add(1) < oldest,
+            dropped_bytes: output.dropped_bytes,
+            dropped_events: output.dropped_events,
             events,
         })
     }

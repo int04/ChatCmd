@@ -9,6 +9,7 @@ import { api } from '../api';
 import { ProblemBanner, StatusBadge } from '../components';
 import { tr } from '../i18n';
 import { useRealtime } from '../realtime';
+import { decodeTerminalEvent } from '../terminalOutput';
 import type { Session, TimelineEvent } from '../types';
 import { useLoad } from '../useLoad';
 
@@ -80,7 +81,7 @@ function TaskTerminalModal({ terminal, onClose }: { terminal: Session; onClose: 
   const terminalRef = useRef<Terminal | null>(null);
   const lastSequenceRef = useRef(0);
   const snapshotReadyRef = useRef(false);
-  const pendingRef = useRef(new Map<number, string>());
+  const pendingRef = useRef(new Map<number, string | Uint8Array>());
   const inputQueueRef = useRef(Promise.resolve());
   const inputBufferRef = useRef('');
   const inputTimerRef = useRef<number | undefined>(undefined);
@@ -94,8 +95,9 @@ function TaskTerminalModal({ terminal, onClose }: { terminal: Session; onClose: 
     const sequence = typeof payload?.sequence === 'number' ? payload.sequence : 0;
     const data = typeof payload?.data === 'string' ? payload.data : '';
     if (!sequence || !data || sequence <= lastSequenceRef.current) return;
-    if (!snapshotReadyRef.current) { pendingRef.current.set(sequence, data); return; }
-    terminalRef.current?.write(data);
+    const decoded = decodeTerminalEvent({ data, encoding: payload?.encoding === 'base64' ? 'base64' : 'utf-8' });
+    if (!snapshotReadyRef.current) { pendingRef.current.set(sequence, decoded); return; }
+    terminalRef.current?.write(decoded);
     lastSequenceRef.current = sequence;
   }, [sessionId]);
   useRealtime(handleRealtime);
@@ -120,7 +122,7 @@ function TaskTerminalModal({ terminal, onClose }: { terminal: Session; onClose: 
         while (!cancelled) {
           const result = await api.liveTerminalOutput(sessionId, cursor, 0);
           if (cancelled) return;
-          for (const event of result.events) { if (event.sequence > cursor) { terminalRef.current?.write(event.data); cursor = event.sequence; } }
+          for (const event of result.events) { if (event.sequence > cursor) { terminalRef.current?.write(decodeTerminalEvent(event)); cursor = event.sequence; } }
           if (!result.events.length || cursor >= result.latestAvailableSequence) break;
         }
         lastSequenceRef.current = cursor;

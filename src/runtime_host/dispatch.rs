@@ -162,6 +162,8 @@ impl RuntimeHost {
                             session_id: input.session_id,
                             text: input.text,
                             append_new_line: input.append_new_line,
+                            input_kind: input.input_kind,
+                            sensitive: input.sensitive,
                         },
                     )
                     .await?;
