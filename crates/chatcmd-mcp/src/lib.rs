@@ -294,7 +294,15 @@ tool_args!(ListV2Args {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cursor: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    limit: Option<usize>
+    limit: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sort: Option<chatcmd_runtime::FsListSort>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    metadata: Option<Vec<chatcmd_runtime::FsListMetadata>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    include_hidden: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    budget: Option<chatcmd_runtime::FsListBudget>
 });
 tool_args!(SearchArgs {
     path: String,
@@ -626,12 +634,12 @@ tool_methods!(
     (
         fs_list,
         ListArgs,
-        "List workspace directory entries. Required field: path; optional offset, limit."
+        "Compatibility directory listing with legacy offset/limit and global sorting. Required field: path; optional offset, limit. Prefer fs_list_v2 for large directories and cursor pagination."
     ),
     (
         fs_list_v2,
         ListV2Args,
-        "List workspace directory entries using result envelope schemaVersion 1. Required field: path; optional opaque cursor and limit. Continue only with page.nextCursor returned for the same path."
+        "Scalable cursor-paginated directory listing using filesystem traversal order (not global alphabetical order). Required field: path; optional cursor, limit, sort=filesystem, metadata=[type|size|readonly], includeHidden, budget {timeoutMs,maxEntriesScanned,maxStats}. Continue only with page.nextCursor for the same path/options; directory mutation invalidates continuation."
     ),
     (
         fs_search,

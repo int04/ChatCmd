@@ -59,6 +59,7 @@ Version 1 defines these camelCase values:
 - `itemLimit`
 - `timeBudget`
 - `fileBudget`
+- `metadataBudget`
 - `byteBudget`
 - `cancelled`
 - `replayEvicted`
@@ -80,7 +81,7 @@ Stable cursor errors:
 - `cursor_expired`: cursor passed its declared expiry;
 - `cursor_version_unsupported`: cursor was produced by an unsupported cursor version.
 
-The current `fs_list_v2` cursor is stateless and has no expiry. It remains valid for the runtime process lifetime; a runtime restart rotates the ephemeral signing key and invalidates old cursors. Directory contents can change between pages, so snapshot-consistent enumeration is intentionally deferred to the later large-repository paging work.
+`fs_list_v2` now uses a process-local server continuation state (ADR 0004) containing an open `ReadDir` iterator. Its signed opaque tool state contains a random state id plus `directoryVersion`; server state binds path, sort, metadata fields, and hidden-file filter. State expires after 15 minutes and is also bounded by an active-state cap. Runtime restart invalidates both state and the ephemeral signing key. A detected directory-version change fails continuation with `directory_changed` so the caller restarts from page 1.
 
 ## Success, partial success, errors, and cancellation
 
@@ -108,23 +109,33 @@ Consumers must not infer truncation from array length, output byte length, missi
 }
 ```
 
-### Paged result
+### Paged `fs_list_v2` result
 
 ```json
 {
   "schemaVersion": 1,
-  "data": [
-    { "path": "D:/repo/a.rs", "name": "a.rs", "entryType": "file", "size": 128, "readonly": false }
-  ],
+  "data": {
+    "items": [
+      { "path": "D:/repo/a.rs", "name": "a.rs", "entryType": "file", "size": 128 }
+    ],
+    "directoryVersion": "sha256:...",
+    "sort": "filesystem"
+  },
   "page": { "nextCursor": "eyJ2ZXJzaW9uIjoxLC4uLg.signature", "hasMore": true },
-  "usage": { "elapsedMs": 2, "outputBytes": 310 }
+  "usage": { "elapsedMs": 2, "entriesScanned": 101, "metadataCalls": 100, "outputBytes": 410 }
 }
 ```
 
-Continue only by sending that opaque cursor back to the same tool and path:
+Continue only by sending that opaque cursor back to the same tool and path/options:
 
 ```json
-{ "path": "D:/repo", "cursor": "eyJ2ZXJzaW9uIjoxLC4uLg.signature", "limit": 100 }
+{
+  "path": "D:/repo",
+  "cursor": "eyJ2ZXJzaW9uIjoxLC4uLg.signature",
+  "limit": 100,
+  "sort": "filesystem",
+  "metadata": ["type", "size"]
+}
 ```
 
 ### Budget-truncated result
@@ -167,8 +178,8 @@ Continue only by sending that opaque cursor back to the same tool and path:
 
 | Tool family | Current top-level result shape | Envelope status |
 |---|---|---|
-| `fs_list` | plain array of `FsEntry` with caller-provided `offset`/`limit` | Legacy shape preserved. |
-| `fs_list_v2` | `ToolResultEnvelope<Vec<FsEntry>>` with opaque cursor | Migrated sample; `resultSchemaVersion=1`. |
+| `fs_list` | plain array of `FsEntry` with caller-provided `offset`/`limit` | Legacy shape preserved; runtime page-size cap is 2,000. |
+| `fs_list_v2` | `ToolResultEnvelope<FsListPageData>` with streaming opaque cursor | Migrated and optimized by Plan 04; `resultSchemaVersion=1`. |
 | filesystem search/find/read/stat/mutations | tool-specific arrays/objects | Not migrated in this plan. |
 | Git tools | command/output-specific objects or arrays | Not migrated in this plan. |
 | shell replay/session tools | typed shell objects with shell-specific replay state | Not migrated in this plan. |

@@ -229,55 +229,78 @@ impl RuntimeHost {
                 let input: ListInput = parse(arguments)?;
                 value(
                     workspace
-                        .list(&input.path, input.offset, input.limit)
+                        .list(&input.path, input.offset, input.limit.clamp(1, 2_000))
                         .await?,
                 )
             }
             "fs_list_v2" => {
                 let started = Instant::now();
                 let input: ListV2Input = parse(arguments)?;
-                let limit = input.limit.clamp(1, 1_999);
                 let scope = workspace.stat(&input.path).await?.path;
                 let normalized_scope = scope.to_string_lossy();
-                let offset = match input.cursor.as_deref() {
-                    Some(cursor) => {
-                        let state: Value = self.cursor_codec.decode(
-                            cursor,
-                            "fs_list_v2",
-                            normalized_scope.as_ref(),
-                        )?;
-                        state
-                            .get("offset")
-                            .and_then(Value::as_u64)
-                            .and_then(|value| usize::try_from(value).ok())
-                            .ok_or_else(|| {
-                                RuntimeError::new("invalid_cursor", "cursor state is invalid")
-                            })?
-                    }
-                    None => 0,
+                let cursor_state = input
+                    .cursor
+                    .as_deref()
+                    .map(|cursor| {
+                        self.cursor_codec
+                            .decode::<chatcmd_runtime::FsListCursorState>(
+                                cursor,
+                                "fs_list_v2",
+                                normalized_scope.as_ref(),
+                            )
+                    })
+                    .transpose()?;
+                let request = chatcmd_runtime::FsListRequestV2 {
+                    path: input.path,
+                    limit: input.limit.clamp(1, 2_000),
+                    sort: input.sort,
+                    metadata: input.metadata,
+                    include_hidden: input.include_hidden,
+                    budget: input.budget,
                 };
-                let mut entries = workspace.list(&input.path, offset, limit + 1).await?;
-                let has_more = entries.len() > limit;
-                if has_more {
-                    entries.truncate(limit);
-                }
-                let next_cursor = if has_more {
-                    Some(self.cursor_codec.encode(
+                let (page, state_id) = workspace
+                    .list_v2(
+                        &context,
+                        &request,
+                        cursor_state.as_ref().map(|state| state.state_id.as_str()),
+                        cursor_state
+                            .as_ref()
+                            .map(|state| state.directory_version.as_str()),
+                    )
+                    .await?;
+                let next_cursor = match (page.has_more, state_id) {
+                    (true, Some(state_id)) => Some(self.cursor_codec.encode(
                         "fs_list_v2",
                         normalized_scope.as_ref(),
-                        &json!({ "offset": offset.saturating_add(entries.len()) }),
+                        &chatcmd_runtime::FsListCursorState {
+                            state_id,
+                            directory_version: page.data.directory_version.clone(),
+                        },
                         None,
-                    )?)
-                } else {
-                    None
+                    )?),
+                    _ => None,
                 };
-                let mut result =
-                    chatcmd_runtime::ToolResultEnvelope::paged(entries, next_cursor, has_more)
-                        .with_usage(chatcmd_runtime::ToolUsage {
-                            elapsed_ms: u64::try_from(started.elapsed().as_millis())
-                                .unwrap_or(u64::MAX),
-                            ..chatcmd_runtime::ToolUsage::default()
-                        });
+                let returned_items = u64::try_from(page.data.items.len()).unwrap_or(u64::MAX);
+                let mut result = chatcmd_runtime::ToolResultEnvelope::paged(
+                    page.data,
+                    next_cursor,
+                    page.has_more,
+                );
+                if let Some(reason) = page.truncation_reason {
+                    result.truncation = Some(chatcmd_runtime::TruncationInfo {
+                        truncated: true,
+                        reason: Some(reason),
+                        returned_items,
+                        omitted_items: None,
+                    });
+                }
+                result.warnings = page.warnings;
+                result = result.with_usage(chatcmd_runtime::ToolUsage {
+                    elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                    entries_scanned: Some(page.entries_scanned),
+                    metadata_calls: Some(page.metadata_calls),
+                    ..chatcmd_runtime::ToolUsage::default()
+                });
                 result.measure_output_bytes()?;
                 value(result)
             }

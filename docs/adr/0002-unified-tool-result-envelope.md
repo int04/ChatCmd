@@ -32,7 +32,7 @@ Changing every existing result shape in place would break connectors, UI parsing
 ### Trade-offs
 
 - During migration, clients must support both legacy and envelope-enabled tools.
-- `fs_list_v2` uses offset continuation internally and therefore does not provide snapshot-consistent directory traversal when a directory changes between pages. Large-repository paging/indexing is a separate optimization plan.
+- The original Plan 02 `fs_list_v2` implementation used offset continuation. ADR 0004 supersedes that implementation with process-local streaming directory cursors, explicit filesystem ordering, and directory-version invalidation.
 - Cursor signing uses an ephemeral runtime-process key, so cursors are intentionally invalid after process restart.
 - `contentRef` is part of the common contract even though the first migrated sample does not currently need to externalize directory-list content.
 

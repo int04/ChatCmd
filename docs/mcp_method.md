@@ -63,8 +63,8 @@ Các method `fs_*` thao tác trực tiếp trong canonical workspace scope và t
 | Method | Tham số chính | Ý nghĩa |
 |---|---|---|
 | `workspace_roots` | Không có tham số riêng | Liệt kê các canonical workspace root mà agent được phép thao tác. |
-| `fs_list` | `path`, `offset?`, `limit?` | Legacy: liệt kê file/thư mục con và trả trực tiếp mảng `FsEntry`; giữ nguyên để tương thích. |
-| `fs_list_v2` | `path`, `cursor?`, `limit?` | Bản envelope v1: trả `schemaVersion`, typed `data`, `page`, `usage` và các metadata chung khi có. `cursor` là opaque, chỉ dùng lại `page.nextCursor` cho đúng cùng tool/path. |
+| `fs_list` | `path`, `offset?`, `limit?` | Legacy compatibility: trả trực tiếp mảng `FsEntry`, global sort theo tên rồi mới offset/limit; runtime cap `limit` ở 2.000. Với thư mục lớn nên dùng `fs_list_v2`. |
+| `fs_list_v2` | `path`, `cursor?`, `limit?`, `sort?`, `metadata?`, `includeHidden?`, `budget?` | Cursor pagination bounded-work theo `sort=filesystem` (không hứa global alphabetical). `metadata` hỗ trợ `type`, `size`, `readonly`; mặc định `[]` để tránh stat. Result envelope v1 có `data.items`, `data.directoryVersion`, `data.sort`, `page.nextCursor/hasMore`, usage `entriesScanned/metadataCalls`, truncation/warnings khi cần. Cursor chỉ dùng lại cho cùng path/options; directory đổi thì continuation fail và phải restart. |
 | `fs_search` | `path`, `query`, `caseSensitive?`, `maxResults?`, `maxFileBytes?`, `includeIgnored?`, `exclude?` | Tìm kiếm **nội dung text** trong workspace. Khi tìm từ root nên dùng `path: "."`. |
 | `fs_find` | `path`, `pattern`, `maxResults?`, `maxDepth?` | Tìm **đường dẫn/tên file hoặc thư mục** theo pattern. Nên dùng khi chưa chắc relative path thay vì đoán path. |
 | `fs_read_text` | `path`, `startLine?`, `lineCount?`, `maxCharacters?` | Adapter tương thích cho contract cũ; nội bộ dùng reader streaming/range, không còn tải toàn file vào RAM. Với file lớn/resumable nên dùng `fs_read_text_v2`. |
@@ -151,7 +151,7 @@ Lưu ý: `fs_find`, `fs_search`, `fs_read_text`, các tool sửa file, shell, Gi
 
 `TOOL_NAMES` được sinh từ chính `McpServer::tool_router().list_all()` và sort deterministic. Không copy danh sách tool sang connector, UI, release script hoặc tài liệu.
 
-Canonical manifest chứa `protocolVersion`, `catalogVersion` và với mỗi tool có `name`, normalized input schema, `resultSchema` cùng capability flags. Tool chưa migrate result contract có `resultSchema: null` và `resultSchemaVersion: null`; `fs_list_v2` quảng bá `resultSchemaVersion: 1` cùng generated JSON schema của `ToolResultEnvelope<Vec<FsEntry>>`. Trước khi hash SHA-256, object keys được sort và metadata chỉ để mô tả như `description`/`title` được bỏ khỏi contract; vì vậy đổi wording không làm invalid cache, còn đổi input/result schema hoặc capability sẽ làm đổi `catalogHash`.
+Canonical manifest chứa `protocolVersion`, `catalogVersion` và với mỗi tool có `name`, normalized input schema, `resultSchema` cùng capability flags. Tool chưa migrate result contract có `resultSchema: null` và `resultSchemaVersion: null`; `fs_list_v2` quảng bá `resultSchemaVersion: 1` cùng generated JSON schema của `ToolResultEnvelope<FsListPageData>`. Trước khi hash SHA-256, object keys được sort và metadata chỉ để mô tả như `description`/`title` được bỏ khỏi contract; vì vậy đổi wording không làm invalid cache, còn đổi input/result schema hoặc capability sẽ làm đổi `catalogHash`.
 
 Chi tiết semantics, cursor/error code, migration inventory và các ví dụ complete/paged/truncated/content-backed nằm tại `docs/tool_result_envelope.md`.
 

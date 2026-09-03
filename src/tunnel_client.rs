@@ -102,9 +102,17 @@ impl TunnelClientManager {
         local_port: u16,
     ) -> Arc<Self> {
         let configured_server_url = std::env::var("CHATCMD_TUNNEL_SERVER_URL")
-            .unwrap_or_else(|_| DEFAULT_TUNNEL_SERVER_URL.to_owned())
-            .trim_end_matches('/')
-            .to_owned();
+            .unwrap_or_else(|_| DEFAULT_TUNNEL_SERVER_URL.to_owned());
+        Self::new_with_server_url(repository, device, local_port, configured_server_url)
+    }
+
+    fn new_with_server_url(
+        repository: SqliteRepository,
+        device: LocalDevice,
+        local_port: u16,
+        configured_server_url: String,
+    ) -> Arc<Self> {
+        let configured_server_url = configured_server_url.trim_end_matches('/').to_owned();
         Arc::new(Self {
             repository,
             device,
@@ -906,7 +914,7 @@ mod tests {
                 .await
                 .expect("open test database");
         let persisted = PersistedTunnelConnection {
-            server_url,
+            server_url: server_url.clone(),
             key: "stable-key".to_owned(),
             secret: "stable-secret".to_owned(),
             public_url: "http://tunnel.test/tunnel/stable-key".to_owned(),
@@ -923,7 +931,12 @@ mod tests {
         .execute(repository.pool())
         .await
         .expect("seed tunnel settings");
-        let manager = TunnelClientManager::new(repository, bootstrap.device, 8080);
+        let manager = TunnelClientManager::new_with_server_url(
+            repository,
+            bootstrap.device,
+            8080,
+            server_url,
+        );
 
         let (first, second) = tokio::join!(manager.connect(), manager.connect());
         assert!(first.is_ok());

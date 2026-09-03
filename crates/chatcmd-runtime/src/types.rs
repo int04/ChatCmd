@@ -245,6 +245,10 @@ const fn default_true() -> bool {
     true
 }
 
+const fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ShellSignal {
@@ -294,6 +298,114 @@ pub struct FsEntry {
     pub entry_type: String,
     pub size: u64,
     pub readonly: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum FsListSort {
+    #[default]
+    Filesystem,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum FsListMetadata {
+    Type,
+    Size,
+    Readonly,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FsListBudget {
+    #[serde(default = "default_fs_list_timeout_ms")]
+    pub timeout_ms: u64,
+    #[serde(default = "default_fs_list_max_entries_scanned")]
+    pub max_entries_scanned: u64,
+    #[serde(default = "default_fs_list_max_stats")]
+    pub max_stats: u64,
+}
+
+impl Default for FsListBudget {
+    fn default() -> Self {
+        Self {
+            timeout_ms: default_fs_list_timeout_ms(),
+            max_entries_scanned: default_fs_list_max_entries_scanned(),
+            max_stats: default_fs_list_max_stats(),
+        }
+    }
+}
+
+const fn default_fs_list_timeout_ms() -> u64 {
+    5_000
+}
+
+const fn default_fs_list_max_entries_scanned() -> u64 {
+    10_000
+}
+
+const fn default_fs_list_max_stats() -> u64 {
+    1_000
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FsListRequestV2 {
+    pub path: PathBuf,
+    #[serde(default = "default_fs_list_limit")]
+    pub limit: usize,
+    #[serde(default)]
+    pub sort: FsListSort,
+    #[serde(default)]
+    pub metadata: Vec<FsListMetadata>,
+    #[serde(default = "default_true")]
+    pub include_hidden: bool,
+    #[serde(default)]
+    pub budget: FsListBudget,
+}
+
+const fn default_fs_list_limit() -> usize {
+    200
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FsListItemV2 {
+    pub name: String,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub readonly: Option<bool>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub name_encoding_lossy: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FsListPageData {
+    pub items: Vec<FsListItemV2>,
+    pub directory_version: String,
+    pub sort: FsListSort,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FsListCursorState {
+    pub state_id: String,
+    pub directory_version: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct FsListScanPage {
+    pub data: FsListPageData,
+    pub has_more: bool,
+    pub entries_scanned: u64,
+    pub metadata_calls: u64,
+    pub truncation_reason: Option<crate::TruncationReason>,
+    pub warnings: Vec<crate::ToolWarning>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

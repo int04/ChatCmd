@@ -11,18 +11,24 @@ describe('tool result envelope rendering', () => {
     expect(output).not.toContain('Còn dữ liệu');
   });
 
-  it('surfaces continuation, truncation, and content reference metadata for fs_list_v2', () => {
+  it('surfaces v2 directory metadata, continuation, truncation, and content reference metadata', () => {
     const output = formatToolOutput('fs_list_v2', {
       schemaVersion: 1,
-      data: [{ path: 'D:/repo/a.rs', name: 'a.rs', entryType: 'file', size: 10 }],
+      data: {
+        items: [{ path: 'D:/repo/a.rs', name: 'a.rs', entryType: 'file', size: 10 }],
+        directoryVersion: 'sha256:directory-version',
+        sort: 'filesystem',
+      },
       page: { nextCursor: 'opaque-secret-cursor', hasMore: true },
-      truncation: { truncated: true, reason: 'byteBudget', returnedItems: 1 },
+      truncation: { truncated: true, reason: 'metadataBudget', returnedItems: 1 },
       contentRef: { id: 'artifact-1', mediaType: 'application/json' },
     });
 
     expect(output).toContain('📄 D:/repo/a.rs');
+    expect(output).toContain('Thứ tự: Filesystem');
+    expect(output).toContain('Phiên bản thư mục: sha256:directory-version');
     expect(output).toContain('Còn dữ liệu ở trang tiếp theo.');
-    expect(output).toContain('Kết quả bị cắt: Byte Budget');
+    expect(output).toContain('Kết quả bị cắt: Metadata Budget');
     expect(output).toContain('Nội dung đầy đủ: artifact-1');
     expect(output).not.toContain('opaque-secret-cursor');
   });

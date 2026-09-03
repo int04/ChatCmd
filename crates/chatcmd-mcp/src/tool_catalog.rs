@@ -135,7 +135,7 @@ fn capability_flags(name: &str) -> ToolCapabilityFlags {
 fn result_schema(name: &str) -> Value {
     let schema = match name {
         "fs_list_v2" => serde_json::to_value(schemars::schema_for!(
-            chatcmd_runtime::ToolResultEnvelope<Vec<chatcmd_runtime::FsEntry>>
+            chatcmd_runtime::ToolResultEnvelope<chatcmd_runtime::FsListPageData>
         )),
         "fs_read_text_v2" => {
             serde_json::to_value(schemars::schema_for!(chatcmd_runtime::TextReadResultV2))

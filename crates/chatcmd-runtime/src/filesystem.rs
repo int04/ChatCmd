@@ -5,8 +5,11 @@ use crate::{
 use std::{
     fs,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
+#[path = "filesystem_list.rs"]
+mod list;
 #[path = "filesystem_mutations.rs"]
 mod mutations;
 #[path = "filesystem_read.rs"]
@@ -20,6 +23,7 @@ pub struct WorkspaceService {
     roots: Vec<PathBuf>,
     allowed_scopes: Vec<PathBuf>,
     policy: PolicyEngine,
+    list_states: Arc<list::DirectoryListStore>,
 }
 
 impl WorkspaceService {
@@ -41,6 +45,7 @@ impl WorkspaceService {
             roots: canonical.clone(),
             allowed_scopes: canonical,
             policy,
+            list_states: Arc::new(list::DirectoryListStore::default()),
         })
     }
 
@@ -73,6 +78,7 @@ impl WorkspaceService {
             roots: self.roots.clone(),
             allowed_scopes,
             policy: self.policy.clone(),
+            list_states: self.list_states.clone(),
         })
     }
 

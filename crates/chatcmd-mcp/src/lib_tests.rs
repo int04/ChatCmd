@@ -169,6 +169,10 @@ fn fs_list_v2_advertises_versioned_result_schema_without_changing_legacy_input()
 
     assert!(v2["schema"]["properties"].get("cursor").is_some());
     assert!(v2["schema"]["properties"].get("offset").is_none());
+    assert!(v2["schema"]["properties"].get("sort").is_some());
+    assert!(v2["schema"]["properties"].get("metadata").is_some());
+    assert!(v2["schema"]["properties"].get("includeHidden").is_some());
+    assert!(v2["schema"]["properties"].get("budget").is_some());
     assert_eq!(v2["capabilities"]["resultSchemaVersion"], 1);
     assert_eq!(v2["capabilities"]["supportsCursor"], true);
     assert_eq!(
@@ -178,6 +182,16 @@ fn fs_list_v2_advertises_versioned_result_schema_without_changing_legacy_input()
     assert!(v2["resultSchema"]["properties"].get("page").is_some());
     assert!(v2["resultSchema"]["properties"].get("truncation").is_some());
     assert!(v2["resultSchema"]["properties"].get("contentRef").is_some());
+    let data = &v2["resultSchema"]["properties"]["data"];
+    let data_ref = data["$ref"].as_str().expect("fs_list_v2 data schema ref");
+    let definition = data_ref
+        .rsplit('/')
+        .next()
+        .expect("fs_list_v2 data definition name");
+    let data_schema = &v2["resultSchema"]["$defs"][definition];
+    assert!(data_schema["properties"].get("items").is_some());
+    assert!(data_schema["properties"].get("directoryVersion").is_some());
+    assert!(data_schema["properties"].get("sort").is_some());
 }
 
 #[test]

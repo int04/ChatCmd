@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
-use chatcmd_runtime::ShellSignal;
+use chatcmd_runtime::{FsListBudget, FsListMetadata, FsListSort, ShellSignal};
 use serde::Deserialize;
 
 macro_rules! input {
@@ -177,6 +177,14 @@ pub(super) struct ListV2Input {
     pub(super) cursor: Option<String>,
     #[serde(default = "default_limit")]
     pub(super) limit: usize,
+    #[serde(default)]
+    pub(super) sort: FsListSort,
+    #[serde(default)]
+    pub(super) metadata: Vec<FsListMetadata>,
+    #[serde(default = "default_true")]
+    pub(super) include_hidden: bool,
+    #[serde(default)]
+    pub(super) budget: FsListBudget,
 }
 
 #[derive(Deserialize)]

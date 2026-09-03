@@ -144,6 +144,7 @@ pub enum TruncationReason {
     ItemLimit,
     TimeBudget,
     FileBudget,
+    MetadataBudget,
     ByteBudget,
     Cancelled,
     ReplayEvicted,
@@ -158,6 +159,10 @@ pub struct ToolUsage {
     pub elapsed_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub files_scanned: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entries_scanned: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata_calls: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bytes_read: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -348,6 +353,7 @@ mod tests {
             (TruncationReason::ItemLimit, "itemLimit"),
             (TruncationReason::TimeBudget, "timeBudget"),
             (TruncationReason::FileBudget, "fileBudget"),
+            (TruncationReason::MetadataBudget, "metadataBudget"),
             (TruncationReason::ByteBudget, "byteBudget"),
             (TruncationReason::Cancelled, "cancelled"),
             (TruncationReason::ReplayEvicted, "replayEvicted"),

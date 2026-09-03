@@ -56,12 +56,15 @@ function formatFsList(output: unknown) {
 }
 
 function formatFsListEnvelope(value: Record<string, unknown>) {
-  const body = formatFsList(value.data);
+  const data = asObject(value.data);
+  const body = formatFsList(data.items ?? value.data);
   const page = asObject(value.page);
   const truncation = asObject(value.truncation);
   const contentRef = asObject(value.contentRef);
   return compact([
     body,
+    stringish(data.sort) ? `Thứ tự: ${humanKey(stringish(data.sort))}` : '',
+    stringish(data.directoryVersion) ? `Phiên bản thư mục: ${stringish(data.directoryVersion)}` : '',
     page.hasMore === true ? 'Còn dữ liệu ở trang tiếp theo.' : '',
     truncation.truncated === true ? `Kết quả bị cắt${stringish(truncation.reason) ? `: ${humanKey(stringish(truncation.reason))}` : '.'}` : '',
     stringish(contentRef.id) ? `Nội dung đầy đủ: ${stringish(contentRef.id)}` : '',
