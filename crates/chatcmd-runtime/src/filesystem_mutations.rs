@@ -336,6 +336,20 @@ impl WorkspaceService {
         request: &FsTransferRequest,
         remove_source: bool,
     ) -> RuntimeResult<FsMutationResult> {
+        let mut effective_request = request.clone();
+        effective_request.budget.timeout_ms = effective_request.budget.timeout_ms.min(30 * 60_000);
+        effective_request.budget.max_files = effective_request.budget.max_files.min(2_000_000);
+        effective_request.budget.max_bytes_read = effective_request
+            .budget
+            .max_bytes_read
+            .min(2 * 1024 * 1024 * 1024 * 1024);
+        effective_request.budget.max_bytes_written = effective_request
+            .budget
+            .max_bytes_written
+            .min(2 * 1024 * 1024 * 1024 * 1024);
+        let request = &effective_request;
+        let memory = request.budget.max_bytes_written.min(128 * 1024 * 1024);
+        let _admission = self.admission.try_admit(&context.agent_id, 2, memory)?;
         if request.follow_symlinks {
             return Err(RuntimeError::new(
                 "unsupported_symlink_policy",
@@ -677,6 +691,21 @@ impl WorkspaceService {
         context: &OperationContext,
         request: &FsDeleteRequest,
     ) -> RuntimeResult<FsMutationResult> {
+        let mut effective_request = request.clone();
+        effective_request.budget.timeout_ms = effective_request.budget.timeout_ms.min(30 * 60_000);
+        effective_request.budget.max_files = effective_request.budget.max_files.min(2_000_000);
+        effective_request.budget.max_bytes_read = effective_request
+            .budget
+            .max_bytes_read
+            .min(2 * 1024 * 1024 * 1024 * 1024);
+        effective_request.budget.max_bytes_written = effective_request
+            .budget
+            .max_bytes_written
+            .min(2 * 1024 * 1024 * 1024 * 1024);
+        let request = &effective_request;
+        let _admission = self
+            .admission
+            .try_admit(&context.agent_id, 2, 8 * 1024 * 1024)?;
         let resolved = self.existing_for(&request.path, PathAccess::Delete)?;
         if self
             .allowed_scopes

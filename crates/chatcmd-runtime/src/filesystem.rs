@@ -1,6 +1,7 @@
 use crate::{
-    FsEntry, OperationContext, PolicyContext, PolicyEngine, RuntimeError, RuntimeResult,
-    TextReadBudget, TextReadRange, TextReadRequestV2, TextReadResult, TextReadResultV2,
+    AdmissionController, FsEntry, OperationContext, PolicyContext, PolicyEngine, RuntimeError,
+    RuntimeResult, TextReadBudget, TextReadRange, TextReadRequestV2, TextReadResult,
+    TextReadResultV2,
 };
 use std::{
     ffi::OsString,
@@ -187,6 +188,7 @@ pub struct WorkspaceService {
     find_states: Arc<find::FindStateStore>,
     search_states: Arc<search::SearchStateStore>,
     version_key: Arc<[u8; 32]>,
+    admission: AdmissionController,
 }
 
 impl WorkspaceService {
@@ -217,6 +219,7 @@ impl WorkspaceService {
             find_states: Arc::new(find::FindStateStore::default()),
             search_states: Arc::new(search::SearchStateStore::default()),
             version_key: Arc::new(version_key),
+            admission: AdmissionController::new(8, 2, 1024 * 1024 * 1024),
         })
     }
 
@@ -253,6 +256,7 @@ impl WorkspaceService {
             find_states: self.find_states.clone(),
             search_states: self.search_states.clone(),
             version_key: self.version_key.clone(),
+            admission: self.admission.clone(),
         })
     }
 

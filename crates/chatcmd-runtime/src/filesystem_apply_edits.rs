@@ -27,6 +27,23 @@ impl WorkspaceService {
         context: &OperationContext,
         request: &ApplyEditsRequest,
     ) -> RuntimeResult<ApplyEditsResult> {
+        const HARD_EDIT_TIMEOUT_MS: u64 = 5 * 60_000;
+        const HARD_EDIT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+        const HARD_EDIT_COUNT: usize = 10_000;
+        let mut effective_request = request.clone();
+        effective_request.budget.timeout_ms = effective_request
+            .budget
+            .timeout_ms
+            .min(HARD_EDIT_TIMEOUT_MS);
+        effective_request.budget.max_bytes_read =
+            effective_request.budget.max_bytes_read.min(HARD_EDIT_BYTES);
+        effective_request.budget.max_bytes_written = effective_request
+            .budget
+            .max_bytes_written
+            .min(HARD_EDIT_BYTES);
+        effective_request.budget.max_edits =
+            effective_request.budget.max_edits.min(HARD_EDIT_COUNT);
+        let request = &effective_request;
         validate_request(request)?;
         let resolved = self.existing_for(&request.path, PathAccess::Replace)?;
         if resolved.kind != EntryKind::File {

@@ -214,3 +214,19 @@ cargo test --workspace
 - Cancellation semantics theo read/mutation/process.
 - Test/benchmark cancellation/fairness/memory.
 - Các breaking changes/schema migration.
+
+## CHECK — Hạng mục cần kiểm tra và hoàn thiện sau
+
+Validation tự động `cargo fmt --check`, `cargo check --workspace` và `cargo test --workspace` đã
+thành công. Tuy nhiên các benchmark tải lớn trong workspace đang được đánh dấu `ignored`, nên chưa
+đo được cancellation latency, memory, throughput và fairness dưới tải concurrent theo ma trận bắt
+buộc của plan. Cần chạy riêng các benchmark ignored trên máy benchmark ổn định và lưu kết quả.
+
+Framework chung đã được áp dụng cho find/search, ranged read/edit, recursive safe mutation, Git
+process và persisted cancellation cleanup. Hai legacy subsystem còn cần migration/schema review:
+interactive PTY hiện vẫn dùng session/replay limits riêng, còn blob upload/download dùng quota riêng
+và chưa trả `BudgetUsage` trong response. Open-file weighted semaphore và disk reservation dùng chung
+cũng chưa được nối vào toàn bộ recursive/blob staging paths. Cần hoàn tất các migration này, bổ sung
+test fake-clock/proptest, cancel giữa từng phase mutation, process descendant verification, slow
+consumer fairness, app shutdown, và xác nhận public MCP schema/breaking-change strategy trước khi bỏ
+hậu tố `_check`.

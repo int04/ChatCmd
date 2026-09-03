@@ -12,6 +12,10 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 const READ_CHUNK_BYTES: usize = 32 * 1024;
+const HARD_PROCESS_RUNTIME_MS: u64 = 10 * 60 * 1_000;
+const HARD_STDOUT_PREVIEW_BYTES: usize = 4 * 1024 * 1024;
+const HARD_STDERR_PREVIEW_BYTES: usize = 1024 * 1024;
+const HARD_ARTIFACT_BYTES: u64 = 1024 * 1024 * 1024;
 
 #[derive(Clone)]
 pub(crate) struct BoundedProcessRunner {
@@ -57,20 +61,24 @@ impl BoundedProcessRunner {
         let (limit_tx, mut limit_rx) = mpsc::channel(1);
         let stdout_task = tokio::spawn(drain_stream(
             stdout,
-            options.max_output_bytes,
+            options.max_output_bytes.min(HARD_STDOUT_PREVIEW_BYTES),
             artifact.clone(),
-            options.artifact_max_bytes,
+            options.artifact_max_bytes.min(HARD_ARTIFACT_BYTES),
             limit_tx.clone(),
         ));
         let stderr_task = tokio::spawn(drain_stream(
             stderr,
-            options.max_stderr_bytes,
+            options.max_stderr_bytes.min(HARD_STDERR_PREVIEW_BYTES),
             None,
             0,
             limit_tx,
         ));
 
-        let runtime_ms = options.timeout_ms.min(options.max_runtime_ms).max(1);
+        let runtime_ms = options
+            .timeout_ms
+            .min(options.max_runtime_ms)
+            .min(HARD_PROCESS_RUNTIME_MS)
+            .max(1);
         let deadline = tokio::time::sleep(Duration::from_millis(runtime_ms));
         tokio::pin!(deadline);
         let mut timed_out = false;

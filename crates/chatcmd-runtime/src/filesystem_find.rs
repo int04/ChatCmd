@@ -1,7 +1,8 @@
 use super::{WorkspaceService, walk::configured_walker};
 use crate::{
-    FindEntryType, FindPatternMode, FsFindItem, FsFindPageData, FsFindRequest, FsFindScanPage,
-    OperationContext, RuntimeError, RuntimeResult, ToolWarning, TraversalOptions, TruncationReason,
+    BudgetTracker, FindEntryType, FindPatternMode, FsFindItem, FsFindPageData, FsFindRequest,
+    FsFindScanPage, OperationContext, RuntimeError, RuntimeResult, ToolBudget, ToolWarning,
+    TraversalOptions, TruncationReason,
 };
 use globset::{GlobBuilder, GlobMatcher};
 use ignore::{DirEntry, Walk};
@@ -18,6 +19,9 @@ use uuid::Uuid;
 const FIND_STATE_TTL: Duration = Duration::from_secs(15 * 60);
 const MAX_ACTIVE_FIND_STATES: usize = 128;
 const MAX_WARNINGS: usize = 20;
+const HARD_FIND_TIMEOUT: Duration = Duration::from_secs(60);
+const HARD_FIND_ENTRIES: u64 = 1_000_000;
+const HARD_FIND_METADATA_CALLS: u64 = 100_000;
 
 pub(super) struct FindStateStore {
     states: Mutex<HashMap<String, FindState>>,
@@ -55,10 +59,38 @@ impl WorkspaceService {
         state_id: Option<&str>,
         expected_root_version: Option<&str>,
     ) -> RuntimeResult<(FsFindScanPage, Option<String>)> {
+        let _admission = self
+            .admission
+            .try_admit(&context.agent_id, 1, 8 * 1024 * 1024)?;
         let root = self.existing(&request.path)?;
         root.revalidate()?;
-        let request = request.clone();
-        let cancellation = context.cancellation.clone();
+        let mut request = request.clone();
+        request.budget.timeout_ms = request.budget.timeout_ms.min(60_000);
+        request.budget.max_entries_scanned = request
+            .budget
+            .max_entries_scanned
+            .clamp(1, HARD_FIND_ENTRIES);
+        request.budget.max_metadata_calls = request
+            .budget
+            .max_metadata_calls
+            .min(HARD_FIND_METADATA_CALLS);
+        let tracker = BudgetTracker::new(
+            context.cancellation.clone(),
+            ToolBudget::intersect([
+                &ToolBudget {
+                    deadline: Some(Instant::now() + HARD_FIND_TIMEOUT),
+                    max_entries: Some(HARD_FIND_ENTRIES),
+                    ..ToolBudget::default()
+                },
+                &ToolBudget {
+                    deadline: Some(
+                        Instant::now() + Duration::from_millis(request.budget.timeout_ms),
+                    ),
+                    max_entries: Some(request.budget.max_entries_scanned.max(1)),
+                    ..ToolBudget::default()
+                },
+            ]),
+        );
         let owner = owner_key(context);
         let store = self.find_states.clone();
         let state_id = state_id.map(str::to_owned);
@@ -117,7 +149,7 @@ impl WorkspaceService {
             };
             drop(states);
 
-            let page = scan_page(&mut state, &request, &matcher, &cancellation)?;
+            let page = scan_page(&mut state, &request, &matcher, &tracker)?;
             if page.has_more {
                 state.expires_at = Instant::now() + FIND_STATE_TTL;
                 let mut states = store.states.lock().map_err(|_| {
@@ -142,13 +174,17 @@ fn scan_page(
     state: &mut FindState,
     request: &FsFindRequest,
     matcher: &CompiledPattern,
-    cancellation: &tokio_util::sync::CancellationToken,
+    tracker: &BudgetTracker,
 ) -> RuntimeResult<FsFindScanPage> {
-    let started = Instant::now();
-    let timeout = Duration::from_millis(request.budget.timeout_ms);
     let limit = request.limit.clamp(1, 5_000);
-    let max_entries = request.budget.max_entries_scanned.max(1);
-    let max_metadata = request.budget.max_metadata_calls;
+    let max_entries = request
+        .budget
+        .max_entries_scanned
+        .clamp(1, HARD_FIND_ENTRIES);
+    let max_metadata = request
+        .budget
+        .max_metadata_calls
+        .min(HARD_FIND_METADATA_CALLS);
     let mut items = Vec::with_capacity(limit);
     let mut entries_scanned = 0_u64;
     let mut metadata_calls = 0_u64;
@@ -156,12 +192,12 @@ fn scan_page(
     let mut truncation_reason = None;
 
     while items.len() < limit {
-        if cancellation.is_cancelled() {
-            truncation_reason = Some(TruncationReason::Cancelled);
-            break;
-        }
-        if started.elapsed() >= timeout {
-            truncation_reason = Some(TruncationReason::TimeBudget);
+        if let Err(error) = tracker.checkpoint() {
+            truncation_reason = Some(if error.code == "operationCancelled" {
+                TruncationReason::Cancelled
+            } else {
+                TruncationReason::TimeBudget
+            });
             break;
         }
         if entries_scanned >= max_entries {
@@ -172,6 +208,7 @@ fn scan_page(
         let Some(entry) = next_entry(state, &mut warnings)? else {
             break;
         };
+        tracker.record_entries(1);
         entries_scanned = entries_scanned.saturating_add(1);
         if entry.depth() == 0 && entry.path() == state.root {
             if state.root.is_dir() {

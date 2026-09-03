@@ -48,6 +48,18 @@ pub(crate) async fn read_text_v2(
     context: Option<&OperationContext>,
     request: &TextReadRequestV2,
 ) -> RuntimeResult<TextReadResultV2> {
+    const HARD_READ_TIMEOUT_MS: u64 = 60_000;
+    const HARD_READ_BYTES: u64 = 128 * 1024 * 1024;
+    const HARD_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
+    let mut effective_request = request.clone();
+    effective_request.budget.timeout_ms = effective_request
+        .budget
+        .timeout_ms
+        .min(HARD_READ_TIMEOUT_MS);
+    effective_request.budget.max_bytes_read =
+        effective_request.budget.max_bytes_read.min(HARD_READ_BYTES);
+    effective_request.max_bytes = effective_request.max_bytes.min(HARD_OUTPUT_BYTES);
+    let request = &effective_request;
     validate_request(request)?;
     let before = tokio::fs::metadata(&resolved).await.map_err(io_error)?;
     if !before.is_file() {

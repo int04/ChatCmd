@@ -1,6 +1,7 @@
 //! Direct, bounded local-machine execution primitives for ChatCMD.
 
 mod blob_store;
+mod budget;
 mod filesystem;
 mod git_service;
 mod policy;
@@ -13,6 +14,7 @@ mod types;
 mod workspace_ignore;
 
 pub use blob_store::*;
+pub use budget::*;
 pub use filesystem::{FileVersion, SearchProgress, WorkspaceService};
 pub use git_service::GitService;
 pub use policy::{

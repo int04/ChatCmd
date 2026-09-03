@@ -39,17 +39,26 @@ impl RuntimeHost {
         self.append_call_event(&context, tool, "started", Some(&arguments), None, None)
             .await?;
 
+        let dispatch = self.dispatch(tool, context.clone(), arguments);
+        tokio::pin!(dispatch);
         let result = tokio::select! {
-            result = self.dispatch(tool, context.clone(), arguments) => result,
+            result = &mut dispatch => result,
             () = context.cancellation.cancelled() => {
                 let reason = self.activities.stop_reason(&context.request_id);
-                Err(RuntimeError::new(
-                    "activity_stopped",
-                    reason.map_or_else(
-                        || "the user stopped this activity".to_owned(),
-                        |value| format!("the user stopped this activity. Reason: {value}"),
-                    ),
-                ))
+                // Dropping a dispatch future does not stop an active blocking worker. Continue
+                // polling until it reaches a cooperative checkpoint and completes cleanup. If
+                // it committed before observing cancellation, preserve the committed result.
+                match dispatch.await {
+                    Ok(output) => Ok(output),
+                    Err(error) if error.code != "operationCancelled" && error.code != "cancelled" => Err(error),
+                    Err(_) => Err(RuntimeError::new(
+                        "activity_stopped",
+                        reason.map_or_else(
+                            || "the user stopped this activity after worker cleanup".to_owned(),
+                            |value| format!("the user stopped this activity after worker cleanup. Reason: {value}"),
+                        ),
+                    )),
+                }
             }
         };
         match result {

@@ -11,8 +11,9 @@ use super::{
     walk::configured_walker,
 };
 use crate::{
-    FsSearchMatch, FsSearchPageData, FsSearchRequest, FsSearchScanPage, OperationContext,
-    RuntimeError, RuntimeResult, TraversalOptions, TruncationReason,
+    BudgetTracker, FsSearchMatch, FsSearchPageData, FsSearchRequest, FsSearchScanPage,
+    OperationContext, ProgressLimiter, RuntimeError, RuntimeResult, ToolBudget, TraversalOptions,
+    TruncationReason,
 };
 use globset::GlobSet;
 use ignore::{DirEntry, Walk};
@@ -29,6 +30,11 @@ use uuid::Uuid;
 
 const SEARCH_STATE_TTL: Duration = Duration::from_secs(15 * 60);
 const MAX_ACTIVE_SEARCH_STATES: usize = 128;
+const HARD_SEARCH_TIMEOUT: Duration = Duration::from_secs(60);
+const HARD_SEARCH_FILES: u64 = 1_000_000;
+const HARD_SEARCH_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const HARD_SEARCH_OUTPUT: u64 = 4 * 1024 * 1024;
+const HARD_SEARCH_FILE_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct SearchProgress {
@@ -92,10 +98,37 @@ impl WorkspaceService {
         expected_root_version: Option<&str>,
         progress: impl Fn(SearchProgress) + Send + Sync + 'static,
     ) -> RuntimeResult<(FsSearchScanPage, Option<String>)> {
+        let memory = request.budget.max_output_bytes.min(64 * 1024 * 1024);
+        let _admission = self.admission.try_admit(&context.agent_id, 1, memory)?;
         let root = self.existing(&request.path)?;
         root.revalidate()?;
-        let request = request.clone();
-        let cancellation = context.cancellation.clone();
+        let mut request = request.clone();
+        request.budget.timeout_ms = request.budget.timeout_ms.min(60_000);
+        request.budget.max_files_scanned =
+            request.budget.max_files_scanned.clamp(1, HARD_SEARCH_FILES);
+        request.budget.max_bytes_scanned =
+            request.budget.max_bytes_scanned.clamp(1, HARD_SEARCH_BYTES);
+        request.budget.max_output_bytes =
+            request.budget.max_output_bytes.clamp(1, HARD_SEARCH_OUTPUT);
+        request.budget.max_file_bytes = request
+            .budget
+            .max_file_bytes
+            .clamp(1, HARD_SEARCH_FILE_BYTES);
+        let tracker = BudgetTracker::new(
+            context.cancellation.clone(),
+            ToolBudget::intersect([
+                &ToolBudget {
+                    deadline: Some(Instant::now() + HARD_SEARCH_TIMEOUT),
+                    ..ToolBudget::default()
+                },
+                &ToolBudget {
+                    deadline: Some(
+                        Instant::now() + Duration::from_millis(request.budget.timeout_ms),
+                    ),
+                    ..ToolBudget::default()
+                },
+            ]),
+        );
         let owner = owner_key(context);
         let store = self.search_states.clone();
         let state_id = state_id.map(str::to_owned);
@@ -153,7 +186,7 @@ impl WorkspaceService {
             };
             drop(states);
 
-            let page = scan_page(&mut state, &request, &compiled, &cancellation, &progress)?;
+            let page = scan_page(&mut state, &request, &compiled, &tracker, &progress)?;
             if page.has_more {
                 state.expires_at = Instant::now() + SEARCH_STATE_TTL;
                 let mut states = store.states.lock().map_err(|_| {
@@ -178,15 +211,13 @@ fn scan_page(
     state: &mut SearchState,
     request: &FsSearchRequest,
     compiled: &CompiledSearch,
-    cancellation: &tokio_util::sync::CancellationToken,
+    tracker: &BudgetTracker,
     progress: &impl Fn(SearchProgress),
 ) -> RuntimeResult<FsSearchScanPage> {
-    let started = Instant::now();
-    let timeout = Duration::from_millis(request.budget.timeout_ms.max(1));
     let limit = request.limit.clamp(1, 5_000);
-    let max_files = request.budget.max_files_scanned.max(1);
-    let max_bytes = request.budget.max_bytes_scanned.max(1);
-    let max_output = request.budget.max_output_bytes.max(1);
+    let max_files = request.budget.max_files_scanned.clamp(1, HARD_SEARCH_FILES);
+    let max_bytes = request.budget.max_bytes_scanned.clamp(1, HARD_SEARCH_BYTES);
+    let max_output = request.budget.max_output_bytes.clamp(1, HARD_SEARCH_OUTPUT);
     let mut matches = Vec::with_capacity(limit.min(256));
     let mut files_scanned = 0_u64;
     let mut bytes_scanned = 0_u64;
@@ -196,14 +227,15 @@ fn scan_page(
     let mut errors_skipped = 0_u64;
     let mut warnings = Vec::new();
     let mut truncation_reason = None;
+    let progress_limiter = ProgressLimiter::new(10, 100);
 
     loop {
-        if cancellation.is_cancelled() {
-            truncation_reason = Some(TruncationReason::Cancelled);
-            break;
-        }
-        if started.elapsed() >= timeout {
-            truncation_reason = Some(TruncationReason::TimeBudget);
+        if let Err(error) = tracker.checkpoint() {
+            truncation_reason = Some(if error.code == "operationCancelled" {
+                TruncationReason::Cancelled
+            } else {
+                TruncationReason::TimeBudget
+            });
             break;
         }
         if files_scanned >= max_files && state.current_file.is_none() {
@@ -271,6 +303,7 @@ fn scan_page(
             match open_text_file(entry.path()) {
                 Ok(Some(file)) => {
                     files_scanned += 1;
+                    tracker.record_files(1);
                     state.current_file = Some(FileScanState {
                         path: entry.path().to_path_buf(),
                         reader: BufReader::with_capacity(64 * 1024, file),
@@ -326,6 +359,7 @@ fn scan_page(
             continue;
         }
         bytes_scanned = bytes_scanned.saturating_add(read as u64);
+        tracker.record_read_bytes(read as u64);
         file.line_number += 1;
         let line_start = file.byte_offset;
         file.byte_offset = file.byte_offset.saturating_add(read as u64);
@@ -435,11 +469,25 @@ fn scan_page(
             }
         }
 
+        if progress_limiter.should_emit(false) {
+            progress(SearchProgress {
+                path: file.path.clone(),
+                files_scanned,
+                bytes_scanned,
+                matches_found: matches.len() + file.pending.len(),
+            });
+        }
+    }
+
+    if progress_limiter.should_emit(true) {
         progress(SearchProgress {
-            path: file.path.clone(),
+            path: state
+                .current_file
+                .as_ref()
+                .map_or_else(|| state.root.clone(), |file| file.path.clone()),
             files_scanned,
             bytes_scanned,
-            matches_found: matches.len() + file.pending.len(),
+            matches_found: matches.len(),
         });
     }
 
