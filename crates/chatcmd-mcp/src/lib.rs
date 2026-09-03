@@ -308,15 +308,35 @@ tool_args!(SearchArgs {
     path: String,
     query: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    mode: Option<chatcmd_runtime::SearchMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     case_sensitive: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    word_boundary: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    include: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    exclude: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    include_ignored: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    context_before: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    context_after: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_matches_per_file: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cursor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    limit: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     max_results: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     max_file_bytes: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    include_ignored: Option<bool>,
+    max_snippet_bytes: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    exclude: Option<Vec<String>>
+    budget: Option<chatcmd_runtime::FsSearchBudget>
 });
 tool_args!(FindArgs {
     path: String,
@@ -664,7 +684,7 @@ tool_methods!(
     (
         fs_search,
         SearchArgs,
-        "Search text within the workspace. Required fields: path, query; optional caseSensitive, maxResults, maxFileBytes, includeIgnored, exclude. Use '.' for the workspace root rather than an empty path."
+        "Scalable cursor-paginated text search. Required fields: path, query. Optional mode=literal|regex (default literal), caseSensitive, wordBoundary, include/exclude globs, includeIgnored, contextBefore/contextAfter, maxMatchesPerFile, cursor, limit, maxSnippetBytes, budget {timeoutMs,maxFilesScanned,maxBytesScanned,maxOutputBytes,maxFileBytes}. Legacy maxResults/maxFileBytes remain accepted. Results include bounded match snippets, line/column/byte offsets, scan usage/warnings, truncation reason, and page.nextCursor. Continue only with page.nextCursor for the same path/query/options; workspace mutation can invalidate continuation. Use '.' for the workspace root rather than an empty path."
     ),
     (
         fs_find,

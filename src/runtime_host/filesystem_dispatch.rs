@@ -1,10 +1,10 @@
 use std::{
-    collections::HashSet,
     path::Path,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 use chatcmd_runtime::{
@@ -54,54 +54,126 @@ pub(super) async fn search(
     context: &OperationContext,
     input: SearchInput,
 ) -> RuntimeResult<Value> {
+    let started = Instant::now();
+    let scope = workspace.stat(&input.path).await?.path;
+    let normalized_scope = scope.to_string_lossy();
+    let cursor_state = input
+        .cursor
+        .as_deref()
+        .map(|cursor| {
+            host.cursor_codec
+                .decode::<chatcmd_runtime::FsSearchCursorState>(
+                    cursor,
+                    "fs_search",
+                    normalized_scope.as_ref(),
+                )
+        })
+        .transpose()?;
+
+    let mut budget = input.budget.unwrap_or_default();
+    if let Some(max_file_bytes) = input.max_file_bytes {
+        budget.max_file_bytes = max_file_bytes;
+    }
+    let request = chatcmd_runtime::FsSearchRequest {
+        path: input.path,
+        query: input.query,
+        mode: input.mode.unwrap_or(chatcmd_runtime::SearchMode::Literal),
+        case_sensitive: input.case_sensitive,
+        word_boundary: input.word_boundary,
+        include: input.include,
+        exclude: input.exclude,
+        include_ignored: input.include_ignored,
+        context_before: input.context_before.min(100),
+        context_after: input.context_after.min(100),
+        max_matches_per_file: input.max_matches_per_file.unwrap_or(50).clamp(1, 5_000),
+        limit: input
+            .limit
+            .or(input.max_results)
+            .unwrap_or(200)
+            .clamp(1, 5_000),
+        max_snippet_bytes: input
+            .max_snippet_bytes
+            .unwrap_or(8 * 1024)
+            .clamp(64, 256 * 1024),
+        budget,
+    };
+
     let publisher = host.clone();
     let progress_context = context.clone();
     let progress_sequence = Arc::new(AtomicU64::new(0));
-    let seen_paths = Arc::new(Mutex::new(HashSet::<String>::new()));
-    value(
-        workspace
-            .search(
-                &input.path,
-                &input.query,
-                input.case_sensitive,
-                input.max_results,
-                input.max_file_bytes,
-                input.include_ignored,
-                input.exclude,
-                move |progress: SearchProgress| {
-                    let sequence = progress_sequence.fetch_add(1, Ordering::Relaxed) + 1;
-                    let text = if progress.matched.is_some() {
-                        let path = progress.path.display().to_string();
-                        let mut seen = seen_paths.lock().unwrap_or_else(|error| error.into_inner());
-                        if !seen.insert(path.clone()) {
-                            return;
-                        }
-                        format!("{path}\n")
-                    } else {
-                        format!(
-                            "Scanning {} files · {} matches\n{}\n",
+    let last_progress = Arc::new(Mutex::new(Instant::now() - Duration::from_secs(1)));
+    let (page, state_id) = workspace
+        .search_v2(
+            context,
+            &request,
+            cursor_state.as_ref().map(|state| state.state_id.as_str()),
+            cursor_state
+                .as_ref()
+                .map(|state| state.root_version.as_str()),
+            move |progress: SearchProgress| {
+                let mut last = last_progress
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                if last.elapsed() < Duration::from_millis(250) {
+                    return;
+                }
+                *last = Instant::now();
+                let sequence = progress_sequence.fetch_add(1, Ordering::Relaxed) + 1;
+                publisher.publish_event(
+                    format!("{}:search-progress:{sequence}", progress_context.request_id),
+                    "terminal_output",
+                    progress_context.task_id.clone(),
+                    progress_context.mcp_session_id.clone(),
+                    progress_context.turn_id.clone(),
+                    json!({
+                        "text": format!(
+                            "Scanning {} files · {} bytes · {} matches\n{}\n",
                             progress.files_scanned,
+                            progress.bytes_scanned,
                             progress.matches_found,
                             progress.path.display()
-                        )
-                    };
-                    publisher.publish_event(
-                        format!("{}:search-progress:{sequence}", progress_context.request_id),
-                        "terminal_output",
-                        progress_context.task_id.clone(),
-                        progress_context.mcp_session_id.clone(),
-                        progress_context.turn_id.clone(),
-                        json!({
-                            "text": text,
-                            "stream": "tool",
-                            "encoding": "utf-8",
-                            "activityId": progress_context.request_id
-                        }),
-                    );
-                },
-            )
-            .await?,
-    )
+                        ),
+                        "stream": "tool",
+                        "encoding": "utf-8",
+                        "activityId": progress_context.request_id
+                    }),
+                );
+            },
+        )
+        .await?;
+
+    let next_cursor = match (page.has_more, state_id) {
+        (true, Some(state_id)) => Some(host.cursor_codec.encode(
+            "fs_search",
+            normalized_scope.as_ref(),
+            &chatcmd_runtime::FsSearchCursorState {
+                state_id,
+                root_version: page.root_version.clone(),
+            },
+            None,
+        )?),
+        _ => None,
+    };
+    let returned_items = u64::try_from(page.data.matches.len()).unwrap_or(u64::MAX);
+    let mut result =
+        chatcmd_runtime::ToolResultEnvelope::paged(page.data, next_cursor, page.has_more);
+    if let Some(reason) = page.truncation_reason {
+        result.truncation = Some(chatcmd_runtime::TruncationInfo {
+            truncated: true,
+            reason: Some(reason),
+            returned_items,
+            omitted_items: None,
+        });
+    }
+    result.warnings = page.warnings;
+    result = result.with_usage(chatcmd_runtime::ToolUsage {
+        elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        files_scanned: Some(page.files_scanned),
+        bytes_read: Some(page.bytes_scanned),
+        ..chatcmd_runtime::ToolUsage::default()
+    });
+    result.measure_output_bytes()?;
+    value(result)
 }
 
 pub(super) async fn write_text(

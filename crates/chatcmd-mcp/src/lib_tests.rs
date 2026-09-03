@@ -195,6 +195,59 @@ fn fs_list_v2_advertises_versioned_result_schema_without_changing_legacy_input()
 }
 
 #[test]
+fn fs_search_advertises_v2_cursor_budget_schema_and_legacy_fields() {
+    let manifest = canonical_manifest();
+    let tools = manifest["tools"].as_array().expect("manifest tools");
+    let search = tools
+        .iter()
+        .find(|tool| tool["name"] == "fs_search")
+        .expect("fs_search");
+    let properties = &search["schema"]["properties"];
+    for field in [
+        "mode",
+        "caseSensitive",
+        "wordBoundary",
+        "include",
+        "exclude",
+        "includeIgnored",
+        "contextBefore",
+        "contextAfter",
+        "maxMatchesPerFile",
+        "cursor",
+        "limit",
+        "maxSnippetBytes",
+        "budget",
+        "maxResults",
+        "maxFileBytes",
+    ] {
+        assert!(
+            properties.get(field).is_some(),
+            "missing fs_search schema field {field}"
+        );
+    }
+    assert_eq!(search["capabilities"]["supportsCursor"], true);
+    assert_eq!(search["capabilities"]["resultSchemaVersion"], 1);
+    assert!(search["resultSchema"]["properties"].get("page").is_some());
+    assert!(
+        search["resultSchema"]["properties"]
+            .get("truncation")
+            .is_some()
+    );
+    assert!(search["resultSchema"]["properties"].get("usage").is_some());
+
+    let legacy: SearchArgs = serde_json::from_value(serde_json::json!({
+        "path": ".",
+        "query": "needle",
+        "maxResults": 3,
+        "maxFileBytes": 4096
+    }))
+    .expect("legacy fs_search request");
+    assert!(legacy.mode.is_none());
+    assert_eq!(legacy.max_results, Some(3));
+    assert_eq!(legacy.max_file_bytes, Some(4096));
+}
+
+#[test]
 fn fs_read_text_v2_advertises_streaming_range_contract_and_result_metadata() {
     let manifest = canonical_manifest();
     let tools = manifest["tools"].as_array().expect("manifest tools");

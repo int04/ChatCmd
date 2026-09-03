@@ -196,19 +196,35 @@ pub(super) struct SearchInput {
     pub(super) path: PathBuf,
     pub(super) query: String,
     #[serde(default)]
+    pub(super) mode: Option<chatcmd_runtime::SearchMode>,
+    #[serde(default)]
     pub(super) case_sensitive: bool,
-    #[serde(default = "default_limit")]
-    pub(super) max_results: usize,
-    #[serde(default = "default_file_bytes")]
-    pub(super) max_file_bytes: u64,
+    #[serde(default)]
+    pub(super) word_boundary: bool,
+    #[serde(default)]
+    pub(super) include: Vec<String>,
+    #[serde(default)]
+    pub(super) exclude: Vec<String>,
     #[serde(default)]
     pub(super) include_ignored: bool,
     #[serde(default)]
-    pub(super) exclude: Vec<String>,
-}
-
-const fn default_file_bytes() -> u64 {
-    1_048_576
+    pub(super) context_before: usize,
+    #[serde(default)]
+    pub(super) context_after: usize,
+    #[serde(default)]
+    pub(super) max_matches_per_file: Option<usize>,
+    #[serde(default)]
+    pub(super) cursor: Option<String>,
+    #[serde(default)]
+    pub(super) limit: Option<usize>,
+    #[serde(default)]
+    pub(super) max_results: Option<usize>,
+    #[serde(default)]
+    pub(super) max_file_bytes: Option<u64>,
+    #[serde(default)]
+    pub(super) max_snippet_bytes: Option<usize>,
+    #[serde(default)]
+    pub(super) budget: Option<chatcmd_runtime::FsSearchBudget>,
 }
 
 #[derive(Deserialize)]

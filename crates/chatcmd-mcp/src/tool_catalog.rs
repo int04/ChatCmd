@@ -122,11 +122,11 @@ pub(crate) fn canonicalize_contract(value: Value) -> Value {
 
 fn capability_flags(name: &str) -> ToolCapabilityFlags {
     ToolCapabilityFlags {
-        supports_cursor: matches!(name, "fs_list_v2" | "fs_find" | "shell_read"),
+        supports_cursor: matches!(name, "fs_list_v2" | "fs_find" | "fs_search" | "shell_read"),
         supports_content_ref: name == "fs_list_v2",
         mutating: is_mutating(name),
         streaming: matches!(name, "shell_read" | "fs_read_text_v2"),
-        result_schema_version: matches!(name, "fs_list_v2" | "fs_find")
+        result_schema_version: matches!(name, "fs_list_v2" | "fs_find" | "fs_search")
             .then_some(chatcmd_runtime::TOOL_RESULT_SCHEMA_VERSION),
         deprecated_aliases: Vec::new(),
     }
@@ -139,6 +139,9 @@ fn result_schema(name: &str) -> Value {
         )),
         "fs_find" => serde_json::to_value(schemars::schema_for!(
             chatcmd_runtime::ToolResultEnvelope<chatcmd_runtime::FsFindPageData>
+        )),
+        "fs_search" => serde_json::to_value(schemars::schema_for!(
+            chatcmd_runtime::ToolResultEnvelope<chatcmd_runtime::FsSearchPageData>
         )),
         "fs_read_text_v2" => {
             serde_json::to_value(schemars::schema_for!(chatcmd_runtime::TextReadResultV2))

@@ -425,6 +425,140 @@ pub enum FindEntryType {
     Symlink,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum SearchMode {
+    #[default]
+    Literal,
+    Regex,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FsSearchBudget {
+    #[serde(default = "default_fs_search_timeout_ms")]
+    pub timeout_ms: u64,
+    #[serde(default = "default_fs_search_max_files_scanned")]
+    pub max_files_scanned: u64,
+    #[serde(default = "default_fs_search_max_bytes_scanned")]
+    pub max_bytes_scanned: u64,
+    #[serde(default = "default_fs_search_max_output_bytes")]
+    pub max_output_bytes: u64,
+    #[serde(default = "default_fs_search_max_file_bytes")]
+    pub max_file_bytes: u64,
+}
+
+impl Default for FsSearchBudget {
+    fn default() -> Self {
+        Self {
+            timeout_ms: default_fs_search_timeout_ms(),
+            max_files_scanned: default_fs_search_max_files_scanned(),
+            max_bytes_scanned: default_fs_search_max_bytes_scanned(),
+            max_output_bytes: default_fs_search_max_output_bytes(),
+            max_file_bytes: default_fs_search_max_file_bytes(),
+        }
+    }
+}
+
+const fn default_fs_search_timeout_ms() -> u64 {
+    15_000
+}
+const fn default_fs_search_max_files_scanned() -> u64 {
+    100_000
+}
+const fn default_fs_search_max_bytes_scanned() -> u64 {
+    512 * 1024 * 1024
+}
+const fn default_fs_search_max_output_bytes() -> u64 {
+    512 * 1024
+}
+const fn default_fs_search_max_file_bytes() -> u64 {
+    64 * 1024 * 1024
+}
+const fn default_fs_search_limit() -> usize {
+    200
+}
+const fn default_fs_search_matches_per_file() -> usize {
+    50
+}
+const fn default_fs_search_snippet_bytes() -> usize {
+    8 * 1024
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FsSearchRequest {
+    pub path: PathBuf,
+    pub query: String,
+    #[serde(default)]
+    pub mode: SearchMode,
+    #[serde(default)]
+    pub case_sensitive: bool,
+    #[serde(default)]
+    pub word_boundary: bool,
+    #[serde(default)]
+    pub include: Vec<String>,
+    #[serde(default)]
+    pub exclude: Vec<String>,
+    #[serde(default)]
+    pub include_ignored: bool,
+    #[serde(default)]
+    pub context_before: usize,
+    #[serde(default)]
+    pub context_after: usize,
+    #[serde(default = "default_fs_search_matches_per_file")]
+    pub max_matches_per_file: usize,
+    #[serde(default = "default_fs_search_limit")]
+    pub limit: usize,
+    #[serde(default = "default_fs_search_snippet_bytes")]
+    pub max_snippet_bytes: usize,
+    #[serde(default)]
+    pub budget: FsSearchBudget,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FsSearchMatch {
+    pub path: String,
+    pub line: u64,
+    pub column: u64,
+    pub byte_offset: u64,
+    pub match_start: u64,
+    pub match_end: u64,
+    pub match_text: String,
+    pub line_text: String,
+    pub context_before: Vec<String>,
+    pub context_after: Vec<String>,
+    pub line_truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FsSearchPageData {
+    pub matches: Vec<FsSearchMatch>,
+    pub files_skipped_by_size: u64,
+    pub binary_files_skipped: u64,
+    pub errors_skipped: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FsSearchCursorState {
+    pub state_id: String,
+    pub root_version: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct FsSearchScanPage {
+    pub data: FsSearchPageData,
+    pub has_more: bool,
+    pub files_scanned: u64,
+    pub bytes_scanned: u64,
+    pub truncation_reason: Option<crate::TruncationReason>,
+    pub warnings: Vec<crate::ToolWarning>,
+    pub root_version: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct FsFindBudget {

@@ -18,6 +18,10 @@ mod mutations;
 mod read;
 #[path = "filesystem_search.rs"]
 mod search;
+#[path = "filesystem_search_helpers.rs"]
+mod search_helpers;
+#[path = "filesystem_search_state.rs"]
+mod search_state;
 #[path = "filesystem_walk.rs"]
 mod walk;
 pub use search::SearchProgress;
@@ -29,6 +33,7 @@ pub struct WorkspaceService {
     policy: PolicyEngine,
     list_states: Arc<list::DirectoryListStore>,
     find_states: Arc<find::FindStateStore>,
+    search_states: Arc<search::SearchStateStore>,
 }
 
 impl WorkspaceService {
@@ -52,6 +57,7 @@ impl WorkspaceService {
             policy,
             list_states: Arc::new(list::DirectoryListStore::default()),
             find_states: Arc::new(find::FindStateStore::default()),
+            search_states: Arc::new(search::SearchStateStore::default()),
         })
     }
 
@@ -86,6 +92,7 @@ impl WorkspaceService {
             policy: self.policy.clone(),
             list_states: self.list_states.clone(),
             find_states: self.find_states.clone(),
+            search_states: self.search_states.clone(),
         })
     }
 
@@ -154,6 +161,55 @@ impl WorkspaceService {
             size: metadata.len(),
             readonly: metadata.permissions().readonly(),
         })
+    }
+
+    pub async fn search(
+        &self,
+        path: &Path,
+        query: &str,
+        case_sensitive: bool,
+        max_results: usize,
+        max_file_bytes: u64,
+        include_ignored: bool,
+        exclude: Vec<String>,
+        progress: impl Fn(SearchProgress) + Send + Sync + 'static,
+    ) -> RuntimeResult<Vec<serde_json::Value>> {
+        let request = crate::FsSearchRequest {
+            path: path.to_path_buf(),
+            query: query.to_owned(),
+            mode: crate::SearchMode::Literal,
+            case_sensitive,
+            word_boundary: false,
+            include: Vec::new(),
+            exclude,
+            include_ignored,
+            context_before: 0,
+            context_after: 0,
+            max_matches_per_file: max_results.max(1),
+            limit: max_results.max(1),
+            max_snippet_bytes: 8 * 1024,
+            budget: crate::FsSearchBudget {
+                max_file_bytes,
+                ..crate::FsSearchBudget::default()
+            },
+        };
+        let context = OperationContext::new(
+            uuid::Uuid::new_v4().to_string(),
+            "legacy-workspace-search",
+            "fs_search",
+        );
+        let (page, _) = self
+            .search_v2(&context, &request, None, None, progress)
+            .await?;
+        page.data
+            .matches
+            .into_iter()
+            .map(|value| {
+                serde_json::to_value(value).map_err(|error| {
+                    RuntimeError::new("result_serialization_failed", error.to_string())
+                })
+            })
+            .collect()
     }
 
     pub async fn read_text(
