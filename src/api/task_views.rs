@@ -147,7 +147,9 @@ pub(super) async fn pending_activity_approvals(
                 "taskId": task_id,
                 "turnId": request.get("turnId").and_then(Value::as_str),
                 "tool": request.get("tool").and_then(Value::as_str).unwrap_or("tool"),
-                "input": request.get("input").cloned().unwrap_or(Value::Null),
+                "input": request.get("summary").cloned().unwrap_or(Value::Null),
+                "riskClass": request.get("riskClass").cloned().unwrap_or(Value::Null),
+                "grantPreview": request.get("grantPreview").cloned().unwrap_or(Value::Null),
                 "createdAtUtc": iso_ms(created_at_ms),
                 "approvalDeadlineUtc": iso_ms(created_at_ms.saturating_add(120_000)),
             })
@@ -414,6 +416,17 @@ async fn task_detail_page(
         .map(|(_, _, value)| value)
         .collect::<Vec<_>>();
     let subagent_approvals = pending_subagent_approvals(state, id).await?;
+    let approval_grants = sqlx::query("SELECT id,allowed_tools_json,path_scopes_json,max_calls,used_calls,max_files_scanned,used_files_scanned,max_bytes_read,used_bytes_read,expires_at_ms,state FROM approval_grants WHERE task_id=? AND state='active' AND expires_at_ms>? ORDER BY created_at_ms DESC")
+        .bind(id).bind(now_ms()).fetch_all(state.repository.pool()).await.map_err(db_problem)?
+        .into_iter().map(|row| json!({
+            "id": row.get::<String,_>("id"),
+            "allowedTools": serde_json::from_str::<Value>(&row.get::<String,_>("allowed_tools_json")).unwrap_or_else(|_| json!([])),
+            "pathScopes": serde_json::from_str::<Value>(&row.get::<String,_>("path_scopes_json")).unwrap_or_else(|_| json!([])),
+            "maxCalls": row.get::<i64,_>("max_calls"), "usedCalls": row.get::<i64,_>("used_calls"),
+            "maxFilesScanned": row.get::<Option<i64>,_>("max_files_scanned"), "usedFilesScanned": row.get::<i64,_>("used_files_scanned"),
+            "maxBytesRead": row.get::<Option<i64>,_>("max_bytes_read"), "usedBytesRead": row.get::<i64,_>("used_bytes_read"),
+            "expiresAtUtc": iso_ms(row.get::<i64,_>("expires_at_ms")), "state": row.get::<String,_>("state")
+        })).collect::<Vec<_>>();
     let execution_mode_id = TaskId::new(execution_mode_task_id).map_err(|_| bad_id())?;
     Ok(Json(json!({
         "task": task_value,
@@ -422,6 +435,7 @@ async fn task_detail_page(
         "nextCursor": next_cursor,
         "subagents": subagents,
         "subagentApprovals": subagent_approvals,
+        "approvalGrants": approval_grants,
         "executionMode": execution_mode_name(state.repository.execution_mode(Some(&execution_mode_id)).await.map_err(storage_problem)?),
         "executionModeSourceTaskId": execution_mode_task_id
     })))

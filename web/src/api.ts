@@ -104,6 +104,7 @@ export const api = {
   setTaskExecutionMode: (id: string, mode: CommandExecutionMode) => request<{ mode: CommandExecutionMode; overridden: boolean }>(`/api/local/tasks/${item(id)}/command-execution-mode`, { method: 'PUT', body: json({ mode }) }),
   stopTaskActivity: (taskId: string, activityId: string, input: { turnId?: string; reason?: string }) => request<void>(`/api/local/tasks/${item(taskId)}/activities/${item(activityId)}/stop`, { method: 'POST', body: json(input) }),
   resolveTaskApproval: (taskId: string, activityId: string, input: { turnId?: string; decision: 'allow' | 'allowSimilar' | 'reject'; reason?: string }) => request<{ accepted: boolean; decision: string }>(`/api/local/tasks/${item(taskId)}/activities/${item(activityId)}/approval`, { method: 'POST', body: json(input) }),
+  revokeTaskApprovalGrant: (taskId: string, grantId: string) => request<void>(`/api/local/tasks/${item(taskId)}/approval-grants/${item(grantId)}/revoke`, { method: 'POST' }),
   sessions: () => request<Session[]>('/api/local/sessions'),
   liveTerminals: () => request<Session[]>('/api/local/sessions/terminals/live'),
   liveTerminalOutput: (id: string, afterSequence = 0, waitMs = 20_000) => request<LiveTerminalOutput>(`/api/local/sessions/${item(id)}/live?afterSequence=${afterSequence}&waitMs=${waitMs}`),

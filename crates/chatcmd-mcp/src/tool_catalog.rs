@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::sync::LazyLock;
 
 pub const PROTOCOL_VERSION: u32 = 2;
-pub const CATALOG_VERSION: u32 = 3;
+pub const CATALOG_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -20,12 +20,59 @@ pub struct CatalogMetadata {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolCapabilityFlags {
+    pub approval_required: bool,
     pub supports_cursor: bool,
     pub supports_content_ref: bool,
     pub mutating: bool,
     pub streaming: bool,
     pub result_schema_version: Option<u16>,
     pub deprecated_aliases: Vec<String>,
+    pub risk_class: ToolRiskClass,
+    pub path_fields: Vec<PathFieldRole>,
+    pub supports_budget: bool,
+    pub supports_dry_run: bool,
+    pub supports_expected_version: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ToolRiskClass {
+    MetadataRead,
+    ContentRead,
+    ComputeRead,
+    Create,
+    Modify,
+    MoveCopy,
+    Destructive,
+    ProcessExecution,
+    Privileged,
+}
+
+impl ToolRiskClass {
+    #[must_use]
+    pub const fn is_safe_read(self) -> bool {
+        matches!(
+            self,
+            Self::MetadataRead | Self::ContentRead | Self::ComputeRead
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PathFieldRole {
+    Path,
+    Paths,
+    RequestPaths,
+    Source,
+    Destination,
+    WorkingDirectory,
+    Cwd,
+}
+
+#[must_use]
+pub fn tool_capabilities(name: &str) -> ToolCapabilityFlags {
+    capability_flags(name)
 }
 
 /// Tool names are derived from the same rmcp router that advertises schemas.
@@ -121,7 +168,13 @@ pub(crate) fn canonicalize_contract(value: Value) -> Value {
 }
 
 fn capability_flags(name: &str) -> ToolCapabilityFlags {
+    let risk_class = risk_class(name);
     ToolCapabilityFlags {
+        approval_required: name == "shell_write"
+            || name.starts_with("fs_")
+            || name.starts_with("git_")
+            || name == "process_kill"
+            || name == "workspace_index_rebuild",
         supports_cursor: matches!(name, "fs_list_v2" | "fs_find" | "fs_search" | "shell_read"),
         supports_content_ref: matches!(
             name,
@@ -135,6 +188,89 @@ fn capability_flags(name: &str) -> ToolCapabilityFlags {
         result_schema_version: matches!(name, "fs_list_v2" | "fs_find" | "fs_search")
             .then_some(chatcmd_runtime::TOOL_RESULT_SCHEMA_VERSION),
         deprecated_aliases: Vec::new(),
+        risk_class,
+        path_fields: path_fields(name),
+        supports_budget: matches!(
+            name,
+            "fs_stat"
+                | "fs_find"
+                | "fs_search"
+                | "fs_apply_edits"
+                | "fs_copy"
+                | "fs_move"
+                | "fs_delete"
+        ),
+        supports_dry_run: matches!(name, "fs_apply_edits" | "fs_copy" | "fs_move" | "fs_delete"),
+        supports_expected_version: matches!(
+            name,
+            "fs_stat"
+                | "fs_write_text"
+                | "fs_write_raw"
+                | "fs_apply_edits"
+                | "fs_copy"
+                | "fs_move"
+                | "fs_delete"
+        ),
+    }
+}
+
+fn risk_class(name: &str) -> ToolRiskClass {
+    match name {
+        "device_list"
+        | "device_get"
+        | "workspace_roots"
+        | "fs_list"
+        | "fs_list_v2"
+        | "fs_stat"
+        | "fs_batch_stat"
+        | "workspace_index_status"
+        | "process_list"
+        | "process_inspect"
+        | "shell_list"
+        | "shell_inspect"
+        | "task_get"
+        | "task_list"
+        | "task_artifact_list"
+        | "blob_status" => ToolRiskClass::MetadataRead,
+        "fs_read_text" | "fs_read_text_v2" | "fs_batch_read" | "task_artifact_read"
+        | "skill_read" | "shell_read" => ToolRiskClass::ContentRead,
+        "fs_find" | "fs_search" | "skills_list" => ToolRiskClass::ComputeRead,
+        "fs_create_directory" | "blob_begin" | "blob_write_chunk" | "blob_seal" => {
+            ToolRiskClass::Create
+        }
+        "fs_write_text"
+        | "fs_write_raw"
+        | "fs_replace_text"
+        | "fs_apply_edits"
+        | "workspace_index_rebuild"
+        | "shell_write"
+        | "shell_resize" => ToolRiskClass::Modify,
+        "fs_copy" | "fs_move" => ToolRiskClass::MoveCopy,
+        "fs_delete" | "process_kill" | "blob_abort" | "shell_close" => ToolRiskClass::Destructive,
+        "shell_create" | "shell_wait" | "shell_signal" | "git_status" | "git_diff" | "git_log"
+        | "git_branch" | "git_show" | "git_commit" => ToolRiskClass::ProcessExecution,
+        "task_set_execution_mode"
+        | "agent_user_message"
+        | "agent_progress"
+        | "agent_plan_question"
+        | "agent_subagent_start"
+        | "agent_subagent_wait"
+        | "agent_turn_complete" => ToolRiskClass::Privileged,
+        _ => ToolRiskClass::Privileged,
+    }
+}
+
+fn path_fields(name: &str) -> Vec<PathFieldRole> {
+    use PathFieldRole::{Cwd, Destination, Path, Paths, RequestPaths, Source, WorkingDirectory};
+    match name {
+        "fs_batch_stat" | "fs_batch_read" => vec![Paths, RequestPaths],
+        "fs_copy" | "fs_move" => vec![Source, Destination],
+        "git_commit" => vec![Cwd, Paths],
+        "git_diff" | "git_log" | "git_show" => vec![Cwd, Path],
+        "git_status" | "git_branch" => vec![Cwd],
+        "shell_create" => vec![WorkingDirectory],
+        name if name.starts_with("fs_") || name.starts_with("workspace_index_") => vec![Path],
+        _ => Vec::new(),
     }
 }
 

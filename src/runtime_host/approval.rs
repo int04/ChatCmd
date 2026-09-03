@@ -1,14 +1,47 @@
-use std::time::{Duration, Instant};
+use std::{
+    path::{Path, PathBuf},
+    time::{Duration, Instant},
+};
 
 use chatcmd_core::{Approval, ApprovalState, SettingsStore as _, TaskId, TaskStore as _};
+use chatcmd_mcp::{PathFieldRole, ToolRiskClass, catalog_hash, tool_capabilities};
 use chatcmd_runtime::{OperationContext, RuntimeError, RuntimeResult};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use sqlx::Row as _;
+use uuid::Uuid;
 
 use super::{RuntimeHost, invalid, now_ms, storage_error};
 
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
 const APPROVAL_POLL_INTERVAL: Duration = Duration::from_millis(150);
+const SAFE_READ_GRANT_TTL_MS: i64 = 15 * 60 * 1_000;
+const SAFE_READ_MAX_CALLS: i64 = 256;
+const SAFE_READ_MAX_FILES: i64 = 100_000;
+const SAFE_READ_MAX_BYTES: i64 = 1_073_741_824;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GrantPathScope {
+    path: String,
+    kind: GrantPathScopeKind,
+    #[serde(default)]
+    identity: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum GrantPathScopeKind {
+    Exact,
+    Subtree,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct GrantCharge {
+    files: i64,
+    bytes_read: i64,
+}
 
 impl RuntimeHost {
     pub(super) async fn authorize_execution(
@@ -17,7 +50,8 @@ impl RuntimeHost {
         tool: &str,
         arguments: &Value,
     ) -> RuntimeResult<()> {
-        if !requires_execution_approval(tool) {
+        let capabilities = tool_capabilities(tool);
+        if !capabilities.approval_required {
             return Ok(());
         }
         let task_id = TaskId::new(context.task_id.as_deref().unwrap_or_default())
@@ -39,22 +73,39 @@ impl RuntimeHost {
             chatcmd_core::ExecutionMode::Approval => {}
         }
 
-        let similarity_key = similarity_key(tool, arguments);
-        if self
-            .similar_operation_allowed(mode_task_id.as_str(), &similarity_key)
-            .await?
+        let resolved_arguments = self
+            .resolve_approval_paths(context, tool, arguments)
+            .await?;
+        if capabilities.risk_class.is_safe_read()
+            && self
+                .consume_safe_read_grant(context, tool, &resolved_arguments)
+                .await?
         {
             return Ok(());
         }
 
         let approval_id = context.request_id.clone();
         let turn_id = context.turn_id.as_deref().unwrap_or_default();
+        let grant_preview = if capabilities.risk_class.is_safe_read() {
+            Some(self.safe_read_grant_preview(context, tool).await?)
+        } else {
+            None
+        };
+        let operation_digest = operation_digest(tool, &resolved_arguments);
+        let mut summary = approval_summary(tool, capabilities.risk_class, &resolved_arguments);
+        if let Some(preview) = grant_preview.as_ref() {
+            summary["grantPreview"] = preview.clone();
+        }
         let request_json = json!({
             "activityId": approval_id,
+            "agentId": context.agent_id,
             "tool": tool,
             "turnId": turn_id,
-            "input": arguments,
-            "similarityKey": similarity_key,
+            "riskClass": capabilities.risk_class,
+            "summary": summary,
+            "operationDigest": operation_digest,
+            "catalogHash": catalog_hash(),
+            "grantPreview": grant_preview,
         })
         .to_string();
         let created_at_ms = now_ms();
@@ -82,7 +133,9 @@ impl RuntimeHost {
             json!({
                 "activityId": approval_id,
                 "tool": tool,
-                "input": arguments,
+                "summary": summary,
+                "riskClass": capabilities.risk_class,
+                "grantPreview": grant_preview,
                 "approvalDeadlineUtc": time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(created_at_ms.saturating_add(120_000)) * 1_000_000)
                     .ok()
                     .and_then(|value| value.format(&time::format_description::well_known::Rfc3339).ok()),
@@ -92,7 +145,7 @@ impl RuntimeHost {
             context,
             tool,
             "pending_approval",
-            Some(arguments),
+            Some(&summary),
             None,
             None,
         )
@@ -102,7 +155,7 @@ impl RuntimeHost {
             &approval_id,
             turn_id,
             tool,
-            arguments,
+            &summary,
             "subagent.approval_pending",
         )
         .await?;
@@ -170,21 +223,159 @@ impl RuntimeHost {
         }
     }
 
-    async fn similar_operation_allowed(
+    async fn resolve_approval_paths(
         &self,
-        task_id: &str,
-        similarity_key: &str,
+        context: &OperationContext,
+        tool: &str,
+        arguments: &Value,
+    ) -> RuntimeResult<Value> {
+        if !tool.starts_with("fs_") && !tool.starts_with("workspace_index_") {
+            return Ok(arguments.clone());
+        }
+        let task_id = TaskId::new(context.task_id.as_deref().unwrap_or_default())
+            .map_err(|error| invalid("taskId", error))?;
+        let base = self
+            .repository
+            .task(&task_id)
+            .await
+            .map_err(storage_error)?
+            .and_then(|task| task.project_folder)
+            .map(PathBuf::from);
+        super::filesystem_dispatch::resolve_relative_paths(arguments.clone(), base.as_deref())
+    }
+
+    async fn safe_read_grant_preview(
+        &self,
+        context: &OperationContext,
+        tool: &str,
+    ) -> RuntimeResult<Value> {
+        let scopes = self.approval_path_scopes(context).await?;
+        Ok(json!({
+            "allowedTools": [tool], "pathScopes": scopes, "maxCalls": SAFE_READ_MAX_CALLS,
+            "maxFilesScanned": SAFE_READ_MAX_FILES, "maxBytesRead": SAFE_READ_MAX_BYTES,
+            "expiresAtMs": now_ms().saturating_add(SAFE_READ_GRANT_TTL_MS),
+            "optionConstraints": {"includeIgnored": false, "includeHidden": false}
+        }))
+    }
+
+    async fn approval_path_scopes(
+        &self,
+        context: &OperationContext,
+    ) -> RuntimeResult<Vec<GrantPathScope>> {
+        let task_id = TaskId::new(context.task_id.as_deref().unwrap_or_default())
+            .map_err(|error| invalid("taskId", error))?;
+        let mut paths = self.task_user_path_scopes(context).await?;
+        if let Some(project) = self
+            .repository
+            .task(&task_id)
+            .await
+            .map_err(storage_error)?
+            .and_then(|task| task.project_folder)
+            .map(PathBuf::from)
+        {
+            paths.push(project);
+        }
+        paths.sort();
+        paths.dedup();
+        paths
+            .into_iter()
+            .map(|path| {
+                let canonical = std::fs::canonicalize(&path).map_err(|_| {
+                    RuntimeError::new(
+                        "approval_scope_invalid",
+                        "approval path scope no longer exists",
+                    )
+                })?;
+                let kind = if canonical.is_dir() {
+                    GrantPathScopeKind::Subtree
+                } else {
+                    GrantPathScopeKind::Exact
+                };
+                Ok(GrantPathScope {
+                    path: normalized_path(&canonical),
+                    kind,
+                    identity: path_identity(&canonical),
+                })
+            })
+            .collect()
+    }
+
+    async fn consume_safe_read_grant(
+        &self,
+        context: &OperationContext,
+        tool: &str,
+        arguments: &Value,
     ) -> RuntimeResult<bool> {
-        sqlx::query_scalar::<_, i64>(
-            "SELECT EXISTS(SELECT 1 FROM approvals a LEFT JOIN subagent_runs r ON r.child_task_id=a.task_id WHERE (a.task_id=? OR r.parent_task_id=?) AND a.state='approved' AND json_extract(a.request_json,'$.similarityKey')=? AND json_extract(a.decision_json,'$.decision')='allowSimilar' LIMIT 1)",
-        )
-        .bind(task_id)
-        .bind(task_id)
-        .bind(similarity_key)
-        .fetch_one(self.repository.pool())
-        .await
-        .map(|value| value == 1)
-        .map_err(|_| RuntimeError::new("storage_error", "approval rule lookup failed"))
+        if arguments
+            .get("includeIgnored")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+            || arguments
+                .get("includeHidden")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        {
+            return Ok(false);
+        }
+        let task_id = context.task_id.as_deref().unwrap_or_default();
+        let now = now_ms();
+        sqlx::query("UPDATE approval_grants SET state='expired',updated_at_ms=? WHERE task_id=? AND state='active' AND expires_at_ms<=?")
+            .bind(now).bind(task_id).bind(now).execute(self.repository.pool()).await.map_err(|_| RuntimeError::new("storage_error", "approval grant expiry failed"))?;
+        let rows = sqlx::query("SELECT id,allowed_tools_json,path_scopes_json,option_constraints_json,max_calls,max_files_scanned,max_bytes_read FROM approval_grants WHERE task_id=? AND owner_agent_id=? AND state='active' AND expires_at_ms>? AND catalog_hash=? AND child_attempt IS (SELECT attempt FROM subagent_runs WHERE child_task_id=? LIMIT 1) ORDER BY created_at_ms DESC")
+            .bind(task_id).bind(&context.agent_id).bind(now).bind(catalog_hash()).bind(task_id).fetch_all(self.repository.pool()).await.map_err(|_| RuntimeError::new("storage_error", "approval grant lookup failed"))?;
+        let paths = extract_paths(tool, arguments)?;
+        let charge = requested_charge(tool, arguments);
+        for row in rows {
+            let tools: Vec<String> =
+                serde_json::from_str(&row.get::<String, _>("allowed_tools_json"))
+                    .unwrap_or_default();
+            if !tools.iter().any(|value| value == tool) {
+                continue;
+            }
+            let scopes: Vec<GrantPathScope> =
+                serde_json::from_str(&row.get::<String, _>("path_scopes_json")).unwrap_or_default();
+            if paths.iter().any(|path| !path_allowed(path, &scopes)) {
+                record_grant_denial(
+                    self.repository.pool(),
+                    &row.get::<String, _>("id"),
+                    task_id,
+                    tool,
+                    paths.len(),
+                    "path scope mismatch",
+                )
+                .await?;
+                continue;
+            }
+            let id = row.get::<String, _>("id");
+            let mut transaction = self.repository.pool().begin().await.map_err(|_| {
+                RuntimeError::new("storage_error", "approval grant transaction failed")
+            })?;
+            let affected = sqlx::query("UPDATE approval_grants SET used_calls=used_calls+1,used_files_scanned=used_files_scanned+?,used_bytes_read=used_bytes_read+?,updated_at_ms=?,state=CASE WHEN used_calls+1>=max_calls THEN 'exhausted' ELSE state END WHERE id=? AND state='active' AND used_calls+1<=max_calls AND (max_files_scanned IS NULL OR used_files_scanned+?<=max_files_scanned) AND (max_bytes_read IS NULL OR used_bytes_read+?<=max_bytes_read)")
+                .bind(charge.files).bind(charge.bytes_read).bind(now).bind(&id).bind(charge.files).bind(charge.bytes_read).execute(&mut *transaction).await.map_err(|_| RuntimeError::new("storage_error", "approval grant budget consumption failed"))?.rows_affected();
+            if affected == 1 {
+                sqlx::query("INSERT INTO approval_grant_audit(id,grant_id,task_id,event,tool,path_count,calls,files_scanned,bytes_read,bytes_written,created_at_ms) VALUES(?,?,?,'used',?,?,1,?,?,0,?)")
+                    .bind(Uuid::new_v4().to_string()).bind(&id).bind(task_id).bind(tool)
+                    .bind(i64::try_from(paths.len()).unwrap_or(i64::MAX)).bind(charge.files).bind(charge.bytes_read).bind(now)
+                    .execute(&mut *transaction).await.map_err(|_| RuntimeError::new("storage_error", "approval grant audit failed"))?;
+                transaction.commit().await.map_err(|_| {
+                    RuntimeError::new("storage_error", "approval grant transaction failed")
+                })?;
+                return Ok(true);
+            }
+            transaction.rollback().await.map_err(|_| {
+                RuntimeError::new("storage_error", "approval grant transaction failed")
+            })?;
+            record_grant_denial(
+                self.repository.pool(),
+                &id,
+                task_id,
+                tool,
+                paths.len(),
+                "resource budget exhausted",
+            )
+            .await?;
+        }
+        Ok(false)
     }
 
     async fn wait_for_approval(
@@ -276,15 +467,176 @@ impl RuntimeHost {
     }
 }
 
-fn requires_execution_approval(tool: &str) -> bool {
-    tool == "shell_write"
-        || tool.starts_with("fs_")
-        || tool.starts_with("git_")
-        || tool == "process_kill"
+fn operation_digest(tool: &str, arguments: &Value) -> String {
+    format!(
+        "sha256:{:x}",
+        Sha256::digest(format!("{tool}\n{arguments}").as_bytes())
+    )
 }
 
-fn similarity_key(tool: &str, arguments: &Value) -> String {
-    format!("{tool}\n{}", arguments)
+fn approval_summary(tool: &str, risk: ToolRiskClass, arguments: &Value) -> Value {
+    let paths = extract_paths(tool, arguments)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|path| normalized_path(&path))
+        .collect::<Vec<_>>();
+    json!({"operation": tool, "riskClass": risk, "paths": paths, "pathCount": paths.len(),
+        "overwrite": arguments.get("overwrite"), "recursive": arguments.get("recursive"),
+        "deleteMode": arguments.get("mode"), "expectedVersion": arguments.get("expectedVersion"),
+        "dryRun": arguments.get("dryRun"), "budget": arguments.get("budget"),
+        "contentBytesEstimate": content_bytes_estimate(arguments), "contentRedacted": true})
+}
+
+fn content_bytes_estimate(arguments: &Value) -> usize {
+    arguments
+        .get("content")
+        .and_then(Value::as_str)
+        .map_or(0, str::len)
+        .saturating_add(
+            arguments
+                .get("base64")
+                .and_then(Value::as_str)
+                .map_or(0, |v| v.len().saturating_mul(3) / 4),
+        )
+}
+
+fn requested_charge(tool: &str, arguments: &Value) -> GrantCharge {
+    let budget = arguments.get("budget").unwrap_or(&Value::Null);
+    let files = budget
+        .get("maxFiles")
+        .or_else(|| budget.get("maxFilesScanned"))
+        .and_then(Value::as_i64)
+        .unwrap_or(if matches!(tool, "fs_search" | "fs_find") {
+            10_000
+        } else {
+            1
+        })
+        .clamp(0, SAFE_READ_MAX_FILES);
+    let bytes_read = budget
+        .get("maxBytesRead")
+        .and_then(Value::as_i64)
+        .or_else(|| arguments.get("maxBytes").and_then(Value::as_i64))
+        .unwrap_or(if matches!(tool, "fs_search" | "fs_find") {
+            64 * 1024 * 1024
+        } else {
+            1024 * 1024
+        })
+        .clamp(0, SAFE_READ_MAX_BYTES);
+    GrantCharge { files, bytes_read }
+}
+
+fn extract_paths(tool: &str, arguments: &Value) -> RuntimeResult<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    for role in tool_capabilities(tool).path_fields {
+        match role {
+            PathFieldRole::Path
+            | PathFieldRole::Source
+            | PathFieldRole::Destination
+            | PathFieldRole::WorkingDirectory
+            | PathFieldRole::Cwd => {
+                let key = match role {
+                    PathFieldRole::Path => "path",
+                    PathFieldRole::Source => "source",
+                    PathFieldRole::Destination => "destination",
+                    PathFieldRole::WorkingDirectory => "workingDirectory",
+                    PathFieldRole::Cwd => "cwd",
+                    _ => unreachable!(),
+                };
+                if let Some(path) = arguments.get(key).and_then(Value::as_str) {
+                    paths.push(canonical_read_path(path)?);
+                }
+            }
+            PathFieldRole::Paths => {
+                if let Some(values) = arguments.get("paths").and_then(Value::as_array) {
+                    for path in values.iter().filter_map(Value::as_str) {
+                        paths.push(canonical_read_path(path)?);
+                    }
+                }
+            }
+            PathFieldRole::RequestPaths => {
+                if let Some(values) = arguments.get("requests").and_then(Value::as_array) {
+                    for path in values
+                        .iter()
+                        .filter_map(|v| v.get("path"))
+                        .filter_map(Value::as_str)
+                    {
+                        paths.push(canonical_read_path(path)?);
+                    }
+                }
+            }
+        }
+    }
+    Ok(paths)
+}
+
+fn canonical_read_path(path: &str) -> RuntimeResult<PathBuf> {
+    std::fs::canonicalize(path).map_err(|_| {
+        RuntimeError::new(
+            "approval_path_invalid",
+            "approval path does not exist or cannot be canonicalized",
+        )
+    })
+}
+fn normalized_path(path: &Path) -> String {
+    let value = path.to_string_lossy().replace('\\', "/");
+    if cfg!(windows) {
+        value.to_ascii_lowercase()
+    } else {
+        value
+    }
+}
+fn path_allowed(path: &Path, scopes: &[GrantPathScope]) -> bool {
+    let path = normalized_path(path);
+    scopes.iter().any(|scope| {
+        let scope_path = Path::new(&scope.path);
+        let scope_still_bound = std::fs::canonicalize(scope_path).is_ok_and(|canonical| {
+            normalized_path(&canonical) == scope.path && scope.identity == path_identity(&canonical)
+        });
+        scope_still_bound
+            && match scope.kind {
+                GrantPathScopeKind::Exact => path == scope.path,
+                GrantPathScopeKind::Subtree => {
+                    path == scope.path
+                        || path
+                            .strip_prefix(&scope.path)
+                            .is_some_and(|suffix| suffix.starts_with('/'))
+                }
+            }
+    })
+}
+
+fn path_identity(path: &Path) -> Option<String> {
+    let metadata = std::fs::metadata(path).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        return Some(format!("unix:{}:{}", metadata.dev(), metadata.ino()));
+    }
+    #[cfg(not(unix))]
+    {
+        let created = metadata
+            .created()
+            .ok()?
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_nanos();
+        Some(format!("created:{created}:dir:{}", metadata.is_dir()))
+    }
+}
+
+async fn record_grant_denial(
+    pool: &sqlx::SqlitePool,
+    grant_id: &str,
+    task_id: &str,
+    tool: &str,
+    path_count: usize,
+    reason: &str,
+) -> RuntimeResult<()> {
+    sqlx::query("INSERT INTO approval_grant_audit(id,grant_id,task_id,event,tool,path_count,reason,created_at_ms) VALUES(?,?,?,'denied',?,?,?,?)")
+        .bind(Uuid::new_v4().to_string()).bind(grant_id).bind(task_id).bind(tool)
+        .bind(i64::try_from(path_count).unwrap_or(i64::MAX)).bind(reason).bind(now_ms())
+        .execute(pool).await.map_err(|_| RuntimeError::new("storage_error", "approval grant denial audit failed"))?;
+    Ok(())
 }
 
 fn rejection_reason(decision_json: Option<&str>) -> Option<String> {
@@ -303,11 +655,48 @@ mod tests {
 
     #[test]
     fn only_execution_and_workspace_tools_require_approval() {
-        assert!(requires_execution_approval("shell_write"));
-        assert!(requires_execution_approval("fs_read_text"));
-        assert!(requires_execution_approval("git_status"));
-        assert!(requires_execution_approval("process_kill"));
-        assert!(!requires_execution_approval("agent_progress"));
-        assert!(!requires_execution_approval("task_get"));
+        assert!(tool_capabilities("shell_write").approval_required);
+        assert!(tool_capabilities("fs_read_text").approval_required);
+        assert!(tool_capabilities("git_status").approval_required);
+        assert!(tool_capabilities("process_kill").approval_required);
+        assert!(!tool_capabilities("agent_progress").approval_required);
+        assert!(!tool_capabilities("task_get").approval_required);
+    }
+
+    #[test]
+    fn subtree_matching_does_not_allow_prefix_siblings() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let root = directory.path().join("repo");
+        let sibling = directory.path().join("repository");
+        std::fs::create_dir_all(root.join("src")).expect("project tree");
+        std::fs::create_dir_all(&sibling).expect("sibling tree");
+        let root = std::fs::canonicalize(root).expect("canonical root");
+        let scopes = vec![GrantPathScope {
+            path: normalized_path(&root),
+            kind: GrantPathScopeKind::Subtree,
+            identity: path_identity(&root),
+        }];
+        assert!(path_allowed(&root.join("src"), &scopes));
+        assert!(!path_allowed(&sibling, &scopes));
+    }
+
+    #[test]
+    fn mutation_summary_redacts_content_and_digest_binds_it() {
+        let first = json!({"path": ".", "content": "top-secret", "expectedVersion": "v1"});
+        let second = json!({"path": ".", "content": "changed", "expectedVersion": "v1"});
+        let summary = approval_summary("fs_write_text", ToolRiskClass::Modify, &first);
+        assert!(!summary.to_string().contains("top-secret"));
+        assert_eq!(summary["contentBytesEstimate"], 10);
+        assert_ne!(
+            operation_digest("fs_write_text", &first),
+            operation_digest("fs_write_text", &second)
+        );
+    }
+
+    #[test]
+    fn read_and_mutation_risk_classes_do_not_overlap() {
+        assert!(tool_capabilities("fs_search").risk_class.is_safe_read());
+        assert!(!tool_capabilities("fs_delete").risk_class.is_safe_read());
+        assert!(!tool_capabilities("git_status").risk_class.is_safe_read());
     }
 }

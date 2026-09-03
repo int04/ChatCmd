@@ -37,8 +37,9 @@ use tower::ServiceExt;
 use server_contract::error_value;
 
 pub use tool_catalog::{
-    CATALOG_VERSION, CatalogMetadata, PROTOCOL_VERSION, TOOL_NAMES, canonical_manifest,
-    catalog_hash, catalog_metadata,
+    CATALOG_VERSION, CatalogMetadata, PROTOCOL_VERSION, PathFieldRole, TOOL_NAMES,
+    ToolCapabilityFlags, ToolRiskClass, canonical_manifest, catalog_hash, catalog_metadata,
+    tool_capabilities,
 };
 
 /// Path-token authentication dependency injected by the HTTP host.

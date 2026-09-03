@@ -111,6 +111,10 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
             post(resolve_task_approval),
         )
         .route(
+            "/tasks/{id}/approval-grants/{grant_id}/revoke",
+            post(revoke_task_approval_grant),
+        )
+        .route(
             "/tasks/{task_id}/activities/{activity_id}/stop",
             post(stop_task_activity),
         )

@@ -211,3 +211,17 @@ Chạy frontend typecheck/test/build cho approval UI.
 - Child inheritance và invalidation rules.
 - File/migration đã đổi.
 - Security/race/e2e test và kết quả.
+
+## CHECK REQUIRED
+
+Frontend `npm test -- --run` completed with 47 passing tests and 7 failures in
+`src/test/App.test.tsx`. The jsdom environment reports that
+`HTMLCanvasElement.getContext()` is unavailable, after which the affected full-App assertions
+time out. Re-run those seven App integration tests in an environment with canvas support. Also
+perform a manual browser check of the scoped-grant summary/revoke controls and a concurrent
+end-to-end safe-read sequence to confirm that one prompt covers only the displayed task, tool,
+canonical paths, options, expiry, and resource budgets. Rust workspace tests, frontend production
+build, and the focused approval UI test completed successfully. Frontend lint also remains blocked
+by eight existing errors and eight warnings outside the Plan 21 changes: missing Node globals in
+`scripts/obfuscate-build.mjs`, render-time ref access in `src/realtime.ts`, and existing React hook
+dependency warnings. Re-run the full lint suite after those baseline issues are corrected.

@@ -5,7 +5,7 @@ import { tr } from '../i18n';
 
 export interface ApprovalDecisionTarget { taskId: string; activityId: string; turnId?: string; }
 
-export function ApprovalDecisionActions({ target, onResolved }: { target: ApprovalDecisionTarget; onResolved?: () => void }) {
+export function ApprovalDecisionActions({ target, onResolved, reusable = true }: { target: ApprovalDecisionTarget; onResolved?: () => void; reusable?: boolean }) {
   const [busy, setBusy] = useState<'allow' | 'allowSimilar' | 'reject' | null>(null); const [error, setError] = useState(''); const [rejecting, setRejecting] = useState(false);
   const resolve = async (decision: 'allow' | 'allowSimilar' | 'reject', reason?: string) => {
     if (busy) return; setBusy(decision); setError('');
@@ -14,7 +14,7 @@ export function ApprovalDecisionActions({ target, onResolved }: { target: Approv
   };
   return <><div className="approval-actions" role="group" aria-label={tr('Approval decision')}>
     <button type="button" className="approval-allow" disabled={Boolean(busy)} onClick={() => void resolve('allow')}>{busy === 'allow' ? <LoaderCircle className="spin" /> : <Check />}{tr('Allow')}</button>
-    <button type="button" className="approval-similar" disabled={Boolean(busy)} onClick={() => void resolve('allowSimilar')}>{busy === 'allowSimilar' ? <LoaderCircle className="spin" /> : <CheckCheck />}{tr('Allow similar')}</button>
+    {reusable && <button type="button" className="approval-similar" disabled={Boolean(busy)} onClick={() => void resolve('allowSimilar')}>{busy === 'allowSimilar' ? <LoaderCircle className="spin" /> : <CheckCheck />}{tr('Allow similar')}</button>}
     <button type="button" className="approval-reject" disabled={Boolean(busy)} onClick={() => setRejecting(true)}><Ban />{tr('Reject')}</button>{error && <p role="alert"><CircleAlert />{error}</p>}
   </div>{rejecting && <RejectApprovalDialog busy={busy === 'reject'} error={error} close={() => !busy && setRejecting(false)} reject={(reason) => resolve('reject', reason)} />}</>;
 }

@@ -120,10 +120,7 @@ pub(super) async fn resolve_task_approval(
     let approval_request =
         serde_json::from_str::<Value>(&row.get::<String, _>("request_json")).unwrap_or(Value::Null);
     if let Some(expected_turn) = approval_request.get("turnId").and_then(Value::as_str)
-        && request
-            .turn_id
-            .as_deref()
-            .is_some_and(|value| value != expected_turn)
+        && request.turn_id.as_deref() != Some(expected_turn)
     {
         return Err(Problem::new(
             StatusCode::CONFLICT,
@@ -147,13 +144,15 @@ pub(super) async fn resolve_task_approval(
         "reason": request.reason.as_deref().map(str::trim).filter(|value| !value.is_empty()),
     })
     .to_string();
+    let resolved_at = now_ms();
+    let mut transaction = state.repository.pool().begin().await.map_err(db_problem)?;
     let affected = sqlx::query("UPDATE approvals SET state=?,decision_json=?,resolved_at_ms=? WHERE id=? AND task_id=? AND state='pending'")
         .bind(state_name)
         .bind(decision_json)
-        .bind(now_ms())
+        .bind(resolved_at)
         .bind(&activity_id)
         .bind(&task_id)
-        .execute(state.repository.pool())
+        .execute(&mut *transaction)
         .await
         .map_err(db_problem)?
         .rows_affected();
@@ -164,6 +163,83 @@ pub(super) async fn resolve_task_approval(
             "This approval request was resolved by another action.",
         ));
     }
+    let mut grant_id = None;
+    if request.decision == "allowSimilar" {
+        let preview = approval_request
+            .get("grantPreview")
+            .filter(|value| !value.is_null())
+            .ok_or_else(|| {
+                Problem::new(
+                    StatusCode::BAD_REQUEST,
+                    "Unsafe reusable approval",
+                    "Only bounded safe-read requests can create a reusable grant.",
+                )
+            })?;
+        let request_catalog = approval_request
+            .get("catalogHash")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if request_catalog != chatcmd_mcp::catalog_hash() {
+            return Err(Problem::new(
+                StatusCode::CONFLICT,
+                "Tool catalog changed",
+                "Refresh the request and approve it again.",
+            ));
+        }
+        let owner_agent_id = approval_request
+            .get("agentId")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                Problem::new(
+                    StatusCode::BAD_REQUEST,
+                    "Invalid approval owner",
+                    "The approval has no bound agent identity.",
+                )
+            })?;
+        let tools = preview
+            .get("allowedTools")
+            .cloned()
+            .unwrap_or_else(|| json!([]));
+        let scopes = preview
+            .get("pathScopes")
+            .cloned()
+            .unwrap_or_else(|| json!([]));
+        if tools.as_array().is_none_or(Vec::is_empty) || scopes.as_array().is_none_or(Vec::is_empty)
+        {
+            return Err(Problem::new(
+                StatusCode::BAD_REQUEST,
+                "Invalid approval grant",
+                "Reusable grants require explicit tool and path scopes.",
+            ));
+        }
+        let new_grant_id = uuid::Uuid::new_v4().to_string();
+        let child_attempt = sqlx::query_scalar::<_, i64>(
+            "SELECT attempt FROM subagent_runs WHERE child_task_id=? LIMIT 1",
+        )
+        .bind(&task_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .map_err(db_problem)?;
+        sqlx::query("INSERT INTO approval_grants(id,owner_agent_id,task_id,turn_id,child_attempt,allowed_tools_json,path_scopes_json,option_constraints_json,max_calls,max_files_scanned,max_bytes_read,max_bytes_written,expires_at_ms,inherited_from,catalog_hash,state,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,NULL,?,NULL,?,'active',?,?)")
+            .bind(&new_grant_id).bind(owner_agent_id).bind(&task_id)
+            .bind(approval_request.get("turnId").and_then(Value::as_str))
+            .bind(child_attempt)
+            .bind(to_json_string(&tools)?).bind(to_json_string(&scopes)?)
+            .bind(to_json_string(preview.get("optionConstraints").unwrap_or(&json!({})))?)
+            .bind(preview.get("maxCalls").and_then(Value::as_i64).unwrap_or(1).clamp(1, 256))
+            .bind(preview.get("maxFilesScanned").and_then(Value::as_i64).map(|v| v.clamp(0, 100_000)))
+            .bind(preview.get("maxBytesRead").and_then(Value::as_i64).map(|v| v.clamp(0, 1_073_741_824)))
+            .bind(preview.get("expiresAtMs").and_then(Value::as_i64).unwrap_or(resolved_at).min(resolved_at.saturating_add(15 * 60 * 1_000)))
+            .bind(request_catalog).bind(resolved_at).bind(resolved_at)
+            .execute(&mut *transaction).await.map_err(db_problem)?;
+        sqlx::query("INSERT INTO approval_grant_audit(id,grant_id,task_id,event,path_count,created_at_ms) VALUES(?,?,?,'created',?,?)")
+            .bind(uuid::Uuid::new_v4().to_string()).bind(&new_grant_id).bind(&task_id)
+            .bind(i64::try_from(scopes.as_array().map_or(0, Vec::len)).unwrap_or(i64::MAX)).bind(resolved_at)
+            .execute(&mut *transaction).await.map_err(db_problem)?;
+        grant_id = Some(new_grant_id);
+    }
+    transaction.commit().await.map_err(db_problem)?;
     let mut event = AppEvent::new(
         "approval.resolved",
         json!({ "activityId": &activity_id, "decision": &request.decision }),
@@ -176,8 +252,33 @@ pub(super) async fn resolve_task_approval(
     state.publish(event);
     publish_subagent_approval_resolved(&state, &task_id, &activity_id, &request.decision).await?;
     Ok(Json(
-        json!({ "accepted": true, "decision": request.decision }),
+        json!({ "accepted": true, "decision": request.decision, "grantId": grant_id }),
     ))
+}
+
+fn to_json_string(value: &Value) -> Result<String, Problem> {
+    serde_json::to_string(value).map_err(|_| {
+        Problem::new(
+            StatusCode::BAD_REQUEST,
+            "Invalid approval grant",
+            "Grant fields could not be encoded.",
+        )
+    })
+}
+
+pub(super) async fn revoke_task_approval_grant(
+    State(state): State<Arc<AppState>>,
+    Path((task_id, grant_id)): Path<(String, String)>,
+) -> Result<StatusCode, Problem> {
+    let now = now_ms();
+    let mut transaction = state.repository.pool().begin().await.map_err(db_problem)?;
+    let affected = sqlx::query("UPDATE approval_grants SET state='revoked',updated_at_ms=? WHERE id=? AND task_id=? AND state='active'")
+        .bind(now).bind(&grant_id).bind(&task_id).execute(&mut *transaction).await.map_err(db_problem)?.rows_affected();
+    if affected == 0 {
+        return Err(not_found());
+    }
+    transaction.commit().await.map_err(db_problem)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -393,6 +494,8 @@ pub(super) async fn stop_conversation(
         .execute(state.repository.pool())
         .await
         .map_err(db_problem)?;
+    sqlx::query("UPDATE approval_grants SET state='revoked',updated_at_ms=? WHERE task_id=? AND state='active'")
+        .bind(now).bind(id).execute(state.repository.pool()).await.map_err(db_problem)?;
     sqlx::query("DELETE FROM task_execution_modes WHERE task_id=?")
         .bind(id)
         .execute(state.repository.pool())
