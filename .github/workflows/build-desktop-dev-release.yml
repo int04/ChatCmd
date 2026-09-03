@@ -1,0 +1,173 @@
+name: Build desktop DEV release
+
+run-name: Build desktop DEV release from ${{ github.ref_name }}
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-dev-release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare DEV release version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: Require dev branch
+        if: github.ref != 'refs/heads/dev'
+        shell: bash
+        run: |
+          echo "Desktop DEV releases must be built from the dev branch." >&2
+          exit 1
+
+      - name: Generate DEV release version
+        id: version
+        shell: bash
+        run: |
+          base_version="$(TZ=Asia/Ho_Chi_Minh date '+%y.%m.%d.%H%M')"
+          release_date="$(TZ=Asia/Ho_Chi_Minh date '+%y.%m.%d')"
+          version="${base_version}-DEV"
+          tag="v.${release_date}-DEV"
+
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "Building ChatCMD ${version} for DEV release ${tag}"
+
+  windows:
+    name: Build Windows x64 and x86
+    needs: prepare
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build Windows packages
+        shell: pwsh
+        run: ./scripts/build-windows.ps1 -Version '${{ needs.prepare.outputs.version }}'
+
+      - name: Give DEV release assets stable names
+        shell: pwsh
+        run: |
+          $version = '${{ needs.prepare.outputs.version }}'
+          Move-Item -LiteralPath "release/${version}_64.zip" -Destination 'release/ChatCMD-windows-x64-DEV.zip'
+          Move-Item -LiteralPath "release/${version}_32.zip" -Destination 'release/ChatCMD-windows-x86-DEV.zip'
+
+      - name: Upload Windows packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-dev-packages
+          path: |
+            release/ChatCMD-windows-x64-DEV.zip
+            release/ChatCMD-windows-x86-DEV.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  macos:
+    name: Build macOS Intel and Apple Silicon
+    needs: prepare
+    runs-on: macos-15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build macOS packages
+        shell: bash
+        env:
+          CHATCMD_BUILD_VERSION: ${{ needs.prepare.outputs.version }}
+        run: bash ./scripts/build-macos.sh
+
+      - name: Give DEV release assets stable names
+        shell: bash
+        env:
+          CHATCMD_BUILD_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          mv "release/${CHATCMD_BUILD_VERSION}_intel.zip" "release/ChatCMD-macos-intel-DEV.zip"
+          mv "release/${CHATCMD_BUILD_VERSION}_silicon.zip" "release/ChatCMD-macos-apple-silicon-DEV.zip"
+
+      - name: Upload macOS packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-dev-packages
+          path: |
+            release/ChatCMD-macos-intel-DEV.zip
+            release/ChatCMD-macos-apple-silicon-DEV.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Publish DEV release
+    needs:
+      - prepare
+      - windows
+      - macos
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download Windows packages
+        uses: actions/download-artifact@v8
+        with:
+          name: windows-dev-packages
+          path: dist
+
+      - name: Download macOS packages
+        uses: actions/download-artifact@v8
+        with:
+          name: macos-dev-packages
+          path: dist
+
+      - name: Generate SHA-256 checksums
+        shell: bash
+        working-directory: dist
+        run: sha256sum *.zip > SHA256SUMS.txt
+
+      - name: Publish GitHub DEV release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          release_title="ChatCMD ${RELEASE_TAG#v.}"
+          release_notes="DEV build automatically built from dev. Build version: ${RELEASE_VERSION}. See SHA256SUMS.txt to verify downloads. The macOS packages are ad-hoc signed and are not notarized."
+
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "DEV release ${RELEASE_TAG} already exists; replacing assets."
+            gh release upload "$RELEASE_TAG" dist/*.zip dist/SHA256SUMS.txt \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
+            gh release edit "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$release_title" \
+              --notes "$release_notes" \
+              --prerelease
+          else
+            echo "Creating DEV release ${RELEASE_TAG}."
+            gh release create "$RELEASE_TAG" dist/*.zip dist/SHA256SUMS.txt \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "$release_title" \
+              --notes "$release_notes" \
+              --prerelease
+          fi
