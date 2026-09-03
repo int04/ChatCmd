@@ -6,7 +6,7 @@ By participating, you agree to follow our [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Before you start
 
-- Search the [issue tracker](https://github.com/int04/ChatCmdClient/issues) before opening a duplicate.
+- Search the [issue tracker](https://github.com/int04/ChatCmd/issues) before opening a duplicate.
 - Use a public issue for bugs and feature discussions, but follow [SECURITY.md](SECURITY.md) for vulnerabilities.
 - Discuss large changes before implementation. This reduces duplicated work and helps align the design with the local-first security model.
 - Keep a pull request focused on one problem. Unrelated refactors make review and rollback harder.
@@ -26,8 +26,8 @@ Follow [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for prerequisites, local comma
 The shortest setup is:
 
 ```bash
-git clone https://github.com/int04/ChatCmdClient.git
-cd ChatCmdClient
+git clone https://github.com/int04/ChatCmd.git
+cd ChatCmd
 git switch dev
 cd web
 npm ci

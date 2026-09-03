@@ -18,8 +18,8 @@ rustup component add rustfmt clippy
 ## Checkout and bootstrap
 
 ```bash
-git clone https://github.com/int04/ChatCmdClient.git
-cd ChatCmdClient
+git clone https://github.com/int04/ChatCmd.git
+cd ChatCmd
 git switch dev
 
 cd web

@@ -16,7 +16,7 @@ Security fixes are normally prepared for the latest maintained code. Maintainers
 
 Do not open a public issue for a suspected vulnerability and do not include live secrets, private files, or conversation data in a public report.
 
-Use [GitHub's private vulnerability reporting form](https://github.com/int04/ChatCmdClient/security/advisories/new). If private reporting is unavailable, contact the maintainer through a non-public method listed on the [maintainer's GitHub profile](https://github.com/int04).
+Use [GitHub's private vulnerability reporting form](https://github.com/int04/ChatCmd/security/advisories/new). If private reporting is unavailable, contact the maintainer through a non-public method listed on the [maintainer's GitHub profile](https://github.com/int04).
 
 Include, when available:
 
