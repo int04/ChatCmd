@@ -91,8 +91,8 @@ mod tests {
     #[test]
     fn accepts_chatgpt_agent_escape_and_echoed_url_link() {
         let submitted =
-            "Sử dụng plugin @test_rust để xử lý http://localhost:8080/api/local/payment/create";
-        let from_chatgpt = "Sử dụng plugin @test\\_rust để xử lý [http://localhost:8080/api/local/payment/create](http://localhost:8080/api/local/payment/create)";
+            "Sử dụng plugin @test_rust để xử lý http://localhost:8080/api/local/overview";
+        let from_chatgpt = "Sử dụng plugin @test\\_rust để xử lý [http://localhost:8080/api/local/overview](http://localhost:8080/api/local/overview)";
 
         assert!(equivalent(submitted, from_chatgpt));
     }

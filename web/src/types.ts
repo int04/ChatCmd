@@ -21,8 +21,6 @@ export interface AgentInput { name: string; enabled: boolean; presetId?: Id; too
 export interface SecretResult { agent?: Agent; endpoint: string }
 export interface Tunnel { id: number; baseUrl: string; createdAtUtc?: string; updatedAtUtc?: string }
 export interface TunnelTestResult { ok: boolean; pong: boolean; baseUrl: string }
-export type ManagedTunnelState = 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
-export interface ManagedTunnelStatus { state: ManagedTunnelState; connected: boolean; serverUrl: string; key?: string; publicUrl?: string; lastError?: string }
 export interface PluginLink { tunnelId: number; baseUrl: string; maskedEndpoint: string }
 export interface Tool { id: Id; name: string; description?: string; group?: string; dangerous?: boolean }
 export interface ToolPreset { id: Id; name: string; description?: string; toolIds: Id[] }
@@ -51,6 +49,3 @@ export interface SkillInstallResult { skills: UserSkill[] }
 export interface Skill { id: Id; name: string; source?: string; enabled: boolean; description?: string; content?: string }
 export interface LocalSettings { bindAddress: string; port: number; mcpEndpoint: string; databasePath: string; databaseState?: HealthState; executionMode: CommandExecutionMode; approveNewConversations: boolean; terminalExecutable: string; taskConcurrency: number; sessionConcurrency: number; subagentConcurrency: number; theme: 'system' | 'light' | 'dark'; fontFamily: string; taskFontScale: number; language: 'en' | 'vi'; sound?: boolean; newAgentSound: boolean; finishedTaskSound: boolean; dataRetention: '1h' | '5h' | '10h' | '1d' | '3d' | '5d' | '10d' | 'off' }
 export interface ProblemDetails { type?: string; title?: string; status?: number; detail?: string; message?: string; code?: string; instance?: string; errors?: Record<string, string[]> }
-export interface AuthPlan { type: number; expriAt?: string | null; name: string }
-export interface AuthInfo { id: number; email: string; vnd: number; plan: AuthPlan; useNextTime?: string | null; useNextReset?: string | null }
-export interface AuthResult { authenticated: boolean }

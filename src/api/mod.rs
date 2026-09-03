@@ -1,6 +1,4 @@
 mod agents;
-mod auth;
-mod backend;
 mod chatgpt;
 mod chatgpt_completion;
 mod chatgpt_queue;
@@ -11,13 +9,11 @@ mod crypto;
 mod data;
 mod folders;
 mod overview;
-mod payment;
 mod plan_questions;
 mod routes;
 mod sessions;
 mod settings;
 mod skills;
-pub(crate) mod statistics;
 mod subagent_fallback;
 mod subagents;
 mod system;
@@ -25,7 +21,6 @@ mod task_controls;
 mod task_delete;
 mod task_views;
 mod tunnels;
-mod updates;
 mod workspaces;
 
 use overview::default_shell;
@@ -55,11 +50,6 @@ pub(crate) use routes::router;
 #[cfg(target_os = "macos")]
 pub(crate) use system::signal_elevated_restart_ready;
 pub(crate) use task_delete::start_data_cleanup_scheduler;
-
-pub(crate) async fn warm_auth_runtime_cache(state: &Arc<AppState>) {
-    auth::warm_runtime_cache(state).await;
-    statistics::start_flush_scheduler(state.clone());
-}
 
 pub(crate) fn iso_now() -> String {
     iso_ms(now_ms())

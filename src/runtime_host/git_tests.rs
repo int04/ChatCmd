@@ -72,7 +72,6 @@ async fn git_status_uses_task_project_folder_when_cwd_is_omitted() {
     let host = RuntimeHost::new(
         repository,
         bootstrap.device,
-        0,
         shell,
         workspace,
         git,
