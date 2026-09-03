@@ -116,8 +116,8 @@ For component boundaries, data flow, and security assumptions, read [docs/ARCHIT
 ## Quick start from source
 
 ```bash
-git clone https://github.com/int04/ChatCmdClient.git
-cd ChatCmdClient/web
+git clone https://github.com/int04/ChatCmd.git
+cd ChatCmd/web
 npm ci
 npm run build
 cd ..
@@ -219,17 +219,48 @@ See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for the contributor workflow and 
 
 ## Screenshots
 
-### Runtime overview
-
-### Tasks and real-time activity
-
-### Plugin access profiles
-
-### Interactive terminals
-
-### Skills management
-
-### Settings and diagnostics
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>Task workspace and final response</strong><br>
+      <a href="docs/images/screenshots/task-workspace.png"><img src="docs/images/screenshots/task-workspace.png" alt="ChatCMD task workspace showing a completed ChatGPT response and task details"></a>
+    </td>
+    <td width="50%" valign="top">
+      <strong>Agent activity timeline</strong><br>
+      <a href="docs/images/screenshots/agent-activity-timeline.png"><img src="docs/images/screenshots/agent-activity-timeline.png" alt="Expanded ChatCMD agent activity timeline with tool calls and progress updates"></a>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>Side-by-side file diff</strong><br>
+      <a href="docs/images/screenshots/file-diff-viewer.png"><img src="docs/images/screenshots/file-diff-viewer.png" alt="ChatCMD side-by-side source file diff viewer"></a>
+    </td>
+    <td width="50%" valign="top">
+      <strong>Live sub-agent orchestration</strong><br>
+      <a href="docs/images/screenshots/subagent-orchestration-live.png"><img src="docs/images/screenshots/subagent-orchestration-live.png" alt="ChatCMD task running two sub-agents in parallel"></a>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>Completed sub-agent work</strong><br>
+      <a href="docs/images/screenshots/subagent-orchestration-complete.png"><img src="docs/images/screenshots/subagent-orchestration-complete.png" alt="ChatCMD timeline showing two completed sub-agent tasks"></a>
+    </td>
+    <td width="50%" valign="top">
+      <strong>Plan question dialog</strong><br>
+      <a href="docs/images/screenshots/plan-question-dialog.png"><img src="docs/images/screenshots/plan-question-dialog.png" alt="ChatCMD plan-mode question dialog with two choices and a custom answer option"></a>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <strong>Plan-mode task and approval controls</strong><br>
+      <a href="docs/images/screenshots/plan-mode-task.png"><img src="docs/images/screenshots/plan-mode-task.png" alt="ChatCMD plan-mode task with reasoning history and execution approval controls"></a>
+    </td>
+    <td width="50%" valign="top">
+      <strong>Completed plan response</strong><br>
+      <a href="docs/images/screenshots/plan-result.png"><img src="docs/images/screenshots/plan-result.png" alt="ChatCMD completed plan response with task and ChatGPT details"></a>
+    </td>
+  </tr>
+</table>
 
 ## Security and privacy
 

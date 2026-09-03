@@ -6,7 +6,7 @@ ChatCMD is a community-maintained open-source project. Support is provided on a 
 
 1. Read the [README](README.md) and [documentation index](docs/README.md).
 2. Check [Troubleshooting](docs/TROUBLESHOOTING.md).
-3. Search [existing issues](https://github.com/int04/ChatCmdClient/issues).
+3. Search [existing issues](https://github.com/int04/ChatCmd/issues).
 4. Reproduce the problem with the latest supported version if possible.
 
 ## Open an issue
