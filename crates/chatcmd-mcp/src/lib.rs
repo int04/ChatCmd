@@ -171,6 +171,10 @@ macro_rules! tool_args {
     };
 }
 
+const fn default_true() -> bool {
+    true
+}
+
 tool_args!(NoArgs {});
 tool_args!(DeviceGetArgs { device_id: String });
 tool_args!(SessionArgs { session_id: String });
@@ -206,12 +210,38 @@ tool_args!(TransferArgs {
     source: String,
     destination: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    overwrite: Option<bool>
+    overwrite: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    conflict_policy: Option<chatcmd_runtime::FsConflictPolicy>,
+    #[serde(default = "default_true")]
+    atomic_publish: bool,
+    #[serde(default)]
+    verify: chatcmd_runtime::FsVerifyMode,
+    #[serde(default = "default_true")]
+    preserve_metadata: bool,
+    #[serde(default)]
+    follow_symlinks: bool,
+    #[serde(default)]
+    dry_run: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    expected_source_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    expected_destination_version: Option<String>,
+    #[serde(default)]
+    budget: chatcmd_runtime::FsMutationBudget
 });
 tool_args!(DeleteArgs {
     path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    recursive: Option<bool>
+    recursive: Option<bool>,
+    #[serde(default)]
+    mode: chatcmd_runtime::FsDeleteMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    expected_version: Option<String>,
+    #[serde(default)]
+    dry_run: bool,
+    #[serde(default)]
+    budget: chatcmd_runtime::FsMutationBudget
 });
 tool_args!(GitShowArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -835,17 +865,17 @@ tool_methods!(
     (
         fs_copy,
         TransferArgs,
-        "Copy within canonical workspace scope. Required fields: source, destination; optional overwrite."
+        "Safely copy within canonical workspace scope using preflight, durable journal, verified sibling staging and atomic publish. Required source/destination; optional conflictPolicy=error|skip|replace, atomicPublish, verify=none|metadata|content, preserveMetadata, dryRun, expected versions and budget. Legacy overwrite is accepted. Symlinks are not followed."
     ),
     (
         fs_move,
         TransferArgs,
-        "Move within canonical workspace scope. Required fields: source, destination; optional overwrite."
+        "Safely move within canonical workspace scope. Cross-device-safe staging is verified and published before source removal. Accepts the fs_copy options and legacy overwrite."
     ),
     (
         fs_delete,
         DeleteArgs,
-        "Delete within canonical workspace scope under policy. Required field: path; optional recursive."
+        "Delete within canonical workspace scope under policy. Default mode is quarantine; permanent deletion must be explicit. Optional recursive, expectedVersion, dryRun and bounded budget."
     ),
     (
         git_status,

@@ -223,3 +223,17 @@ cargo test --workspace
 - Rollback/recovery behavior.
 - Test/fault injection/benchmark và số liệu.
 - Các trường hợp chỉ best-effort theo OS/filesystem.
+
+## CHECK REQUIRED — Validation and implementation gaps
+
+Plan 12 has a tested safety baseline, but the following acceptance work still requires manual or follow-up validation before this plan can be considered fully checked:
+
+- Run the mandatory 100,000-small-file and 10 GB sparse/streamed benchmarks and record throughput, peak memory, open-file count, journal growth, progress-event count, and cancellation latency. These destructive-scale benchmarks were not run in this development environment.
+- Exercise a real cross-device mount, network share, and removable disk. The implementation stages beside the destination and therefore preserves publish ordering, but real platform error/durability behavior was not validated.
+- Add deterministic fault injection at every state transition and after configurable file/byte counts. Current tests cover normal copy/move/replace, dry-run, pre-cancel, overlap rejection, quarantine, permanent delete, content verification, and the legacy overwrite adapter, but do not simulate every crash window or disk-full condition.
+- Wire migration `0015_filesystem_operation_journal.sql` into runtime mutation transitions and implement startup recovery/retention GC from SQLite. The current runtime writes fsynced atomic sidecar journals beside the destination; this is durable but does not yet satisfy the requested SQLite transaction requirement or automatic startup scan.
+- Implement an explicit quarantine restore tool and retention/quota GC. Current quarantine is same-filesystem, operation-owned, and its retained path is reported in warnings, but restore/expiry is manual.
+- Add bounded artifact persistence for large per-file error lists and progress throttling. The typed result is bounded and currently returns summary warnings only.
+- Validate ACLs, timestamps, sparse extents, hard-link topology, case-only rename, non-UTF-8 names, long paths, concurrent writers/movers/deleters, and symlink-swap TOCTOU on every supported OS. Permission bits are preserved; the remaining metadata classes are documented as best-effort in ADR 0012.
+
+Automated checks completed during implementation: `cargo fmt --all --check`, `cargo check --workspace`, the 7-test `mutation_safety` integration suite, `cargo test -p chatcmd-runtime`, `cargo test -p chatcmd-storage`, `cargo test -p chatcmd-mcp`, and `cargo test --workspace`. All executed tests passed; pre-existing manual performance fixtures remained ignored.

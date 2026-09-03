@@ -302,6 +302,125 @@ pub struct FsEntry {
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub enum FsConflictPolicy {
+    #[default]
+    Error,
+    Skip,
+    Replace,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum FsVerifyMode {
+    None,
+    #[default]
+    Metadata,
+    Content,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum FsDeleteMode {
+    #[default]
+    Quarantine,
+    Permanent,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FsMutationBudget {
+    #[serde(default = "default_fs_mutation_timeout_ms")]
+    pub timeout_ms: u64,
+    #[serde(default = "default_fs_mutation_max_files")]
+    pub max_files: u64,
+    #[serde(default = "default_fs_mutation_max_bytes")]
+    pub max_bytes_read: u64,
+    #[serde(default = "default_fs_mutation_max_bytes")]
+    pub max_bytes_written: u64,
+}
+
+impl Default for FsMutationBudget {
+    fn default() -> Self {
+        Self {
+            timeout_ms: default_fs_mutation_timeout_ms(),
+            max_files: default_fs_mutation_max_files(),
+            max_bytes_read: default_fs_mutation_max_bytes(),
+            max_bytes_written: default_fs_mutation_max_bytes(),
+        }
+    }
+}
+
+const fn default_fs_mutation_timeout_ms() -> u64 {
+    300_000
+}
+const fn default_fs_mutation_max_files() -> u64 {
+    1_000_000
+}
+const fn default_fs_mutation_max_bytes() -> u64 {
+    1024 * 1024 * 1024 * 1024
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FsTransferRequest {
+    pub source: PathBuf,
+    pub destination: PathBuf,
+    #[serde(default)]
+    pub conflict_policy: FsConflictPolicy,
+    #[serde(default = "default_true")]
+    pub atomic_publish: bool,
+    #[serde(default)]
+    pub verify: FsVerifyMode,
+    #[serde(default = "default_true")]
+    pub preserve_metadata: bool,
+    #[serde(default)]
+    pub follow_symlinks: bool,
+    #[serde(default)]
+    pub dry_run: bool,
+    #[serde(default)]
+    pub expected_source_version: Option<String>,
+    #[serde(default)]
+    pub expected_destination_version: Option<String>,
+    #[serde(default)]
+    pub budget: FsMutationBudget,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FsDeleteRequest {
+    pub path: PathBuf,
+    #[serde(default)]
+    pub recursive: bool,
+    #[serde(default)]
+    pub mode: FsDeleteMode,
+    #[serde(default)]
+    pub expected_version: Option<String>,
+    #[serde(default)]
+    pub dry_run: bool,
+    #[serde(default)]
+    pub budget: FsMutationBudget,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FsMutationResult {
+    pub operation_id: String,
+    pub state: String,
+    pub files_processed: u64,
+    pub directories_processed: u64,
+    pub bytes_copied: u64,
+    pub source_removed: bool,
+    pub destination_published: bool,
+    pub verified: bool,
+    pub rollback_attempted: bool,
+    pub rollback_completed: bool,
+    pub dry_run: bool,
+    pub warnings: Vec<String>,
+    pub detail_artifact_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub enum VersionStrength {
     #[default]
     Metadata,

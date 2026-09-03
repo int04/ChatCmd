@@ -8,8 +8,9 @@ use std::{
 };
 
 use chatcmd_runtime::{
-    ApplyEditsRequest, MAX_INLINE_BYTES, OperationContext, RuntimeError, RuntimeResult,
-    SearchProgress, TextReadBudget, TextReadRange, TextReadRequestV2, WorkspaceService,
+    ApplyEditsRequest, FsDeleteRequest, MAX_INLINE_BYTES, OperationContext, RuntimeError,
+    RuntimeResult, SearchProgress, TextReadBudget, TextReadRange, TextReadRequestV2,
+    WorkspaceService,
 };
 use serde_json::{Value, json};
 
@@ -356,13 +357,29 @@ pub(super) async fn delete(
 ) -> RuntimeResult<Value> {
     let before = snapshot(workspace, &input.path).await;
     let deleted = workspace
-        .delete(context, &input.path, input.recursive)
+        .delete_safe(
+            context,
+            &FsDeleteRequest {
+                path: input.path.clone(),
+                recursive: input.recursive,
+                mode: input.mode,
+                expected_version: input.expected_version,
+                dry_run: input.dry_run,
+                budget: input.budget,
+            },
+        )
         .await?;
+    let after = if deleted.source_removed {
+        Some(String::new())
+    } else {
+        before.clone()
+    };
     Ok(with_text_diff(
-        json!({ "deleted": deleted }),
+        serde_json::to_value(deleted)
+            .map_err(|error| RuntimeError::new("serialization_failed", error.to_string()))?,
         &input.path,
         before,
-        Some(String::new()),
+        after,
     ))
 }
 

@@ -5,7 +5,8 @@ use chatcmd_core::{
 };
 use chatcmd_mcp::RuntimeApi as _;
 use chatcmd_runtime::{
-    OperationContext, RuntimeError, RuntimeResult, ShellCreateRequest, ShellWriteRequest,
+    FsConflictPolicy, FsTransferRequest, OperationContext, RuntimeError, RuntimeResult,
+    ShellCreateRequest, ShellWriteRequest,
 };
 use serde_json::{Value, json};
 
@@ -474,17 +475,49 @@ impl RuntimeHost {
             }
             "fs_copy" => {
                 let input: TransferInput = parse(arguments)?;
+                let conflict_policy = transfer_conflict_policy(&input)?;
                 value(
                     workspace
-                        .copy(&context, &input.source, &input.destination, input.overwrite)
+                        .copy_safe(
+                            &context,
+                            &FsTransferRequest {
+                                source: input.source,
+                                destination: input.destination,
+                                conflict_policy,
+                                atomic_publish: input.atomic_publish,
+                                verify: input.verify,
+                                preserve_metadata: input.preserve_metadata,
+                                follow_symlinks: input.follow_symlinks,
+                                dry_run: input.dry_run,
+                                expected_source_version: input.expected_source_version,
+                                expected_destination_version: input.expected_destination_version,
+                                budget: input.budget,
+                            },
+                        )
                         .await?,
                 )
             }
             "fs_move" => {
                 let input: TransferInput = parse(arguments)?;
+                let conflict_policy = transfer_conflict_policy(&input)?;
                 value(
                     workspace
-                        .move_path(&context, &input.source, &input.destination, input.overwrite)
+                        .move_safe(
+                            &context,
+                            &FsTransferRequest {
+                                source: input.source,
+                                destination: input.destination,
+                                conflict_policy,
+                                atomic_publish: input.atomic_publish,
+                                verify: input.verify,
+                                preserve_metadata: input.preserve_metadata,
+                                follow_symlinks: input.follow_symlinks,
+                                dry_run: input.dry_run,
+                                expected_source_version: input.expected_source_version,
+                                expected_destination_version: input.expected_destination_version,
+                                budget: input.budget,
+                            },
+                        )
                         .await?,
                 )
             }
@@ -686,6 +719,20 @@ impl RuntimeHost {
             },
             "content": read.content, "truncated": read.truncated
         }))
+    }
+}
+
+fn transfer_conflict_policy(input: &TransferInput) -> RuntimeResult<FsConflictPolicy> {
+    match (input.conflict_policy, input.overwrite) {
+        (Some(policy), Some(true)) if policy != FsConflictPolicy::Replace => {
+            Err(RuntimeError::new(
+                "invalid_arguments",
+                "overwrite=true conflicts with conflictPolicy",
+            ))
+        }
+        (Some(policy), _) => Ok(policy),
+        (None, Some(true)) => Ok(FsConflictPolicy::Replace),
+        (None, _) => Ok(FsConflictPolicy::Error),
     }
 }
 

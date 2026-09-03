@@ -75,9 +75,9 @@ Các method `fs_*` thao tác trực tiếp trong canonical workspace scope và t
 | `fs_write_raw` | `path`, `base64`, `overwrite?` | Decode Base64 và ghi atomically dữ liệu binary/raw vào workspace. |
 | `fs_stat` | `path` | Xem metadata của một file/thư mục: loại entry, size, readonly, v.v. |
 | `fs_create_directory` | `path` | Tạo thư mục trong workspace. |
-| `fs_copy` | `source`, `destination`, `overwrite?` | Copy file/thư mục trong canonical workspace scope. |
-| `fs_move` | `source`, `destination`, `overwrite?` | Move/rename file hoặc thư mục trong canonical workspace scope. |
-| `fs_delete` | `path`, `recursive?` | Xóa file/thư mục theo policy; thư mục có thể cần `recursive`. |
+| `fs_copy` | `source`, `destination`, `conflictPolicy?`, `atomicPublish?`, `verify?`, `preserveMetadata?`, `followSymlinks?`, `dryRun?`, `expectedSourceVersion?`, `expectedDestinationVersion?`, `budget?`, `overwrite?` | Preflight bounded, copy vào sibling staging, verify rồi atomic publish; `overwrite` là adapter cũ cho `replace`. Symlink/reparse không được follow. |
+| `fs_move` | giống `fs_copy` | Stage-copy → verify → publish trước khi xóa source; báo `completedWithSourceRemaining` nếu cleanup source lỗi. |
+| `fs_delete` | `path`, `recursive?`, `mode?`, `expectedVersion?`, `dryRun?`, `budget?` | `mode=quarantine` mặc định; permanent phải explicit. Root/grant root bị từ chối và traversal dùng no-follow. |
 
 ### Phân biệt nhanh `fs_search` và `fs_find`
 

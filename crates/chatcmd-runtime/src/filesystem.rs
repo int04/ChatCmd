@@ -661,41 +661,6 @@ fn adapt_line_endings(value: &str, line_ending: &str) -> String {
         .replace('\n', line_ending)
 }
 
-fn copy_recursive(source: &Path, destination: &Path, overwrite: bool) -> RuntimeResult<()> {
-    let metadata = fs::symlink_metadata(source).map_err(io_error)?;
-    if metadata.file_type().is_symlink() {
-        return Err(RuntimeError::new(
-            "symlink_traversal_rejected",
-            "copy through symbolic links is denied",
-        ));
-    }
-    if metadata.is_dir() {
-        fs::create_dir_all(destination).map_err(io_error)?;
-        for item in fs::read_dir(source).map_err(io_error)? {
-            let item = item.map_err(io_error)?;
-            copy_recursive(&item.path(), &destination.join(item.file_name()), overwrite)?;
-        }
-    } else {
-        if destination.exists() && !overwrite {
-            return Err(RuntimeError::new(
-                "already_exists",
-                "destination exists and overwrite is false",
-            ));
-        }
-        if let Some(parent) = destination.parent() {
-            fs::create_dir_all(parent).map_err(io_error)?;
-        }
-        fs::copy(source, destination).map_err(io_error)?;
-    }
-    Ok(())
-}
-fn remove_recursive(path: &Path) -> RuntimeResult<()> {
-    if path.is_dir() {
-        fs::remove_dir_all(path).map_err(io_error)
-    } else {
-        fs::remove_file(path).map_err(io_error)
-    }
-}
 fn io_error(error: std::io::Error) -> RuntimeError {
     RuntimeError::new(
         if error.kind() == std::io::ErrorKind::NotFound {

@@ -1,8 +1,9 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
 use chatcmd_runtime::{
-    FindEntryType, FindPatternMode, FsFindBudget, FsListBudget, FsListMetadata, FsListSort,
-    FsStatBudget, ShellSignal, VersionStrength,
+    FindEntryType, FindPatternMode, FsConflictPolicy, FsDeleteMode, FsFindBudget, FsListBudget,
+    FsListMetadata, FsListSort, FsMutationBudget, FsStatBudget, FsVerifyMode, ShellSignal,
+    VersionStrength,
 };
 use serde::Deserialize;
 
@@ -48,12 +49,38 @@ input!(TransferInput {
     source: PathBuf,
     destination: PathBuf,
     #[serde(default)]
-    overwrite: bool
+    overwrite: Option<bool>,
+    #[serde(default)]
+    conflict_policy: Option<FsConflictPolicy>,
+    #[serde(default = "default_true")]
+    atomic_publish: bool,
+    #[serde(default)]
+    verify: FsVerifyMode,
+    #[serde(default = "default_true")]
+    preserve_metadata: bool,
+    #[serde(default)]
+    follow_symlinks: bool,
+    #[serde(default)]
+    dry_run: bool,
+    #[serde(default)]
+    expected_source_version: Option<String>,
+    #[serde(default)]
+    expected_destination_version: Option<String>,
+    #[serde(default)]
+    budget: FsMutationBudget
 });
 input!(DeleteInput {
     path: PathBuf,
     #[serde(default)]
-    recursive: bool
+    recursive: bool,
+    #[serde(default)]
+    mode: FsDeleteMode,
+    #[serde(default)]
+    expected_version: Option<String>,
+    #[serde(default)]
+    dry_run: bool,
+    #[serde(default)]
+    budget: FsMutationBudget
 });
 input!(GitShow {
     cwd: Option<PathBuf>,
