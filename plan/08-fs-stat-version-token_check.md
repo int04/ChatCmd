@@ -159,3 +159,12 @@ cargo test --workspace
 - Performance của metadata vs content mode.
 - Test và validation result.
 - Điểm tích hợp sẵn cho plan 09/11/12.
+
+## Kiểm tra bổ sung cần thực hiện
+
+Implementation và toàn bộ workspace test đã pass trên Windows, bao gồm test file identity bằng volume serial + file index. Test platform-specific cho Unix/macOS không thể chạy trên host Windows hiện tại. Cần chạy lại trên ít nhất một host Unix/macOS để xác nhận fingerprint `device + inode`, Unix change-time metadata và permission mode hoạt động đúng:
+
+```bash
+cargo test -p chatcmd-runtime filesystem::file_version
+cargo test --workspace
+```

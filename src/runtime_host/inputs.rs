@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use chatcmd_runtime::{
     FindEntryType, FindPatternMode, FsFindBudget, FsListBudget, FsListMetadata, FsListSort,
-    ShellSignal,
+    FsStatBudget, ShellSignal, VersionStrength,
 };
 use serde::Deserialize;
 
@@ -17,6 +17,15 @@ macro_rules! input {
 input!(DeviceGet { device_id: String });
 input!(SessionInput { session_id: String });
 input!(PathInput { path: PathBuf });
+input!(StatInput {
+    path: PathBuf,
+    #[serde(default)]
+    version_strength: VersionStrength,
+    #[serde(default)]
+    hash_algorithm: Option<String>,
+    #[serde(default)]
+    budget: FsStatBudget
+});
 input!(CwdInput {
     #[serde(alias = "path")]
     cwd: Option<PathBuf>

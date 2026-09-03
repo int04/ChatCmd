@@ -9,7 +9,7 @@ mod tool_result;
 mod types;
 mod workspace_ignore;
 
-pub use filesystem::{SearchProgress, WorkspaceService};
+pub use filesystem::{FileVersion, SearchProgress, WorkspaceService};
 pub use policy::{
     ApprovalDecision, ExecutionPolicy, PolicyAuthorizer, PolicyContext, PolicyDecision,
     PolicyEngine,

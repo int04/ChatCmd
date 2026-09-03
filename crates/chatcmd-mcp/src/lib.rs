@@ -175,6 +175,15 @@ tool_args!(NoArgs {});
 tool_args!(DeviceGetArgs { device_id: String });
 tool_args!(SessionArgs { session_id: String });
 tool_args!(PathArgs { path: String });
+tool_args!(StatArgs {
+    path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    version_strength: Option<chatcmd_runtime::VersionStrength>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    hash_algorithm: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    budget: Option<chatcmd_runtime::FsStatBudget>
+});
 tool_args!(CwdArgs {
     #[serde(default, alias = "path", skip_serializing_if = "Option::is_none")]
     cwd: Option<String>
@@ -718,8 +727,8 @@ tool_methods!(
     ),
     (
         fs_stat,
-        PathArgs,
-        "Inspect workspace path metadata. Required field: path."
+        StatArgs,
+        "Inspect workspace path metadata and return a signed optimistic-concurrency versionToken. Required field: path. Optional versionStrength=metadata|sampled|content (default metadata), hashAlgorithm=sha256, budget {timeoutMs,maxBytesRead}. Metadata mode does not read file content; sampled/content hashing is bounded and cancellable. Symlinks and reparse points are not followed."
     ),
     (
         fs_create_directory,

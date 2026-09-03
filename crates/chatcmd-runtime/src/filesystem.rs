@@ -11,6 +11,7 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+mod file_version;
 #[path = "filesystem_find.rs"]
 mod find;
 #[path = "filesystem_list.rs"]
@@ -27,6 +28,7 @@ mod search_helpers;
 mod search_state;
 #[path = "filesystem_walk.rs"]
 mod walk;
+pub use file_version::FileVersion;
 pub use search::SearchProgress;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -180,6 +182,7 @@ pub struct WorkspaceService {
     list_states: Arc<list::DirectoryListStore>,
     find_states: Arc<find::FindStateStore>,
     search_states: Arc<search::SearchStateStore>,
+    version_key: Arc<[u8; 32]>,
 }
 
 impl WorkspaceService {
@@ -197,6 +200,11 @@ impl WorkspaceService {
         }
         canonical.sort();
         canonical.dedup();
+        let mut key_hasher = sha2::Sha256::new();
+        use sha2::Digest as _;
+        key_hasher.update(uuid::Uuid::new_v4().as_bytes());
+        key_hasher.update(uuid::Uuid::new_v4().as_bytes());
+        let version_key: [u8; 32] = key_hasher.finalize().into();
         Ok(Self {
             roots: canonical.clone(),
             allowed_scopes: canonical,
@@ -204,6 +212,7 @@ impl WorkspaceService {
             list_states: Arc::new(list::DirectoryListStore::default()),
             find_states: Arc::new(find::FindStateStore::default()),
             search_states: Arc::new(search::SearchStateStore::default()),
+            version_key: Arc::new(version_key),
         })
     }
 
@@ -239,6 +248,7 @@ impl WorkspaceService {
             list_states: self.list_states.clone(),
             find_states: self.find_states.clone(),
             search_states: self.search_states.clone(),
+            version_key: self.version_key.clone(),
         })
     }
 

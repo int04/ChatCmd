@@ -302,6 +302,80 @@ pub struct FsEntry {
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub enum VersionStrength {
+    #[default]
+    Metadata,
+    Sampled,
+    Content,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FsStatBudget {
+    #[serde(default = "default_fs_stat_timeout_ms")]
+    pub timeout_ms: u64,
+    #[serde(default = "default_fs_stat_max_bytes_read")]
+    pub max_bytes_read: u64,
+}
+
+impl Default for FsStatBudget {
+    fn default() -> Self {
+        Self {
+            timeout_ms: default_fs_stat_timeout_ms(),
+            max_bytes_read: default_fs_stat_max_bytes_read(),
+        }
+    }
+}
+
+const fn default_fs_stat_timeout_ms() -> u64 {
+    5_000
+}
+
+const fn default_fs_stat_max_bytes_read() -> u64 {
+    128 * 1024 * 1024
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FsPermissions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FsStatRequest {
+    pub path: PathBuf,
+    #[serde(default)]
+    pub version_strength: VersionStrength,
+    #[serde(default)]
+    pub hash_algorithm: Option<String>,
+    #[serde(default)]
+    pub budget: FsStatBudget,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FsStatResult {
+    pub path: PathBuf,
+    pub name: String,
+    pub entry_type: String,
+    /// Compatibility alias retained for existing clients.
+    pub size: u64,
+    pub size_bytes: u64,
+    pub readonly: bool,
+    pub modified_at_ns: Option<u64>,
+    pub created_at_ns: Option<u64>,
+    pub permissions: FsPermissions,
+    pub version_token: String,
+    pub version_strength: VersionStrength,
+    pub content_hash: Option<String>,
+    pub hash_algorithm: Option<String>,
+    pub symlink: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub enum FsListSort {
     #[default]
     Filesystem,

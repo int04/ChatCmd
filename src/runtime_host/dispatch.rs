@@ -434,8 +434,20 @@ impl RuntimeHost {
                 )
             }
             "fs_stat" => {
-                let input: PathInput = parse(arguments)?;
-                value(workspace.stat(&input.path).await?)
+                let input: StatInput = parse(arguments)?;
+                value(
+                    workspace
+                        .stat_v2(
+                            Some(&context),
+                            &chatcmd_runtime::FsStatRequest {
+                                path: input.path,
+                                version_strength: input.version_strength,
+                                hash_algorithm: input.hash_algorithm,
+                                budget: input.budget,
+                            },
+                        )
+                        .await?,
+                )
             }
             "fs_create_directory" => {
                 let input: PathInput = parse(arguments)?;
