@@ -574,42 +574,77 @@ impl RuntimeHost {
                 filesystem_dispatch::delete(self, workspace, &context, parse(arguments)?).await
             }
             "git_status" => {
-                let input: CwdInput = parse(arguments)?;
+                let input: GitCwdInput = parse(arguments)?;
                 let cwd = self.resolve_git_cwd(&context, input.cwd).await?;
-                value(git.status(&cwd).await?)
+                value(
+                    git.status_with_options(&cwd, &input.options, context.cancellation.clone())
+                        .await?,
+                )
             }
             "git_diff" => {
                 let input: GitDiff = parse(arguments)?;
                 let cwd = self.resolve_git_cwd(&context, input.cwd).await?;
                 value(
-                    git.diff(&cwd, input.staged, input.stat, input.path.as_deref())
-                        .await?,
+                    git.diff_with_options(
+                        &cwd,
+                        input.staged,
+                        input.stat,
+                        input.path.as_deref(),
+                        &input.options,
+                        context.cancellation.clone(),
+                    )
+                    .await?,
                 )
             }
             "git_log" => {
                 let input: GitLog = parse(arguments)?;
                 let cwd = self.resolve_git_cwd(&context, input.cwd).await?;
-                value(git.log(&cwd, input.count, input.path.as_deref()).await?)
+                value(
+                    git.log_with_options(
+                        &cwd,
+                        input.count,
+                        input.path.as_deref(),
+                        &input.options,
+                        context.cancellation.clone(),
+                    )
+                    .await?,
+                )
             }
             "git_branch" => {
-                let input: CwdInput = parse(arguments)?;
+                let input: GitCwdInput = parse(arguments)?;
                 let cwd = self.resolve_git_cwd(&context, input.cwd).await?;
-                value(git.branch(&cwd).await?)
+                value(
+                    git.branch_with_options(&cwd, &input.options, context.cancellation.clone())
+                        .await?,
+                )
             }
             "git_show" => {
                 let input: GitShow = parse(arguments)?;
                 let cwd = self.resolve_git_cwd(&context, input.cwd).await?;
                 value(
-                    git.show(&cwd, &input.revision, input.path.as_deref())
-                        .await?,
+                    git.show_with_options(
+                        &cwd,
+                        &input.revision,
+                        input.path.as_deref(),
+                        &input.options,
+                        context.cancellation.clone(),
+                    )
+                    .await?,
                 )
             }
             "git_commit" => {
                 let input: GitCommit = parse(arguments)?;
                 let cwd = self.resolve_git_cwd(&context, input.cwd).await?;
                 value(
-                    git.commit(&cwd, &input.message, input.all, &input.paths)
-                        .await?,
+                    git.commit_with_options(
+                        &cwd,
+                        &input.message,
+                        input.all,
+                        &input.paths,
+                        &input.options,
+                        context.cancellation.clone(),
+                    )
+                    .await?,
                 )
             }
             "process_list" => value(self.process.list().await?),

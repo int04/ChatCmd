@@ -1111,6 +1111,40 @@ pub struct ApplyEditsResult {
     pub commit_state: String,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum GitOutputMode {
+    Inline,
+    #[default]
+    InlineOrArtifact,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", default)]
+pub struct GitRunOptions {
+    pub output_mode: GitOutputMode,
+    pub max_output_bytes: usize,
+    pub max_stderr_bytes: usize,
+    pub timeout_ms: u64,
+    pub max_runtime_ms: u64,
+    pub artifact_max_bytes: u64,
+    pub kill_on_limit: bool,
+}
+
+impl Default for GitRunOptions {
+    fn default() -> Self {
+        Self {
+            output_mode: GitOutputMode::InlineOrArtifact,
+            max_output_bytes: 512 * 1024,
+            max_stderr_bytes: 128 * 1024,
+            timeout_ms: 30_000,
+            max_runtime_ms: 30_000,
+            artifact_max_bytes: 256 * 1024 * 1024,
+            kill_on_limit: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandOutput {
@@ -1118,6 +1152,14 @@ pub struct CommandOutput {
     pub stdout: String,
     pub stderr: String,
     pub truncated: bool,
+    pub truncation_reason: Option<String>,
+    pub stdout_bytes: u64,
+    pub stderr_bytes: u64,
+    pub artifact_ref: Option<String>,
+    pub artifact_sha256: Option<String>,
+    pub elapsed_ms: u64,
+    pub timed_out: bool,
+    pub cancelled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -2,7 +2,9 @@
 
 mod blob_store;
 mod filesystem;
+mod git_service;
 mod policy;
+mod process_runner;
 mod services;
 mod shell;
 mod skill_service;
@@ -12,11 +14,12 @@ mod workspace_ignore;
 
 pub use blob_store::*;
 pub use filesystem::{FileVersion, SearchProgress, WorkspaceService};
+pub use git_service::GitService;
 pub use policy::{
     ApprovalDecision, ExecutionPolicy, PolicyAuthorizer, PolicyContext, PolicyDecision,
     PolicyEngine,
 };
-pub use services::{GitService, ProcessService};
+pub use services::ProcessService;
 pub use shell::ShellRuntime;
 pub use skill_service::{
     ManagedSkill, SkillInstallCandidate, SkillInstallPreview, SkillOption, SkillOptionChoice,

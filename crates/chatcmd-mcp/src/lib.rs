@@ -190,7 +190,9 @@ tool_args!(StatArgs {
 });
 tool_args!(CwdArgs {
     #[serde(default, alias = "path", skip_serializing_if = "Option::is_none")]
-    cwd: Option<String>
+    cwd: Option<String>,
+    #[serde(flatten, default)]
+    options: chatcmd_runtime::GitRunOptions
 });
 tool_args!(SkillArgs {
     #[serde(alias = "id")]
@@ -248,7 +250,9 @@ tool_args!(GitShowArgs {
     cwd: Option<String>,
     revision: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    path: Option<String>
+    path: Option<String>,
+    #[serde(flatten, default)]
+    options: chatcmd_runtime::GitRunOptions
 });
 tool_args!(GitCommitArgs {
     #[serde(default, alias = "path", skip_serializing_if = "Option::is_none")]
@@ -257,7 +261,9 @@ tool_args!(GitCommitArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     all: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    paths: Option<Vec<String>>
+    paths: Option<Vec<String>>,
+    #[serde(flatten, default)]
+    options: chatcmd_runtime::GitRunOptions
 });
 tool_args!(ProcessKillArgs {
     process_id: u32,
@@ -535,7 +541,9 @@ tool_args!(GitDiffArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     stat: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    path: Option<String>
+    path: Option<String>,
+    #[serde(flatten, default)]
+    options: chatcmd_runtime::GitRunOptions
 });
 tool_args!(GitLogArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -543,7 +551,9 @@ tool_args!(GitLogArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     count: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    path: Option<String>
+    path: Option<String>,
+    #[serde(flatten, default)]
+    options: chatcmd_runtime::GitRunOptions
 });
 tool_args!(SubagentStartArgs {
     name: String,

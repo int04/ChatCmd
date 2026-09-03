@@ -92,12 +92,21 @@ Các Git method được thiết kế để tránh shell interpolation và truy�
 
 | Method | Tham số chính | Ý nghĩa |
 |---|---|---|
-| `git_status` | `cwd?` | Xem trạng thái working tree của repository. `path` cũ được chấp nhận như alias của `cwd`. |
-| `git_diff` | `cwd?`, `staged?`, `stat?`, `path?` | Lấy Git diff; có thể lọc staged, chỉ stat hoặc theo một file cụ thể. |
+| `git_status` | `cwd?`, Git limits | Xem porcelain v2 và branch metadata của working tree. `path` cũ được chấp nhận như alias của `cwd`. |
+| `git_diff` | `cwd?`, `staged?`, `stat?`, `path?`, Git limits | Lấy Git diff; nên gọi `stat=true` trước khi yêu cầu patch lớn. Ext-diff và màu luôn bị tắt. |
 | `git_log` | `cwd?`, `count?`, `path?` | Xem lịch sử commit có giới hạn số lượng; có thể lọc theo path. |
-| `git_branch` | `cwd?` | Liệt kê các Git branch. |
+| `git_branch` | `cwd?`, Git limits | Liệt kê branch bằng format machine-readable. |
 | `git_show` | `revision`, `cwd?`, `path?` | Xem nội dung của một revision/commit đã được validate; có thể lọc theo path. |
 | `git_commit` | `message`, `cwd?`, `all?`, `paths?` | Tạo Git commit mà không dùng shell interpolation. `all` mặc định là `true`; không được gọi với object rỗng. |
+
+Mọi Git method nhận thêm `outputMode` (`inline` hoặc `inlineOrArtifact`),
+`maxOutputBytes`, `maxStderrBytes`, `timeoutMs`, `maxRuntimeMs`,
+`artifactMaxBytes` và `killOnLimit`. Mặc định timeout là 30 giây, stdout preview
+512 KiB, stderr preview 128 KiB và artifact tối đa 256 MiB. Result giữ các field
+cũ (`exitCode`, `stdout`, `stderr`, `truncated`) và bổ sung byte counters,
+`truncationReason`, `artifactRef`, SHA-256, elapsed time, timeout/cancellation.
+Git chạy với stdin/pager/credential prompt bị vô hiệu hóa; path luôn được truyền sau
+`--`, không qua shell interpolation.
 
 ---
 

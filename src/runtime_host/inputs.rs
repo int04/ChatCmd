@@ -27,10 +27,6 @@ input!(StatInput {
     #[serde(default)]
     budget: FsStatBudget
 });
-input!(CwdInput {
-    #[serde(alias = "path")]
-    cwd: Option<PathBuf>
-});
 input!(SkillInput {
     #[serde(alias = "id")]
     skill_id: String
@@ -69,6 +65,12 @@ input!(TransferInput {
     #[serde(default)]
     budget: FsMutationBudget
 });
+input!(GitCwdInput {
+    #[serde(alias = "path")]
+    cwd: Option<PathBuf>,
+    #[serde(flatten, default)]
+    options: chatcmd_runtime::GitRunOptions
+});
 input!(DeleteInput {
     path: PathBuf,
     #[serde(default)]
@@ -86,7 +88,9 @@ input!(GitShow {
     cwd: Option<PathBuf>,
     revision: String,
     #[serde(default)]
-    path: Option<String>
+    path: Option<String>,
+    #[serde(flatten, default)]
+    options: chatcmd_runtime::GitRunOptions
 });
 input!(GitCommit {
     cwd: Option<PathBuf>,
@@ -94,7 +98,9 @@ input!(GitCommit {
     #[serde(default = "default_true")]
     all: bool,
     #[serde(default)]
-    paths: Vec<String>
+    paths: Vec<String>,
+    #[serde(flatten, default)]
+    options: chatcmd_runtime::GitRunOptions
 });
 input!(ProcessKill {
     process_id: u32,
@@ -398,6 +404,8 @@ pub(super) struct GitDiff {
     pub(super) stat: bool,
     #[serde(default)]
     pub(super) path: Option<String>,
+    #[serde(flatten, default)]
+    pub(super) options: chatcmd_runtime::GitRunOptions,
 }
 
 #[derive(Deserialize)]
@@ -408,6 +416,8 @@ pub(super) struct GitLog {
     pub(super) count: usize,
     #[serde(default)]
     pub(super) path: Option<String>,
+    #[serde(flatten, default)]
+    pub(super) options: chatcmd_runtime::GitRunOptions,
 }
 
 const fn default_git_count() -> usize {
@@ -417,13 +427,13 @@ const fn default_git_count() -> usize {
 #[cfg(test)]
 mod tests {
     use super::{
-        CwdInput, GitCommit, GitDiff, ReadInput, ReplaceTextInput, ShellCreate, ShellRead,
+        GitCommit, GitCwdInput, GitDiff, ReadInput, ReplaceTextInput, ShellCreate, ShellRead,
         ShellSignalInput, ShellWrite,
     };
 
     #[test]
     fn git_cwd_can_be_omitted() {
-        let status: CwdInput =
+        let status: GitCwdInput =
             serde_json::from_value(serde_json::json!({})).expect("git status input");
         assert!(status.cwd.is_none());
 
@@ -435,7 +445,7 @@ mod tests {
 
     #[test]
     fn git_cwd_accepts_legacy_path_alias() {
-        let status: CwdInput = serde_json::from_value(serde_json::json!({
+        let status: GitCwdInput = serde_json::from_value(serde_json::json!({
             "path": "D:/DEV/CmdGPT/ChatCmdClient"
         }))
         .expect("legacy git cwd path");
@@ -449,12 +459,18 @@ mod tests {
     fn git_diff_accepts_stat_flag() {
         let input: GitDiff = serde_json::from_value(serde_json::json!({
             "cwd": ".",
-            "stat": true
+            "stat": true,
+            "maxOutputBytes": 4096,
+            "timeoutMs": 1250,
+            "killOnLimit": true
         }))
         .expect("git diff stat input");
         assert!(input.stat);
         assert!(!input.staged);
         assert!(input.path.is_none());
+        assert_eq!(input.options.max_output_bytes, 4096);
+        assert_eq!(input.options.timeout_ms, 1250);
+        assert!(input.options.kill_on_limit);
     }
 
     #[test]
