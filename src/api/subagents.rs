@@ -31,7 +31,7 @@ pub(super) async fn task_subagent_data(
     });
 
     let rows = sqlx::query(
-        "SELECT r.id,r.parent_turn_id,r.child_task_id,r.name,r.request,r.status AS registered_status,r.created_at_ms,r.updated_at_ms,r.completed_at_ms,t.status AS task_status FROM subagent_runs r LEFT JOIN tasks t ON t.id=r.child_task_id WHERE r.parent_task_id=? ORDER BY r.created_at_ms,r.id",
+        "SELECT r.id,r.parent_turn_id,r.child_task_id,r.name,r.request,r.status AS registered_status,r.created_at_ms,r.updated_at_ms,r.completed_at_ms,r.worker_id,r.attempt,r.lease_expires_at_ms,r.last_heartbeat_at_ms,r.max_runtime_ms,r.started_at_ms,r.terminal_reason,t.status AS task_status FROM subagent_runs r LEFT JOIN tasks t ON t.id=r.child_task_id WHERE r.parent_task_id=? ORDER BY r.created_at_ms,r.id",
     )
     .bind(task_id)
     .fetch_all(state.repository.pool())
@@ -56,7 +56,14 @@ pub(super) async fn task_subagent_data(
                 "status": status,
                 "createdAtUtc": iso_ms(created_at),
                 "updatedAtUtc": iso_ms(updated_at),
-                "completedAtUtc": completed_at.map(iso_ms)
+                "completedAtUtc": completed_at.map(iso_ms),
+                "workerId": row.get::<Option<String>, _>("worker_id"),
+                "attempt": row.get::<i64, _>("attempt"),
+                "leaseExpiresAtUtc": row.get::<Option<i64>, _>("lease_expires_at_ms").map(iso_ms),
+                "lastHeartbeatAtUtc": row.get::<Option<i64>, _>("last_heartbeat_at_ms").map(iso_ms),
+                "maxRuntimeMs": row.get::<i64, _>("max_runtime_ms"),
+                "startedAtUtc": row.get::<Option<i64>, _>("started_at_ms").map(iso_ms),
+                "terminalReason": row.get::<Option<String>, _>("terminal_reason")
             })
         })
         .collect();
@@ -174,7 +181,7 @@ pub(super) async fn mark_child_subagent_terminal(
     status: &str,
 ) -> Result<(), Problem> {
     let status = match status {
-        "completed" | "failed" | "stopped" | "interrupted" => status,
+        "completed" | "failed" | "stopped" | "timedOut" | "interrupted" => status,
         _ => return Ok(()),
     };
     let row = sqlx::query(
@@ -189,8 +196,8 @@ pub(super) async fn mark_child_subagent_terminal(
     };
 
     let now = now_ms();
-    sqlx::query(
-        "UPDATE subagent_runs SET status=?,updated_at_ms=?,completed_at_ms=? WHERE child_task_id=?",
+    let affected = sqlx::query(
+        "UPDATE subagent_runs SET status=?,terminal_reason=NULL,lease_expires_at_ms=NULL,updated_at_ms=?,completed_at_ms=? WHERE child_task_id=? AND status IN ('pending','running')",
     )
     .bind(status)
     .bind(now)
@@ -198,7 +205,11 @@ pub(super) async fn mark_child_subagent_terminal(
     .bind(child_task_id)
     .execute(state.repository.pool())
     .await
-    .map_err(db_problem)?;
+    .map_err(db_problem)?
+    .rows_affected();
+    if affected == 0 {
+        return Ok(());
+    }
 
     let subagent_id = row.get::<String, _>("id");
     let parent_task_id = row.get::<String, _>("parent_task_id");
@@ -220,7 +231,53 @@ pub(super) async fn mark_child_subagent_terminal(
     Ok(())
 }
 
+pub(super) async fn interrupt_active_child_subagents(
+    state: &AppState,
+    parent_task_id: &str,
+) -> Result<(), Problem> {
+    let rows = sqlx::query("SELECT id,parent_turn_id,child_task_id,name,attempt FROM subagent_runs WHERE parent_task_id=? AND status IN ('pending','running')")
+        .bind(parent_task_id)
+        .fetch_all(state.repository.pool())
+        .await
+        .map_err(db_problem)?;
+    let now = now_ms();
+    for row in rows {
+        let id = row.get::<String, _>("id");
+        let child_task_id = row.get::<Option<String>, _>("child_task_id");
+        let affected = sqlx::query("UPDATE subagent_runs SET status='interrupted',terminal_reason='parent task stopped',lease_expires_at_ms=NULL,updated_at_ms=?,completed_at_ms=? WHERE id=? AND status IN ('pending','running')")
+            .bind(now).bind(now).bind(&id).execute(state.repository.pool()).await.map_err(db_problem)?.rows_affected();
+        if affected == 0 {
+            continue;
+        }
+        if let Some(child_task_id) = child_task_id.as_deref() {
+            state.activities.cancel_task(child_task_id);
+            sqlx::query("UPDATE tasks SET status=CASE WHEN status IN ('pending','running') THEN 'interrupted' ELSE status END,active_session_id=NULL,updated_at_ms=? WHERE id=?")
+                .bind(now).bind(child_task_id).execute(state.repository.pool()).await.map_err(db_problem)?;
+            sqlx::query("UPDATE approvals SET state='cancelled',decision_json='{\"reason\":\"parent task stopped\"}',resolved_at_ms=? WHERE task_id=? AND state='pending'")
+                .bind(now).bind(child_task_id).execute(state.repository.pool()).await.map_err(db_problem)?;
+        }
+        let mut event = AppEvent::new(
+            "subagent.status",
+            json!({
+                "subagentId": id,
+                "childTaskId": child_task_id,
+                "name": row.get::<String, _>("name"),
+                "status": "interrupted",
+                "reason": "parent task stopped",
+                "attempt": row.get::<i64, _>("attempt")
+            }),
+        );
+        event.task_id = Some(parent_task_id.to_owned());
+        event.turn_id = Some(row.get::<String, _>("parent_turn_id"));
+        state.publish(event);
+    }
+    Ok(())
+}
+
 fn effective_status<'a>(registered: &'a str, task_status: Option<&'a str>) -> &'a str {
+    if registered == "timedOut" {
+        return registered;
+    }
     match task_status {
         Some("completed") => "completed",
         Some("failed") => "failed",

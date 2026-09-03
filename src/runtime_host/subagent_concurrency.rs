@@ -27,12 +27,14 @@ impl RuntimeHost {
     }
 
     pub(super) async fn active_subagent_count(&self) -> RuntimeResult<i64> {
+        self.expire_stale_subagents(None).await?;
         let now = super::now_ms();
         let native_cutoff = now.saturating_sub(60_000);
         let fallback_cutoff = now.saturating_sub(180_000);
         sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM subagent_runs WHERE status='running' OR (status='pending' AND ((fallback_state='none' AND created_at_ms>?) OR (fallback_state IN ('requested','started') AND updated_at_ms>?)))",
+            "SELECT COUNT(*) FROM subagent_runs WHERE (status='running' AND lease_expires_at_ms>?) OR (status='pending' AND ((fallback_state='none' AND created_at_ms>?) OR (fallback_state IN ('requested','started') AND updated_at_ms>?)))",
         )
+        .bind(now)
         .bind(native_cutoff)
         .bind(fallback_cutoff)
         .fetch_one(self.repository.pool())

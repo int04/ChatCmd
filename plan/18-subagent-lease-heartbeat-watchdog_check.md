@@ -177,3 +177,12 @@ Chạy frontend test/build nếu sửa UI.
 - Watchdog/cleanup/startup recovery flow.
 - File/UI đã đổi.
 - Race/integration test và kết quả.
+
+## Kiểm tra còn lại sau triển khai
+
+Plan 18 đã qua `cargo fmt --check`, `cargo check --workspace`, `cargo test --workspace`, frontend production build và test UI riêng cho trạng thái timeout/retry/reason. Cần kiểm tra lại các điểm sau trước khi bỏ hậu tố `_check`:
+
+- Full frontend suite `npm test -- --run` hiện có 7 lỗi trong `src/test/App.test.tsx` (các ca routing/runtime state và agent MCP URL); test mới `src/tasks/subagentStatus.test.ts` vẫn pass riêng. Các lỗi full-suite không nằm trên code path sub-agent mới nhưng cần ổn định fixture/cleanup của suite.
+- `npm run lint` hiện lỗi có sẵn tại `web/scripts/obfuscate-build.mjs` (`process`/`console`) và `web/src/realtime.ts` (React ref during render), cùng các warning hook ngoài phạm vi Plan 18.
+- Cần smoke test thủ công việc đóng process/terminal hệ điều hành thật khi watchdog timeout, vì test tự động hiện xác nhận cancellation registry và trạng thái database/session nhưng không khởi chạy worker process bị kill thật.
+- Cần kiểm tra suspend/resume hoặc wall-clock jump trên máy thật. Persisted deadline dùng wall clock và arithmetic bão hòa; chưa có harness hệ điều hành để mô phỏng sleep/resume end-to-end.

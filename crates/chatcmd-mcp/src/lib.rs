@@ -75,6 +75,13 @@ pub trait RuntimeApi: Send + Sync {
         message: &'a str,
     ) -> BoxFuture<'a, RuntimeResult<()>>;
 
+    fn heartbeat_subagent<'a>(
+        &'a self,
+        _child_task_id: &'a str,
+    ) -> BoxFuture<'a, RuntimeResult<bool>> {
+        Box::pin(async { Ok(true) })
+    }
+
     fn request_subagent_fallback<'a>(
         &'a self,
         parent_context: &'a OperationContext,

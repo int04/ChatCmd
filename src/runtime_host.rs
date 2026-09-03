@@ -63,6 +63,7 @@ pub(crate) struct RuntimeHost {
     plan_prompts: PlanPromptRegistry,
     file_changes: TurnFileChangeTracker,
     subagent_registration_gate: Arc<Mutex<()>>,
+    subagent_worker_id: Arc<str>,
     cursor_codec: CursorCodec,
 }
 
@@ -92,6 +93,7 @@ impl RuntimeHost {
             plan_prompts: PlanPromptRegistry::default(),
             file_changes: TurnFileChangeTracker::default(),
             subagent_registration_gate: Arc::new(Mutex::new(())),
+            subagent_worker_id: Arc::from(format!("boot-{}", uuid::Uuid::new_v4())),
             cursor_codec: CursorCodec::ephemeral(),
         }
     }
@@ -186,6 +188,13 @@ impl RuntimeApi for RuntimeHost {
         message: &'a str,
     ) -> BoxFuture<'a, RuntimeResult<()>> {
         Box::pin(async move { self.fail_subagent_worker(child_task_id, message).await })
+    }
+
+    fn heartbeat_subagent<'a>(
+        &'a self,
+        child_task_id: &'a str,
+    ) -> BoxFuture<'a, RuntimeResult<bool>> {
+        Box::pin(async move { RuntimeHost::heartbeat_subagent(self, child_task_id).await })
     }
 
     fn request_subagent_fallback<'a>(

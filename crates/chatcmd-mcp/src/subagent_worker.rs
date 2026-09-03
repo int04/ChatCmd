@@ -181,32 +181,47 @@ async fn run_claimed_sampling_subagent(
     request: String,
     tools: Vec<Tool>,
 ) {
-    let result = if peer.supports_sampling_tools() {
-        run_tool_sampling(
-            runtime.clone(),
-            &peer,
-            &parent_context,
-            &subagent_id,
-            &child_task_id,
-            &turn_id,
-            &name,
-            &request,
-            &tools,
-        )
-        .await
-    } else {
-        run_text_sampling(
-            runtime.clone(),
-            &peer,
-            &parent_context,
-            &subagent_id,
-            &child_task_id,
-            &turn_id,
-            &name,
-            &request,
-            &tools,
-        )
-        .await
+    let work = async {
+        if peer.supports_sampling_tools() {
+            run_tool_sampling(
+                runtime.clone(),
+                &peer,
+                &parent_context,
+                &subagent_id,
+                &child_task_id,
+                &turn_id,
+                &name,
+                &request,
+                &tools,
+            )
+            .await
+        } else {
+            run_text_sampling(
+                runtime.clone(),
+                &peer,
+                &parent_context,
+                &subagent_id,
+                &child_task_id,
+                &turn_id,
+                &name,
+                &request,
+                &tools,
+            )
+            .await
+        }
+    };
+    tokio::pin!(work);
+    let mut heartbeat = tokio::time::interval(std::time::Duration::from_secs(10));
+    heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let result = loop {
+        tokio::select! {
+            result = &mut work => break result,
+            _ = heartbeat.tick() => match runtime.heartbeat_subagent(&child_task_id).await {
+                Ok(true) => {}
+                Ok(false) => break Err(RuntimeError::new("subagent_lease_lost", "child worker no longer owns the active lease")),
+                Err(error) => tracing::warn!(child_task_id, code = %error.code, "child heartbeat could not be persisted"),
+            }
+        }
     };
 
     match result {

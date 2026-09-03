@@ -49,6 +49,8 @@ const vi: Record<string, string> = {
   'offline': 'ngoại tuyến',
   'stopped': 'đã dừng',
   'interrupted': 'bị gián đoạn',
+  'Timed out': 'Quá thời gian',
+  'Attempt': 'Lần thử',
   'pending': 'đang chờ',
   'unknown': 'không rõ',
   'degraded': 'suy giảm',

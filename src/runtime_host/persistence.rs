@@ -27,6 +27,11 @@ impl RuntimeHost {
             .flatten();
         self.ensure_call_identity(&mut context, first_user_message)
             .await?;
+        if let Some(task_id) = context.task_id.as_deref()
+            && let Err(error) = self.heartbeat_subagent(task_id).await
+        {
+            tracing::warn!(task_id, code = %error.code, "sub-agent activity heartbeat failed");
+        }
         if tool != "agent_user_message" {
             self.ensure_user_message_synced(&context).await?;
         }
@@ -41,9 +46,15 @@ impl RuntimeHost {
 
         let dispatch = self.dispatch(tool, context.clone(), arguments);
         tokio::pin!(dispatch);
-        let result = tokio::select! {
-            result = &mut dispatch => result,
-            () = context.cancellation.cancelled() => {
+        let mut heartbeat = tokio::time::interval_at(
+            tokio::time::Instant::now() + std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(10),
+        );
+        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let result = loop {
+            tokio::select! {
+            result = &mut dispatch => break result,
+            () = context.cancellation.cancelled() => break {
                 let reason = self.activities.stop_reason(&context.request_id);
                 // Dropping a dispatch future does not stop an active blocking worker. Continue
                 // polling until it reaches a cooperative checkpoint and completes cleanup. If
@@ -59,6 +70,14 @@ impl RuntimeHost {
                         ),
                     )),
                 }
+            },
+            _ = heartbeat.tick() => {
+                if let Some(task_id) = context.task_id.as_deref()
+                    && let Err(error) = self.heartbeat_subagent(task_id).await
+                {
+                    tracing::warn!(task_id, code = %error.code, "sub-agent timer heartbeat failed");
+                }
+            },
             }
         };
         match result {
@@ -339,6 +358,16 @@ impl RuntimeHost {
     ) -> RuntimeResult<Value> {
         let task_id = required_task_id(context)?;
         let turn_id = required_turn_id(context)?;
+        if status == "completed"
+            && !self
+                .finish_subagent_for_child(task_id.as_str(), "completed")
+                .await?
+        {
+            return Err(RuntimeError::new(
+                "subagent_lease_lost",
+                "child completion rejected because another terminal transition won",
+            ));
+        }
         if status == "completed" && content.trim().is_empty() {
             return Err(RuntimeError::new(
                 "final_response_required",
@@ -390,8 +419,6 @@ impl RuntimeHost {
                     "failed to reconcile orphaned tool calls while completing turn"
                 );
             }
-            self.finish_subagent_for_child(task_id.as_str(), "completed")
-                .await?;
         }
         let key = safe_id(
             "agent-event",

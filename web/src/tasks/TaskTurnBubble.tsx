@@ -189,15 +189,21 @@ function SubagentItem({ agent }: { agent: SubagentRun }) {
   const running = agent.status === 'running';
   const failed = agent.status === 'failed';
   const stopped = agent.status === 'stopped';
-  const statusLabel = pending ? tr('Waiting to start') : running ? tr('Running') : agent.status === 'completed' ? tr('Done') : agent.status === 'stopped' ? tr('Stopped') : agent.status === 'interrupted' ? tr('Interrupted') : failed ? tr('Failed') : agent.status;
+  const timedOut = agent.status === 'timedOut';
+  const statusLabel = pending ? tr('Waiting to start') : running ? tr('Running') : agent.status === 'completed' ? tr('Done') : agent.status === 'stopped' ? tr('Stopped') : agent.status === 'interrupted' ? tr('Interrupted') : timedOut ? tr('Timed out') : failed ? tr('Failed') : agent.status;
+  const statusDetail = subagentStatusText(agent, statusLabel);
   const content = <>
-    <span className={`turn-subagent-state ${agent.status}`} aria-hidden="true">{pending ? <Clock3 /> : running ? <LoaderCircle className="spin" /> : stopped ? <CircleStop /> : failed || agent.status === 'interrupted' ? <CircleAlert /> : <CheckCircle2 />}</span>
-    <span className="turn-subagent-copy"><strong>{agent.name}</strong><small>{statusLabel}</small></span>
+    <span className={`turn-subagent-state ${agent.status}`} aria-hidden="true">{pending ? <Clock3 /> : running ? <LoaderCircle className="spin" /> : stopped ? <CircleStop /> : failed || timedOut || agent.status === 'interrupted' ? <CircleAlert /> : <CheckCircle2 />}</span>
+    <span className="turn-subagent-copy"><strong>{agent.name}</strong><small title={agent.terminalReason}>{statusDetail}</small></span>
     {agent.taskId && <ExternalLink className="turn-subagent-open" aria-hidden="true" />}
   </>;
   return agent.taskId
     ? <a className={`turn-subagent ${agent.status}`} href={`/tasks/${encodeURIComponent(agent.taskId)}`} target="_blank" rel="noreferrer noopener" aria-label={`${agent.name} - ${statusLabel} - ${tr('Open in new tab')}`}>{content}</a>
     : <div className={`turn-subagent ${agent.status}`} aria-label={`${agent.name} - ${statusLabel}`}>{content}</div>;
+}
+
+export function subagentStatusText(agent: Pick<SubagentRun, 'attempt' | 'terminalReason'>, statusLabel: string) {
+  return `${statusLabel}${agent.attempt > 0 ? ` · ${tr('Attempt')} ${agent.attempt}` : ''}${agent.terminalReason ? ` · ${agent.terminalReason}` : ''}`;
 }
 
 function TurnProcess({ blocks, taskId, onStop }: { blocks: ReturnType<typeof buildProcessBlocks>; taskId: string; onStop: (activity: ToolActivity) => void }) {

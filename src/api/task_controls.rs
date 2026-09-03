@@ -385,6 +385,7 @@ pub(super) async fn stop_conversation(
         .execute(state.repository.pool())
         .await
         .map_err(db_problem)?;
+    interrupt_active_child_subagents(state, id).await?;
     mark_child_subagent_terminal(state, id, "stopped").await?;
     sqlx::query("UPDATE approvals SET state='cancelled',decision_json='{}',resolved_at_ms=? WHERE task_id=? AND state='pending'")
         .bind(now)

@@ -42,6 +42,32 @@ fn delegated_prompt(subagent_id: &str) -> String {
     format!("Read the delegated source\n\nCMDGPT_SUBAGENT_ID={subagent_id}")
 }
 
+async fn claim_registered(
+    host: &RuntimeHost,
+    context: &OperationContext,
+    registration: &Value,
+    subagent_id: &str,
+) -> String {
+    let child_task_id = registration
+        .get("childTaskId")
+        .and_then(Value::as_str)
+        .expect("child task id")
+        .to_owned();
+    let child_context = OperationContext::new(
+        format!("claim-{subagent_id}"),
+        &context.agent_id,
+        "agent_user_message",
+    );
+    host.claim_subagent_from_message(
+        &child_context,
+        &child_task_id,
+        Some(&delegated_prompt(subagent_id)),
+    )
+    .await
+    .expect("claim child");
+    child_task_id
+}
+
 #[tokio::test]
 async fn extension_fallback_stays_pending_and_parent_wait_remains_active() {
     let (host, context, registration, subagent_id, _directory) = fallback_fixture().await;
@@ -218,4 +244,144 @@ async fn fallback_claim_cannot_overwrite_browser_terminal_state() {
         .expect("read terminal state");
     assert_eq!(stored.get::<String, _>("status"), "completed");
     assert_eq!(stored.get::<String, _>("fallback_state"), "exhausted");
+}
+
+#[tokio::test]
+async fn expired_running_lease_times_out_and_unblocks_parent() {
+    let (host, context, registration, subagent_id, _directory) = fallback_fixture().await;
+    let child_task_id = claim_registered(&host, &context, &registration, &subagent_id).await;
+    sqlx::query("UPDATE subagent_runs SET lease_expires_at_ms=? WHERE id=?")
+        .bind(now_ms().saturating_sub(1))
+        .bind(&subagent_id)
+        .execute(host.repository.pool())
+        .await
+        .expect("expire lease");
+
+    let (first, second) = tokio::join!(
+        host.expire_stale_subagents(Some((PARENT_TASK_ID, PARENT_TURN_ID))),
+        host.expire_stale_subagents(Some((PARENT_TASK_ID, PARENT_TURN_ID)))
+    );
+    assert_eq!(
+        first.expect("first watchdog") + second.expect("second watchdog"),
+        1
+    );
+    let row = sqlx::query("SELECT status,terminal_reason FROM subagent_runs WHERE id=?")
+        .bind(&subagent_id)
+        .fetch_one(host.repository.pool())
+        .await
+        .expect("read timed out run");
+    assert_eq!(row.get::<String, _>("status"), "timedOut");
+    assert!(
+        row.get::<Option<String>, _>("terminal_reason")
+            .is_some_and(|reason| reason.contains("lease expired"))
+    );
+    let task_status: String = sqlx::query_scalar("SELECT status FROM tasks WHERE id=?")
+        .bind(&child_task_id)
+        .fetch_one(host.repository.pool())
+        .await
+        .expect("read child task");
+    assert_eq!(task_status, "interrupted");
+    assert!(
+        !host
+            .finish_subagent_for_child(&child_task_id, "completed")
+            .await
+            .expect("stale completion check"),
+        "stale worker completion must be rejected"
+    );
+    host.ensure_subagents_finished(&context)
+        .await
+        .expect("timed out child must not block parent");
+    assert_eq!(host.active_subagent_count().await.expect("active count"), 0);
+}
+
+#[tokio::test]
+async fn heartbeat_extends_lease_without_crossing_hard_deadline() {
+    let (host, context, registration, subagent_id, _directory) = fallback_fixture().await;
+    let child_task_id = claim_registered(&host, &context, &registration, &subagent_id).await;
+    let before: i64 =
+        sqlx::query_scalar("SELECT lease_expires_at_ms FROM subagent_runs WHERE id=?")
+            .bind(&subagent_id)
+            .fetch_one(host.repository.pool())
+            .await
+            .expect("read lease");
+    sqlx::query("UPDATE subagent_runs SET lease_expires_at_ms=? WHERE id=?")
+        .bind(now_ms().saturating_add(1_000))
+        .bind(&subagent_id)
+        .execute(host.repository.pool())
+        .await
+        .expect("shorten lease");
+
+    assert!(
+        host.heartbeat_subagent(&child_task_id)
+            .await
+            .expect("heartbeat")
+    );
+    let after: i64 = sqlx::query_scalar("SELECT lease_expires_at_ms FROM subagent_runs WHERE id=?")
+        .bind(&subagent_id)
+        .fetch_one(host.repository.pool())
+        .await
+        .expect("read renewed lease");
+    assert!(after > now_ms().saturating_add(1_000));
+    assert!(after <= before.saturating_add(1_000));
+}
+
+#[tokio::test]
+async fn hard_runtime_and_old_boot_owner_are_reconciled() {
+    let (host, context, registration, subagent_id, _directory) = fallback_fixture().await;
+    let child_task_id = claim_registered(&host, &context, &registration, &subagent_id).await;
+    let old = now_ms().saturating_sub(2_000);
+    sqlx::query("UPDATE subagent_runs SET started_at_ms=?,max_runtime_ms=1000,lease_expires_at_ms=?,worker_id='old-boot' WHERE id=?")
+        .bind(old)
+        .bind(now_ms().saturating_add(60_000))
+        .bind(&subagent_id)
+        .execute(host.repository.pool())
+        .await
+        .expect("make stale run");
+
+    assert_eq!(
+        host.expire_stale_subagents(None).await.expect("reconcile"),
+        1
+    );
+    assert!(
+        !host
+            .heartbeat_subagent(&child_task_id)
+            .await
+            .expect("late heartbeat")
+    );
+    let row = sqlx::query("SELECT status,terminal_reason FROM subagent_runs WHERE id=?")
+        .bind(&subagent_id)
+        .fetch_one(host.repository.pool())
+        .await
+        .expect("read reconciled run");
+    assert_eq!(row.get::<String, _>("status"), "timedOut");
+    assert_eq!(
+        row.get::<Option<String>, _>("terminal_reason").as_deref(),
+        Some("worker process restarted before the child completed")
+    );
+}
+
+#[tokio::test]
+async fn terminal_compare_and_set_has_one_winner() {
+    let (host, context, registration, subagent_id, _directory) = fallback_fixture().await;
+    let child_task_id = claim_registered(&host, &context, &registration, &subagent_id).await;
+    host.finish_subagent_for_child(&child_task_id, "completed")
+        .await
+        .expect("completion wins");
+    sqlx::query("UPDATE subagent_runs SET lease_expires_at_ms=? WHERE id=?")
+        .bind(now_ms().saturating_sub(1))
+        .bind(&subagent_id)
+        .execute(host.repository.pool())
+        .await
+        .expect("simulate late watchdog scan");
+
+    assert_eq!(
+        host.expire_stale_subagents(None).await.expect("watchdog"),
+        0
+    );
+    let status: String = sqlx::query_scalar("SELECT status FROM subagent_runs WHERE id=?")
+        .bind(&subagent_id)
+        .fetch_one(host.repository.pool())
+        .await
+        .expect("read winner");
+    assert_eq!(status, "completed");
 }

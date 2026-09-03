@@ -110,6 +110,22 @@ impl ActivityRegistry {
         })
     }
 
+    pub(crate) fn cancel_task(&self, task_id: &str) {
+        let cancellations = self.active.lock().map_or_else(
+            |_| Vec::new(),
+            |active| {
+                active
+                    .values()
+                    .filter(|activity| activity.context.task_id.as_deref() == Some(task_id))
+                    .map(|activity| activity.context.cancellation.clone())
+                    .collect::<Vec<_>>()
+            },
+        );
+        for cancellation in cancellations {
+            cancellation.cancel();
+        }
+    }
+
     fn remove(&self, activity_id: &str) {
         if let Ok(mut active) = self.active.lock() {
             active.remove(activity_id);
