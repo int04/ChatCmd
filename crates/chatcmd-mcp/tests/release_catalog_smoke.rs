@@ -1,7 +1,10 @@
 use chatcmd_mcp::{CatalogMetadata, TOOL_NAMES, canonical_manifest, catalog_metadata};
 use rmcp::ServiceExt as _;
 use std::process::Stdio;
-use tokio::process::Command;
+use tokio::{
+    io::{AsyncBufReadExt as _, BufReader},
+    process::{Child, Command},
+};
 
 const METADATA_PREFIX: &str = "CHATCMD_CATALOG_METADATA=";
 
@@ -126,4 +129,106 @@ async fn stale_connector_catalog_refreshes_once_and_observes_current_tools() {
             .any(|tool| tool["name"].as_str() == Some("fs_replace_text")),
         "refreshed connector catalog must expose fs_replace_text"
     );
+}
+
+async fn spawn_packaged_http_identity_server() -> (Child, String) {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_http_identity_smoke_server"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn packaged HTTP identity smoke server");
+    let stdout = child.stdout.take().expect("HTTP smoke stdout");
+    let mut reader = BufReader::new(stdout);
+    let mut address = String::new();
+    reader
+        .read_line(&mut address)
+        .await
+        .expect("read HTTP smoke address");
+    assert!(!address.trim().is_empty(), "HTTP smoke server address");
+    (child, format!("http://{}", address.trim()))
+}
+
+#[tokio::test]
+async fn packaged_streamable_http_tool_call_preserves_trusted_identity() {
+    let (mut child, base_url) = spawn_packaged_http_identity_server().await;
+    let client = reqwest::Client::new();
+    let endpoint = format!("{base_url}/mcp/agent-a");
+    let initialize = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": {"name": "packaged-http-smoke", "version": "1"}
+        }
+    });
+    let response = client
+        .post(&endpoint)
+        .header("origin", "https://allowed.example")
+        .header("accept", "application/json, text/event-stream")
+        .json(&initialize)
+        .send()
+        .await
+        .expect("initialize packaged HTTP server");
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let session_id = response
+        .headers()
+        .get("mcp-session-id")
+        .and_then(|value| value.to_str().ok())
+        .expect("packaged session id")
+        .to_owned();
+    let _ = response.text().await.expect("initialize response body");
+
+    let initialized = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "notifications/initialized"
+    });
+    let response = client
+        .post(&endpoint)
+        .header("origin", "https://allowed.example")
+        .header("accept", "application/json, text/event-stream")
+        .header("mcp-session-id", &session_id)
+        .header("mcp-protocol-version", "2025-03-26")
+        .json(&initialized)
+        .send()
+        .await
+        .expect("initialized packaged HTTP server");
+    assert_eq!(response.status(), reqwest::StatusCode::ACCEPTED);
+
+    let call = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/call",
+        "params": {
+            "name": "device_list",
+            "_meta": {"openai/session": "packaged-chat"},
+            "arguments": {
+                "agentId": "spoofed-agent",
+                "__chatcmdMcpSessionId": "spoofed-session",
+                "__chatcmdConversationScopeId": "spoofed-scope"
+            }
+        }
+    });
+    let response = client
+        .post(&endpoint)
+        .header("origin", "https://allowed.example")
+        .header("accept", "application/json, text/event-stream")
+        .header("mcp-session-id", &session_id)
+        .header("mcp-protocol-version", "2025-03-26")
+        .json(&call)
+        .send()
+        .await
+        .expect("tool call packaged HTTP server");
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let body = response.text().await.expect("packaged tool response body");
+    assert!(body.contains("\"agentId\":\"agent-a\""), "{body}");
+    assert!(body.contains("\"conversationScopeId\":\"openai:"), "{body}");
+    assert!(!body.contains("spoofed-agent"), "{body}");
+    assert!(!body.contains("spoofed-session"), "{body}");
+    assert!(!body.contains("spoofed-scope"), "{body}");
+
+    child.kill().await.expect("stop packaged HTTP smoke server");
+    let _ = child.wait().await;
 }

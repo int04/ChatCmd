@@ -1284,6 +1284,7 @@ fn has_query_token(query: &str) -> bool {
 struct McpHttpState {
     security: HttpSecurity,
     service: StreamableHttpService<McpServer, LocalSessionManager>,
+    session_manager: Arc<LocalSessionManager>,
     session_owners: Arc<tokio::sync::RwLock<HashMap<String, String>>>,
 }
 
@@ -1301,20 +1302,42 @@ async fn mcp_handler(
         Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
     };
 
+    if request.method() == http::Method::POST
+        && let Some(content_length) = request
+            .headers()
+            .get(http::header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<u64>().ok())
+        && content_length > request_identity::MCP_CONTROL_BODY_BYTES as u64
+    {
+        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+    }
+
+    let terminate_session = request.method() == http::Method::DELETE;
     let header_session = request
         .headers()
         .get("mcp-session-id")
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
-    if let Some(remote_session) = header_session.as_deref()
-        && state
+    if let Some(remote_session) = header_session.as_deref() {
+        let session_exists = state
+            .session_manager
+            .sessions
+            .read()
+            .await
+            .contains_key(remote_session);
+        if !session_exists {
+            state.session_owners.write().await.remove(remote_session);
+        }
+        if state
             .session_owners
             .read()
             .await
             .get(remote_session)
             .is_some_and(|owner| owner != &agent_id)
-    {
-        return StatusCode::NOT_FOUND.into_response();
+        {
+            return StatusCode::NOT_FOUND.into_response();
+        }
     }
     let session_id = local_mcp_session_id(&agent_id, header_session.as_deref());
     let metadata = catalog_metadata();
@@ -1352,7 +1375,13 @@ async fn mcp_handler(
                     .session_owners
                     .write()
                     .await
-                    .insert(remote_session.to_owned(), agent_id);
+                    .insert(remote_session.to_owned(), agent_id.clone());
+            }
+            if terminate_session
+                && response.status().is_success()
+                && let Some(remote_session) = header_session.as_deref()
+            {
+                state.session_owners.write().await.remove(remote_session);
             }
             response.into_response()
         }
@@ -1394,19 +1423,20 @@ fn local_mcp_session_id(agent_id: &str, header_session: Option<&str>) -> String 
 pub fn streamable_http_service(
     server: McpServer,
 ) -> StreamableHttpService<McpServer, LocalSessionManager> {
-    streamable_http_service_with_config(server, StreamableHttpServerConfig::default())
+    streamable_http_service_with_config_and_manager(
+        server,
+        StreamableHttpServerConfig::default(),
+        Arc::new(LocalSessionManager::default()),
+    )
 }
 
-fn streamable_http_service_with_config(
+fn streamable_http_service_with_config_and_manager(
     server: McpServer,
     config: StreamableHttpServerConfig,
+    session_manager: Arc<LocalSessionManager>,
 ) -> StreamableHttpService<McpServer, LocalSessionManager> {
     let config = config.with_max_request_body_bytes(request_identity::MCP_CONTROL_BODY_BYTES);
-    StreamableHttpService::new(
-        move || Ok(server.clone()),
-        LocalSessionManager::default().into(),
-        config,
-    )
+    StreamableHttpService::new(move || Ok(server.clone()), session_manager, config)
 }
 
 /// Build an Axum router protected by a token path segment and Origin checks.
@@ -1429,9 +1459,15 @@ pub fn axum_router_with_host_validation(
     } else {
         StreamableHttpServerConfig::default().disable_allowed_hosts()
     };
+    let session_manager = Arc::new(LocalSessionManager::default());
     let state = McpHttpState {
         security,
-        service: streamable_http_service_with_config(server, config),
+        service: streamable_http_service_with_config_and_manager(
+            server,
+            config,
+            session_manager.clone(),
+        ),
+        session_manager,
         session_owners: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
     };
     Router::new()

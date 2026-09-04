@@ -155,11 +155,34 @@ cargo test --workspace
 - Body limits/blob interaction.
 - Integration/performance test result.
 
-# Hạng mục cần kiểm tra và hoàn thiện sau (_check)
+# Kết quả hoàn tất sau rà soát 2026-09-04
 
-Phần triển khai và các bước kiểm tra Cargo tối thiểu đã đạt, nhưng các hạng mục sau của Plan 17 vẫn cần được kiểm tra hoặc hoàn thiện trước khi có thể đóng plan:
+Plan 17 đã đạt điều kiện đóng sau khi hoàn thiện các khoảng trống còn lại và đối chiếu lại yêu cầu batch với chuẩn MCP hiện hành.
 
-- `rmcp 3.1.4` hiện deserialize một `ClientJsonRpcMessage` cho mỗi HTTP POST và từ chối mảng batch JSON-RPC. Cần nâng cấp hoặc vá `rmcp`, sau đó bổ sung test qua transport thật để chứng minh trusted identity nhất quán trong batch kết hợp tool call và notification.
-- Bổ sung test hồi quy HTTP dạng stream/chunk cho các trường hợp thiếu hoặc sai `Content-Length`, mất kết nối khi đang đọc request body, POST body sai định dạng hoặc rỗng, cùng phép đo allocation/bộ nhớ khi kích thước gần giới hạn. Test so sánh từng byte đã có chứng minh identity layer không còn đọc hết hoặc mã hóa lại body; test giới hạn qua transport thật cũng chứng minh body quá lớn trả về 413.
-- Kiểm thử vòng đời owner của session ngoài phạm vi test chạy trong cùng process: hết hạn/dọn dẹp, kết nối lại sau khi ứng dụng khởi động lại và xoay vòng hoặc thu hồi token khi MCP session vẫn đang mở. Binding trong bộ nhớ hiện tại từ chối agent đã xác thực thứ hai dùng lại cùng remote session ID đang hoạt động, nhưng chưa có persistence hoặc chính sách TTL riêng.
-- Chạy test hồi quy tool call qua streamable HTTP trong bản đóng gói. Test bản release đóng gói hiện có mới xác minh catalog khởi động; test tool call với trusted identity mới chỉ chạy trong cùng process qua transport Axum thật kết hợp với `rmcp`.
+## Phần đã hoàn thiện
+
+- Nâng `rmcp`/`rmcp-macros` từ `3.1.4` lên `3.2.0`.
+- Trusted identity tiếp tục đi qua `Request::extensions` → `rmcp::RequestContext`; middleware identity không đọc, parse hoặc serialize lại request body.
+- Thêm fail-fast khi `Content-Length` khai báo vượt hard cap 4 MiB; streaming cap của `rmcp` vẫn kiểm tra số byte thực tế nên request khai báo thiếu kích thước không thể vượt cap.
+- Bổ sung test body rỗng, malformed JSON, thiếu/sai `Content-Length`, disconnect giữa body stream và payload gần hard cap.
+- Bổ sung instrumentation payload gần 4 MiB chứng minh body chỉ được transport consume đúng số byte thực; identity middleware không pre-consume/replay body.
+- Bổ sung cleanup owner khi `DELETE` session thành công và đồng bộ `session_owners` với `LocalSessionManager`. `rmcp 3.2.0` có idle keep-alive mặc định 5 phút và tự xóa session khỏi manager khi đóng/hết hạn, vì vậy không tạo TTL owner độc lập có thể làm yếu isolation.
+- Bổ sung regression test restart: remote session cũ trả `404`, session mới phải initialize lại.
+- Bổ sung regression test token revocation/rotation: token bị revoke không thể dùng session đang mở; token mới map cùng authenticated agent có thể tiếp tục đúng session.
+- Bổ sung binary `http_identity_smoke_server` và packaged-process regression qua TCP Streamable HTTP thật: initialize → initialized notification → tool call, xác nhận trusted `agentId`/conversation scope và loại bỏ spoofed identity fields.
+- Giữ isolation hai agent dùng cùng remote session ID và conversation scope fingerprinting như trước.
+
+## Quyết định về JSON-RPC batch
+
+Yêu cầu batch trong bản Plan 17 ban đầu đã lỗi thời so với MCP hiện hành. Changelog chính thức MCP `2025-06-18` ghi rõ **Remove support for JSON-RPC batching (PR #416)**; revision sau tiếp tục không yêu cầu batching. `rmcp 3.2.0` cũng triển khai Streamable HTTP theo MCP 2025-06-18/2025-11-25. Vì vậy không fork/vá `rmcp` để táiintroduce batch, tránh thêm một full-body parse/serialize compatibility layer trái mục tiêu memory/security của plan.
+
+Nguồn chuẩn: `https://modelcontextprotocol.io/specification/2025-06-18/changelog`.
+
+## Validation cuối
+
+- `cargo fmt --check`
+- `cargo check --workspace`
+- `cargo test -p chatcmd-mcp`
+- `cargo test --workspace`
+
+Khi các lệnh trên pass ở validation cuối, Plan 17 được đổi trạng thái sang `_Checkdone`.

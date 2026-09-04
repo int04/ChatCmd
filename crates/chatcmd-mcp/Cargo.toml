@@ -10,16 +10,18 @@ publish = false
 axum = "0.8"
 chatcmd-runtime = { path = "../chatcmd-runtime" }
 http = "1"
-rmcp = { version = "3.1.4", features = ["server", "client", "macros", "schemars", "transport-streamable-http-server"] }
+rmcp = { version = "3.2.0", features = ["server", "client", "macros", "schemars", "transport-streamable-http-server"] }
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 subtle = "2"
-tokio = { version = "1", features = ["io-std", "macros", "process", "rt-multi-thread", "sync"] }
+tokio = { version = "1", features = ["io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "sync"] }
 tower = { version = "0.5", features = ["limit", "util"] }
 tracing = "0.1"
 uuid = { version = "1", features = ["v4", "v5"] }
 
 [dev-dependencies]
+http-body = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 tempfile = "3"
