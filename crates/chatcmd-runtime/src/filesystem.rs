@@ -525,7 +525,7 @@ impl WorkspaceService {
         path: &Path,
         access: PathAccess,
     ) -> RuntimeResult<ExistingWorkspacePath> {
-        reject_reparse_components(path)?;
+        reject_reparse_components_within_scopes(path, &self.allowed_scopes)?;
         let resolved = path.canonicalize().map_err(io_error)?;
         self.ensure_allowed(&resolved)?;
         let root = self.containing_root(&resolved).ok_or_else(scope_error)?;
@@ -564,7 +564,7 @@ impl WorkspaceService {
         let requested_parent = absolute
             .parent()
             .ok_or_else(|| RuntimeError::new("invalid_path", "path has no parent"))?;
-        reject_reparse_components(requested_parent)?;
+        reject_reparse_components_within_scopes(requested_parent, &self.allowed_scopes)?;
         let canonical_parent = requested_parent.canonicalize().map_err(io_error)?;
         self.ensure_allowed(&canonical_parent)?;
         let root = self
@@ -627,17 +627,37 @@ fn validate_final_name(name: &std::ffi::OsStr) -> RuntimeResult<()> {
     Ok(())
 }
 
-fn reject_reparse_components(path: &Path) -> RuntimeResult<()> {
+fn reject_reparse_components_within_scopes(
+    path: &Path,
+    allowed_scopes: &[PathBuf],
+) -> RuntimeResult<()> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
         std::env::current_dir().map_err(io_error)?.join(path)
     };
     for ancestor in absolute.ancestors().collect::<Vec<_>>().into_iter().rev() {
-        match fs::symlink_metadata(ancestor) {
-            Ok(metadata) => reject_reparse_metadata(&metadata)?,
+        let metadata = match fs::symlink_metadata(ancestor) {
+            Ok(metadata) => metadata,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => return Err(io_error(error)),
+        };
+
+        let canonical_or_parent = if metadata.file_type().is_symlink() {
+            ancestor
+                .parent()
+                .and_then(|parent| parent.canonicalize().ok())
+                .map(|parent| parent.join(ancestor.file_name().unwrap_or_default()))
+        } else {
+            ancestor.canonicalize().ok()
+        };
+        let within_scope = canonical_or_parent.as_ref().is_some_and(|candidate| {
+            allowed_scopes
+                .iter()
+                .any(|scope| candidate == scope || candidate.starts_with(scope))
+        });
+        if within_scope {
+            reject_reparse_metadata(&metadata)?;
         }
     }
     Ok(())

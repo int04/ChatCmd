@@ -607,7 +607,7 @@ mod tests {
         assert_eq!(actual, expected);
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, not(target_os = "macos")))]
     #[tokio::test]
     async fn non_utf8_names_are_returned_with_an_explicit_lossy_marker() {
         use std::os::unix::ffi::OsStringExt as _;
