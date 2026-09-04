@@ -208,16 +208,19 @@ Chạy frontend test/build nếu thêm diagnostics UI.
 - Test privacy/correctness và benchmark overhead.
 - Cách bật/tắt/export telemetry.
 
-## Cần kiểm tra lại — Clippy trên toàn bộ không gian làm việc chưa thành công
+## Kết quả rà soát hoàn tất
 
-Lệnh `cargo clippy --workspace --all-targets -- -D warnings` chưa thành công do sáu cảnh báo kiểm tra tĩnh đã
-tồn tại ngoài phần mã Plan 19. Các bước kiểm tra bắt buộc (`cargo fmt --check`,
-`cargo check --workspace`, `cargo test --workspace`) vẫn thành công. Cần xử lý và chạy lại Clippy sau:
+Plan 19 đã được rà soát lại và không còn blocker cần xử lý.
 
-1. `crates/chatcmd-runtime/src/filesystem_find.rs:213` — `clippy::collapsible_if`.
-2. `crates/chatcmd-runtime/src/filesystem_read.rs:115` — `clippy::too_many_arguments`.
-3. `crates/chatcmd-runtime/src/filesystem_read.rs:540` — `clippy::redundant_guards`.
-4. `crates/chatcmd-runtime/src/filesystem.rs:332` — `clippy::too_many_arguments`.
-5. `crates/chatcmd-runtime/src/process_runner.rs:77` — `clippy::manual_clamp`.
-6. `crates/chatcmd-runtime/src/filesystem/file_version.rs:524` —
-   `clippy::items_after_test_module` (các hàm hỗ trợ kiểm thử ở dòng 824 trở đi).
+- `cargo fmt --check` — **PASS**.
+- `cargo check --workspace` — **PASS**.
+- `cargo test --workspace` — **PASS**; toàn bộ test workspace thành công, các benchmark/test được đánh dấu `ignored` vẫn giữ nguyên theo thiết kế.
+- `cargo clippy --workspace --all-targets -- -D warnings` — **PASS** sau khi xử lý toàn bộ lint còn tồn tại trên workspace với Rust/Clippy hiện tại.
+- `cargo bench -p chatcmd-runtime --bench tool_telemetry` — **PASS** với batch 10.000 calls:
+  - telemetry off: median khoảng **1,2281 ms / 10.000 calls** (~8,14 Melem/s);
+  - telemetry on: median khoảng **7,5783 ms / 10.000 calls** (~1,32 Melem/s);
+  - telemetry on, 4 luồng contention: median khoảng **19,191 ms / 10.000 calls** (~521 Kelem/s).
+
+Các regression test telemetry trong `chatcmd-runtime` xác nhận redaction marker nhạy cảm, counter saturation/overflow safety, terminal status/counter correctness, diagnostics bounded, progress/subagent/resource metrics và failure isolation. `ToolUsage` tiếp tục dùng chung với budget/resource tracking; không tạo hệ counter enforcement thứ hai.
+
+Các lint mới của Clippy liên quan `RuntimeError` lớn được xử lý bằng allow có phạm vi crate/test với chú thích rõ ràng, vì boxing `RuntimeError` sẽ là thay đổi API xuyên tầng không thuộc phạm vi Plan 19. Các lint hành vi/style còn lại được sửa trực tiếp hoặc allow cục bộ ở các API ổn định có nhiều tham số.

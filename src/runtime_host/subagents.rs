@@ -705,6 +705,7 @@ impl RuntimeHost {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn publish_subagent_status_with_reason(
         &self,
         parent_task_id: &str,

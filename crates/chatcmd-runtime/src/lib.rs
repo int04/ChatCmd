@@ -1,5 +1,9 @@
 //! Direct, bounded local-machine execution primitives for ChatCMD.
 
+// RuntimeError intentionally carries structured context used across the public runtime API.
+// Boxing it would be a broad compatibility change, so keep the established result type.
+#![allow(clippy::result_large_err)]
+
 mod blob_store;
 mod budget;
 mod filesystem;

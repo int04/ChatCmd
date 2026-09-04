@@ -381,6 +381,7 @@ impl ToolTelemetryRegistry {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_event_projection(
         &self,
         received_bytes: u64,

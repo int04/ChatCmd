@@ -1,3 +1,5 @@
+#![allow(clippy::result_large_err)]
+
 mod support;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};

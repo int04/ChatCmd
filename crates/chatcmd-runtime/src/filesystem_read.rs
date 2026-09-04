@@ -112,6 +112,7 @@ pub(crate) async fn read_text_v2(
     Ok(result)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn read_line_range(
     path: &Path,
     context: Option<&OperationContext>,
@@ -537,7 +538,7 @@ fn validate_request(request: &TextReadRequestV2) -> RuntimeResult<()> {
             "invalid_line_range",
             "line range start and limit must both be at least 1",
         )),
-        TextReadRange::Byte { limit, .. } if limit == 0 => Err(RuntimeError::new(
+        TextReadRange::Byte { limit: 0, .. } => Err(RuntimeError::new(
             "invalid_byte_range",
             "byte range limit must be at least 1",
         )),

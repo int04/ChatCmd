@@ -372,6 +372,7 @@ impl WorkspaceService {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn search(
         &self,
         path: &Path,

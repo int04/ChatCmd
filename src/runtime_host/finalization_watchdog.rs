@@ -192,6 +192,6 @@ mod tests {
     #[test]
     fn default_grace_is_safe_for_slow_final_responses() {
         assert_eq!(DEFAULT_FINALIZATION_GRACE_SECONDS, 120);
-        assert!(DEFAULT_FINALIZATION_GRACE_SECONDS >= MIN_FINALIZATION_GRACE_SECONDS);
+        const { assert!(DEFAULT_FINALIZATION_GRACE_SECONDS >= MIN_FINALIZATION_GRACE_SECONDS) };
     }
 }

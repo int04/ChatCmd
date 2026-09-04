@@ -170,6 +170,7 @@ pub(super) async fn dispatch_registered_subagent(
     Ok(response)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_claimed_sampling_subagent(
     runtime: Arc<dyn RuntimeApi>,
     peer: Peer<RoleServer>,
@@ -258,6 +259,7 @@ async fn run_claimed_sampling_subagent(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_tool_sampling(
     runtime: Arc<dyn RuntimeApi>,
     peer: &Peer<RoleServer>,
@@ -353,6 +355,7 @@ async fn run_tool_sampling(
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_text_sampling(
     runtime: Arc<dyn RuntimeApi>,
     peer: &Peer<RoleServer>,
@@ -422,6 +425,7 @@ async fn run_text_sampling(
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn call_child_tool(
     runtime: Arc<dyn RuntimeApi>,
     parent_context: &OperationContext,

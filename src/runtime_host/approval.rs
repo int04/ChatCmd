@@ -628,7 +628,7 @@ fn path_identity(path: &Path) -> Option<String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
-        return Some(format!("unix:{}:{}", metadata.dev(), metadata.ino()));
+        Some(format!("unix:{}:{}", metadata.dev(), metadata.ino()))
     }
     #[cfg(not(unix))]
     {

@@ -1207,6 +1207,7 @@ type MutationJournalSinkDyn = dyn crate::MutationJournalSink;
 type MutationFaultInjectorDyn = dyn crate::MutationFaultInjector;
 
 impl MutationJournal {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         operation_id: &str,
         operation_type: &str,

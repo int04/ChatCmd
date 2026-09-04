@@ -182,7 +182,7 @@ try {
         if !output.status.success() {
             return Ok(None);
         }
-        return Ok(clean_path(&output.stdout).map(|value| value.trim_end_matches('/').to_string()));
+        Ok(clean_path(&output.stdout).map(|value| value.trim_end_matches('/').to_string()))
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]

@@ -1,3 +1,7 @@
+// These tests explicitly release std::sync::Mutex guards before async cleanup; Clippy's
+// conservative await-holding-lock analysis does not track all of those drops reliably.
+#![allow(clippy::await_holding_lock)]
+
 use super::sanitize_arguments;
 use chatcmd_runtime::{OperationContext, RuntimeError, RuntimeResult};
 use rmcp::model::SamplingMessage;
@@ -300,6 +304,7 @@ async fn sampling_worker_claims_child_runs_tool_and_completes() {
     assert_eq!(read.1.task_id.as_deref(), Some("task-subagent-test"));
     assert_eq!(read.1.turn_id.as_deref(), Some("turn-subagent-test"));
     assert_eq!(read.2.get("path"), Some(&json!("a.rs")));
+    drop(calls);
 
     client.cancel().await.expect("cancel client");
     server_handle.await.expect("server task");

@@ -1,5 +1,8 @@
 //! Official `rmcp` server surface for direct local ChatCMD execution.
 
+// RuntimeError is a shared structured API error; keep its established representation.
+#![allow(clippy::result_large_err)]
+
 mod request_identity;
 mod server_contract;
 mod subagent_protocol;

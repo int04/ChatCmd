@@ -1,3 +1,5 @@
+#![allow(clippy::result_large_err)]
+
 #[path = "support/process_helper.rs"]
 mod process_helper;
 

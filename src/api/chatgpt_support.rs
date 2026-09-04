@@ -322,6 +322,7 @@ pub(super) fn wrapped_message(
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::{is_provisional_conversation_id, wrapped_message};
 

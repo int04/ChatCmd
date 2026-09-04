@@ -81,8 +81,7 @@ impl BoundedProcessRunner {
         let runtime_ms = options
             .timeout_ms
             .min(options.max_runtime_ms)
-            .min(HARD_PROCESS_RUNTIME_MS)
-            .max(1);
+            .clamp(1, HARD_PROCESS_RUNTIME_MS);
         let deadline = tokio::time::sleep(Duration::from_millis(runtime_ms));
         tokio::pin!(deadline);
         let mut timed_out = false;

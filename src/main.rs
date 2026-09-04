@@ -2,6 +2,8 @@
     all(not(debug_assertions), target_os = "windows"),
     windows_subsystem = "windows"
 )]
+// RuntimeError is intentionally a structured cross-layer error type; boxing it would alter APIs.
+#![allow(clippy::result_large_err)]
 
 mod api;
 mod chatgpt_message;

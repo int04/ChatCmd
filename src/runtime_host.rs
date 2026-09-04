@@ -70,6 +70,7 @@ pub(crate) struct RuntimeHost {
 }
 
 impl RuntimeHost {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         repository: SqliteRepository,
         device: LocalDevice,

@@ -521,6 +521,32 @@ fn digest_hex(value: &[u8]) -> String {
 }
 
 #[cfg(test)]
+type HashTestHook = (PathBuf, Arc<(std::sync::Barrier, std::sync::Barrier)>);
+
+#[cfg(test)]
+fn hash_test_hook() -> &'static std::sync::Mutex<Option<HashTestHook>> {
+    static HOOK: std::sync::OnceLock<std::sync::Mutex<Option<HashTestHook>>> =
+        std::sync::OnceLock::new();
+    HOOK.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+#[cfg(test)]
+fn wait_on_hash_test_hook(path: &Path) {
+    let gate = hash_test_hook()
+        .lock()
+        .expect("hash hook lock")
+        .as_ref()
+        .filter(|(hook_path, _)| hook_path == path)
+        .map(|(_, gate)| gate.clone());
+    let Some(gate) = gate else {
+        return;
+    };
+    gate.0.wait();
+    gate.1.wait();
+    *hash_test_hook().lock().expect("hash hook lock") = None;
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::{ApprovalDecision, BoxFuture, PolicyEngine};
@@ -818,30 +844,4 @@ mod tests {
         let second = windows_file_identity(&path).expect("identity");
         assert_ne!(first, second);
     }
-}
-
-#[cfg(test)]
-type HashTestHook = (PathBuf, Arc<(std::sync::Barrier, std::sync::Barrier)>);
-
-#[cfg(test)]
-fn hash_test_hook() -> &'static std::sync::Mutex<Option<HashTestHook>> {
-    static HOOK: std::sync::OnceLock<std::sync::Mutex<Option<HashTestHook>>> =
-        std::sync::OnceLock::new();
-    HOOK.get_or_init(|| std::sync::Mutex::new(None))
-}
-
-#[cfg(test)]
-fn wait_on_hash_test_hook(path: &Path) {
-    let gate = hash_test_hook()
-        .lock()
-        .expect("hash hook lock")
-        .as_ref()
-        .filter(|(hook_path, _)| hook_path == path)
-        .map(|(_, gate)| gate.clone());
-    let Some(gate) = gate else {
-        return;
-    };
-    gate.0.wait();
-    gate.1.wait();
-    *hash_test_hook().lock().expect("hash hook lock") = None;
 }

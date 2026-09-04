@@ -210,10 +210,8 @@ fn scan_page(
         };
         tracker.record_entries(1);
         entries_scanned = entries_scanned.saturating_add(1);
-        if entry.depth() == 0 && entry.path() == state.root {
-            if state.root.is_dir() {
-                continue;
-            }
+        if entry.depth() == 0 && entry.path() == state.root && state.root.is_dir() {
+            continue;
         }
         if !entry_type_matches(&entry, &request.entry_types) {
             continue;

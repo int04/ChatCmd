@@ -72,10 +72,10 @@ pub(super) async fn restart_elevated() -> Result<Json<ElevationStatus>, Problem>
             std::process::exit(0);
         });
 
-        return Ok(Json(ElevationStatus {
+        Ok(Json(ElevationStatus {
             supported: true,
             elevated: false,
-        }));
+        }))
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos")))]

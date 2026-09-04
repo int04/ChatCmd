@@ -745,6 +745,7 @@ fn enrich_tool_result(value: Value, context: &OperationContext, tool: &str) -> V
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::enrich_tool_result;
     use chatcmd_runtime::OperationContext;

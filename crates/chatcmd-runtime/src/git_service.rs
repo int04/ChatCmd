@@ -328,8 +328,8 @@ impl GitService {
     ) -> RuntimeResult<Option<String>> {
         let mut bounded = options.clone();
         bounded.output_mode = GitOutputMode::Inline;
-        bounded.max_output_bytes = bounded.max_output_bytes.min(4096).max(64);
-        bounded.max_stderr_bytes = bounded.max_stderr_bytes.min(4096).max(64);
+        bounded.max_output_bytes = bounded.max_output_bytes.clamp(64, 4096);
+        bounded.max_stderr_bytes = bounded.max_stderr_bytes.clamp(64, 4096);
         bounded.cursor = None;
         bounded.limit = 1;
         let output = self
