@@ -484,11 +484,19 @@ fn approval_summary(tool: &str, risk: ToolRiskClass, arguments: &Value) -> Value
         "overwrite": arguments.get("overwrite"), "recursive": arguments.get("recursive"),
         "deleteMode": arguments.get("mode"), "expectedVersion": arguments.get("expectedVersion"),
         "dryRun": arguments.get("dryRun"), "budget": arguments.get("budget"),
-        "contentBytesEstimate": content_bytes_estimate(arguments), "contentRedacted": true})
+        "editCount": edit_count(arguments), "contentBytesEstimate": content_bytes_estimate(arguments),
+        "contentRedacted": true})
+}
+
+fn edit_count(arguments: &Value) -> usize {
+    arguments
+        .get("edits")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len)
 }
 
 fn content_bytes_estimate(arguments: &Value) -> usize {
-    arguments
+    let direct = arguments
         .get("content")
         .and_then(Value::as_str)
         .map_or(0, str::len)
@@ -497,7 +505,15 @@ fn content_bytes_estimate(arguments: &Value) -> usize {
                 .get("base64")
                 .and_then(Value::as_str)
                 .map_or(0, |v| v.len().saturating_mul(3) / 4),
-        )
+        );
+    arguments
+        .get("edits")
+        .and_then(Value::as_array)
+        .map_or(direct, |edits| {
+            edits.iter().fold(direct, |total, edit| {
+                total.saturating_add(edit.get("text").and_then(Value::as_str).map_or(0, str::len))
+            })
+        })
 }
 
 fn requested_charge(tool: &str, arguments: &Value) -> GrantCharge {
@@ -691,6 +707,30 @@ mod tests {
             operation_digest("fs_write_text", &first),
             operation_digest("fs_write_text", &second)
         );
+    }
+
+    #[test]
+    fn apply_edits_summary_exposes_counts_without_replacement_payload() {
+        let replacement = "sensitive replacement payload";
+        let arguments = json!({
+            "path": ".",
+            "expectedVersion": "v1-test",
+            "edits": [
+                {"startByte": 1, "endByte": 2, "text": replacement},
+                {"startByte": 4, "endByte": 4, "text": "xy"}
+            ],
+            "dryRun": false,
+            "budget": {"maxBytesRead": 4096, "maxBytesWritten": 4096}
+        });
+        let summary = approval_summary("fs_apply_edits", ToolRiskClass::Modify, &arguments);
+        let serialized = summary.to_string();
+
+        assert_eq!(summary["expectedVersion"], "v1-test");
+        assert_eq!(summary["editCount"], 2);
+        assert_eq!(summary["contentBytesEstimate"], replacement.len() + 2);
+        assert_eq!(summary["contentRedacted"], true);
+        assert!(!serialized.contains(replacement));
+        assert!(serialized.contains("fs_apply_edits"));
     }
 
     #[test]

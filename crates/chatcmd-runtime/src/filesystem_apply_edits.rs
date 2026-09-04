@@ -13,6 +13,61 @@ use std::{
 const CHUNK_BYTES: usize = 64 * 1024;
 const PREVIEW_BYTES: usize = 8 * 1024;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ApplyEditsTestPoint {
+    BeforeStream,
+    MidStream,
+    AfterFlush,
+    AfterFileSync,
+    BeforeVersionRecheck,
+    AfterAtomicReplace,
+    BeforeDirectorySync,
+}
+
+#[cfg(test)]
+#[derive(Clone)]
+struct ApplyEditsTestGate {
+    point: ApplyEditsTestPoint,
+    reached: std::sync::Arc<std::sync::Barrier>,
+    release: std::sync::Arc<std::sync::Barrier>,
+    fail: bool,
+}
+
+#[cfg(test)]
+static APPLY_EDITS_TEST_GATE: std::sync::OnceLock<std::sync::Mutex<Option<ApplyEditsTestGate>>> =
+    std::sync::OnceLock::new();
+
+#[cfg(test)]
+fn install_test_gate(gate: Option<ApplyEditsTestGate>) {
+    *APPLY_EDITS_TEST_GATE
+        .get_or_init(|| std::sync::Mutex::new(None))
+        .lock()
+        .expect("apply edits test gate") = gate;
+}
+
+fn apply_edits_test_hook(_point: ApplyEditsTestPoint) -> RuntimeResult<()> {
+    #[cfg(test)]
+    {
+        let point = _point;
+        let gate = APPLY_EDITS_TEST_GATE
+            .get_or_init(|| std::sync::Mutex::new(None))
+            .lock()
+            .expect("apply edits test gate")
+            .clone();
+        if let Some(gate) = gate.filter(|gate| gate.point == point) {
+            gate.reached.wait();
+            gate.release.wait();
+            if gate.fail {
+                return Err(RuntimeError::new(
+                    "injectedTestFault",
+                    format!("injected fs_apply_edits fault at {point:?}"),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 struct ResolvedEdit {
     start: u64,
@@ -227,6 +282,7 @@ fn apply_blocking(
         .parent()
         .ok_or_else(|| RuntimeError::new("invalid_path", "path has no parent"))?;
     let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(io_error)?;
+    apply_edits_test_hook(ApplyEditsTestPoint::BeforeStream)?;
     {
         let mut source =
             BufReader::with_capacity(CHUNK_BYTES, File::open(target).map_err(io_error)?);
@@ -241,11 +297,14 @@ fn apply_blocking(
             started,
         )?;
         output.flush().map_err(io_error)?;
+        apply_edits_test_hook(ApplyEditsTestPoint::AfterFlush)?;
     }
     temporary.as_file().sync_all().map_err(io_error)?;
+    apply_edits_test_hook(ApplyEditsTestPoint::AfterFileSync)?;
     fs::set_permissions(temporary.path(), metadata.permissions()).map_err(io_error)?;
     check_cancelled(context)?;
     check_deadline(started, request.budget.timeout_ms)?;
+    apply_edits_test_hook(ApplyEditsTestPoint::BeforeVersionRecheck)?;
     authorized.revalidate()?;
     workspace.verify_expected_version_blocking(
         target,
@@ -257,7 +316,9 @@ fn apply_blocking(
         },
     )?;
     atomic_writer::atomic_replace(temporary, target, crate::DurabilityMode::Full)?;
+    apply_edits_test_hook(ApplyEditsTestPoint::AfterAtomicReplace)?;
     let mut warnings = Vec::new();
+    apply_edits_test_hook(ApplyEditsTestPoint::BeforeDirectorySync)?;
     atomic_writer::sync_parent(parent, &mut warnings)?;
     Ok(ApplyEditsResult {
         path: target.to_path_buf(),
@@ -555,7 +616,7 @@ fn stream_edits(
     started: Instant,
 ) -> RuntimeResult<()> {
     let mut cursor = 0_u64;
-    for edit in edits {
+    for (index, edit) in edits.iter().enumerate() {
         copy_exact(
             source,
             output,
@@ -564,6 +625,9 @@ fn stream_edits(
             started,
             request.budget.timeout_ms,
         )?;
+        if index == 0 {
+            apply_edits_test_hook(ApplyEditsTestPoint::MidStream)?;
+        }
         source
             .seek(SeekFrom::Current(
                 i64::try_from(edit.end - edit.start)
@@ -663,5 +727,333 @@ fn check_deadline(started: Instant, timeout_ms: u64) -> RuntimeResult<()> {
         ))
     } else {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        ApplyEditsBudget, ApprovalDecision, BoxFuture, ExecutionPolicy, FsStatRequest,
+        PolicyDecision, PolicyEngine, RuntimeResult, TextEdit, VersionStrength,
+    };
+    use std::{collections::BTreeMap, sync::Arc};
+
+    struct Approve;
+
+    impl ApprovalDecision for Approve {
+        fn request<'a>(
+            &'a self,
+            _: &'a crate::PolicyContext,
+        ) -> BoxFuture<'a, RuntimeResult<bool>> {
+            Box::pin(async { Ok(true) })
+        }
+    }
+
+    fn test_workspace(root: &Path) -> WorkspaceService {
+        WorkspaceService::new(
+            &[root.to_path_buf()],
+            PolicyEngine::new(
+                Some(ExecutionPolicy {
+                    default: PolicyDecision::Allow,
+                    per_agent_tool: BTreeMap::new(),
+                    per_root: BTreeMap::new(),
+                }),
+                Arc::new(Approve),
+            ),
+        )
+        .expect("test workspace")
+    }
+
+    async fn version(workspace: &WorkspaceService, path: &Path) -> String {
+        workspace
+            .stat_v2(
+                None,
+                &FsStatRequest {
+                    path: path.to_path_buf(),
+                    version_strength: VersionStrength::Metadata,
+                    hash_algorithm: None,
+                    budget: FsStatBudget::default(),
+                },
+            )
+            .await
+            .expect("capture version")
+            .version_token
+    }
+
+    fn edit_request(path: &Path, expected_version: String, size: usize) -> ApplyEditsRequest {
+        ApplyEditsRequest {
+            path: path.to_path_buf(),
+            expected_version,
+            coordinate_system: EditCoordinateSystem::Byte,
+            column_encoding: None,
+            edits: vec![TextEdit {
+                start_byte: Some((size / 2) as u64),
+                end_byte: Some((size / 2 + 1) as u64),
+                start: None,
+                end: None,
+                text: "Z".to_owned(),
+            }],
+            dry_run: false,
+            preserve_line_endings: true,
+            preserve_bom: true,
+            budget: ApplyEditsBudget {
+                timeout_ms: 30_000,
+                max_bytes_read: 16 * 1024 * 1024,
+                max_bytes_written: 8 * 1024 * 1024,
+                max_edits: 16,
+            },
+        }
+    }
+
+    fn arm_gate(
+        point: ApplyEditsTestPoint,
+        fail: bool,
+    ) -> (Arc<std::sync::Barrier>, Arc<std::sync::Barrier>) {
+        let reached = Arc::new(std::sync::Barrier::new(2));
+        let release = Arc::new(std::sync::Barrier::new(2));
+        install_test_gate(Some(ApplyEditsTestGate {
+            point,
+            reached: reached.clone(),
+            release: release.clone(),
+            fail,
+        }));
+        (reached, release)
+    }
+
+    async fn wait_barrier(barrier: Arc<std::sync::Barrier>) {
+        tokio::task::spawn_blocking(move || barrier.wait())
+            .await
+            .expect("barrier task");
+    }
+
+    async fn run_apply(
+        workspace: WorkspaceService,
+        context: OperationContext,
+        request: ApplyEditsRequest,
+    ) -> RuntimeResult<ApplyEditsResult> {
+        workspace.apply_edits(&context, &request).await
+    }
+
+    fn assert_only_target_remains(directory: &Path, target_name: &str) {
+        let entries = std::fs::read_dir(directory)
+            .expect("list directory")
+            .map(|entry| {
+                entry
+                    .expect("entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(entries, vec![target_name.to_owned()]);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[serial_test::serial]
+    async fn deterministic_conflict_barriers_reject_external_writer() {
+        const SIZE: usize = 2 * 1024 * 1024;
+        for point in [
+            ApplyEditsTestPoint::BeforeStream,
+            ApplyEditsTestPoint::MidStream,
+            ApplyEditsTestPoint::BeforeVersionRecheck,
+        ] {
+            let directory = tempfile::tempdir().expect("temporary directory");
+            let path = directory.path().join("conflict.txt");
+            std::fs::write(&path, vec![b'a'; SIZE]).expect("seed target");
+            let workspace = test_workspace(directory.path());
+            let expected = version(&workspace, &path).await;
+            let request = edit_request(&path, expected, SIZE);
+            let context = OperationContext::new("conflict", "agent", "fs_apply_edits");
+            let (reached, release) = arm_gate(point, false);
+            let task = tokio::spawn(run_apply(workspace, context, request));
+
+            wait_barrier(reached).await;
+            std::fs::write(&path, vec![b'x'; SIZE]).expect("external writer");
+            wait_barrier(release).await;
+            let error = task
+                .await
+                .expect("apply task")
+                .expect_err("external writer must win");
+            assert!(
+                matches!(
+                    error.code.as_str(),
+                    "versionConflict"
+                        | "pathChanged"
+                        | "path_changed_after_authorization"
+                        | "fileChangedDuringHash"
+                ),
+                "unexpected conflict code at {point:?}: {}",
+                error.code
+            );
+            assert_eq!(std::fs::read(&path).expect("read winner"), vec![b'x'; SIZE]);
+            assert_only_target_remains(directory.path(), "conflict.txt");
+            install_test_gate(None);
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[serial_test::serial]
+    async fn mid_stream_cancellation_keeps_target_and_cleans_temp() {
+        const SIZE: usize = 2 * 1024 * 1024;
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("cancel.txt");
+        let original = vec![b'a'; SIZE];
+        std::fs::write(&path, &original).expect("seed target");
+        let workspace = test_workspace(directory.path());
+        let request = edit_request(&path, version(&workspace, &path).await, SIZE);
+        let context = OperationContext::new("cancel", "agent", "fs_apply_edits");
+        let cancellation = context.cancellation.clone();
+        let (reached, release) = arm_gate(ApplyEditsTestPoint::MidStream, false);
+        let task = tokio::spawn(run_apply(workspace, context, request));
+
+        wait_barrier(reached).await;
+        cancellation.cancel();
+        wait_barrier(release).await;
+        let error = task
+            .await
+            .expect("apply task")
+            .expect_err("mid-stream cancellation must fail before commit");
+        assert_eq!(error.code, "operationCancelled");
+        assert_eq!(std::fs::read(&path).expect("read target"), original);
+        assert_only_target_remains(directory.path(), "cancel.txt");
+        install_test_gate(None);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[serial_test::serial]
+    async fn pre_commit_flush_and_sync_faults_leave_original_and_clean_temp() {
+        const SIZE: usize = 512 * 1024;
+        for point in [
+            ApplyEditsTestPoint::AfterFlush,
+            ApplyEditsTestPoint::AfterFileSync,
+        ] {
+            let directory = tempfile::tempdir().expect("temporary directory");
+            let path = directory.path().join("fault.txt");
+            let original = vec![b'a'; SIZE];
+            std::fs::write(&path, &original).expect("seed target");
+            let workspace = test_workspace(directory.path());
+            let request = edit_request(&path, version(&workspace, &path).await, SIZE);
+            let context = OperationContext::new("fault", "agent", "fs_apply_edits");
+            let (reached, release) = arm_gate(point, true);
+            let task = tokio::spawn(run_apply(workspace, context, request));
+
+            wait_barrier(reached).await;
+            wait_barrier(release).await;
+            let error = task
+                .await
+                .expect("apply task")
+                .expect_err("injected pre-commit fault must fail");
+            assert_eq!(error.code, "injectedTestFault");
+            assert_eq!(std::fs::read(&path).expect("read target"), original);
+            assert_only_target_remains(directory.path(), "fault.txt");
+            install_test_gate(None);
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[serial_test::serial]
+    async fn readonly_mode_is_preserved_and_symlink_swap_is_rejected() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+        const SIZE: usize = 512 * 1024;
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("readonly.txt");
+        std::fs::write(&path, vec![b'a'; SIZE]).expect("seed readonly target");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o444))
+            .expect("set readonly mode");
+        let workspace = test_workspace(directory.path());
+        let request = edit_request(&path, version(&workspace, &path).await, SIZE);
+        workspace
+            .apply_edits(
+                &OperationContext::new("readonly", "agent", "fs_apply_edits"),
+                &request,
+            )
+            .await
+            .expect("edit readonly file by atomic replacement");
+        assert_eq!(
+            std::fs::metadata(&path)
+                .expect("metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o444
+        );
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644))
+            .expect("restore writable mode");
+        std::fs::write(&path, vec![b'a'; SIZE]).expect("reset target");
+        let workspace = test_workspace(directory.path());
+        let request = edit_request(&path, version(&workspace, &path).await, SIZE);
+        let context = OperationContext::new("symlink", "agent", "fs_apply_edits");
+        let (reached, release) = arm_gate(ApplyEditsTestPoint::BeforeVersionRecheck, false);
+        let task = tokio::spawn(run_apply(workspace, context, request));
+        wait_barrier(reached).await;
+        let victim = directory.path().join("victim.txt");
+        std::fs::write(&victim, b"victim-safe").expect("victim");
+        std::fs::remove_file(&path).expect("remove target");
+        symlink(&victim, &path).expect("swap symlink");
+        wait_barrier(release).await;
+        let error = task
+            .await
+            .expect("apply task")
+            .expect_err("symlink swap must fail");
+        assert!(
+            matches!(
+                error.code.as_str(),
+                "pathChanged"
+                    | "path_changed_after_authorization"
+                    | "symlink_not_allowed"
+                    | "symlink_traversal_rejected"
+                    | "path_outside_allowed_scope"
+                    | "versionConflict"
+            ),
+            "unexpected symlink rejection code: {}",
+            error.code
+        );
+        assert_eq!(
+            std::fs::read(&victim).expect("victim unchanged"),
+            b"victim-safe"
+        );
+        install_test_gate(None);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[serial_test::serial]
+    async fn cancellation_after_atomic_replace_stays_committed() {
+        const SIZE: usize = 512 * 1024;
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("post-commit.txt");
+        std::fs::write(&path, vec![b'a'; SIZE]).expect("seed target");
+        let workspace = test_workspace(directory.path());
+        let request = edit_request(&path, version(&workspace, &path).await, SIZE);
+        let context = OperationContext::new("post-commit", "agent", "fs_apply_edits");
+        let cancellation = context.cancellation.clone();
+        let (reached, release) = arm_gate(ApplyEditsTestPoint::AfterAtomicReplace, false);
+        let task = tokio::spawn(run_apply(workspace, context, request));
+
+        wait_barrier(reached).await;
+        cancellation.cancel();
+        wait_barrier(release).await;
+        let result = task
+            .await
+            .expect("apply task")
+            .expect("post-commit cancellation must not rewrite success as cancellation");
+        assert!(result.applied);
+        assert_eq!(result.commit_state, "committed");
+        let content = std::fs::read(&path).expect("read committed target");
+        assert_eq!(content.len(), SIZE);
+        assert_eq!(content[SIZE / 2], b'Z');
+        assert_only_target_remains(directory.path(), "post-commit.txt");
+        install_test_gate(None);
+    }
+
+    #[test]
+    fn post_commit_test_points_are_explicitly_named() {
+        assert_ne!(
+            ApplyEditsTestPoint::AfterAtomicReplace,
+            ApplyEditsTestPoint::BeforeDirectorySync
+        );
     }
 }

@@ -197,14 +197,26 @@ Chạy benchmark/stress file lớn và báo peak memory/bytes read/write.
 - Legacy `fs_replace_text` behavior.
 - Test/benchmark và số liệu.
 
-## KIỂM TRA — Các bước xác thực còn cần thực hiện
+## KIỂM TRA — kết quả hoàn thiện ngày 2026-09-04
 
-Phần triển khai, kiểm thử đơn vị/tích hợp và kiểm thử nhanh packaged catalog đã hoàn tất, nhưng các mục sau chưa được xác nhận đầy đủ và cần kiểm tra lại:
+Các khoảng trống có thể thực hiện trên máy macOS hiện tại đã được bổ sung và xác minh:
 
-- Chạy kiểm thử tải/benchmark cho thao tác chỉnh sửa nhỏ trên file 100 MB và 1 GB, ghi lại peak RSS thực tế và throughput; kiểm thử hiện tại chỉ chứng minh thuật toán dùng buffer cố định 64 KiB.
-- Bổ sung barrier đồng thời có tính tất định cho writer chạy đồng thời tại các thời điểm trước khi stream, giữa quá trình stream và ngay trước khi rename; xác nhận mọi trường hợp đều trả về conflict và không ghi đè writer khác.
-- Bổ sung mô phỏng hủy giữa quá trình stream; kiểm tra target không đổi và temp file được dọn dẹp.
-- Bổ sung mô phỏng lỗi do crash/gián đoạn quanh các bước flush, đồng bộ file, đồng bộ thư mục cha và rename sau khi Plan 11 cung cấp bộ khung atomic writer.
-- Chạy ma trận quyền truy cập/chỉ đọc và hoán đổi symlink trên cả Windows và macOS; việc xác thực lại đường dẫn hiện dùng cơ chế của Plan 07 nhưng chưa có kiểm thử end-to-end riêng cho tool mới.
-- Xác nhận giao diện phê duyệt hiển thị đường dẫn, `expectedVersion`, số lượng chỉnh sửa và số byte ước tính mà không chứa toàn bộ payload thay thế.
-- `cargo clippy --workspace --all-targets -- -D warnings` vẫn thất bại do các lint nằm ngoài phạm vi Plan 09 trong `filesystem_find.rs`, `filesystem_read.rs`, `filesystem.rs`, `file_version.rs`, `subagent_worker_tests.rs`, `api/folders.rs`, `api/system.rs` và `finalization_watchdog.rs`; `chatcmd-runtime --lib` chạy thành công khi cho phép đúng các lint nền đã liệt kê.
+- Thêm deterministic test seam nội bộ cho `fs_apply_edits` tại `BeforeStream`, `MidStream`, `AfterFlush`, `AfterFileSync`, `BeforeVersionRecheck`, `AfterAtomicReplace` và `BeforeDirectorySync`. Test seam chỉ tồn tại dưới `cfg(test)`; contract MCP/public API không thay đổi.
+- `deterministic_conflict_barriers_reject_external_writer` PASS tại ba barrier trước stream, giữa stream và trước revalidation/commit; external writer luôn thắng và edit transaction không ghi đè dữ liệu mới.
+- `mid_stream_cancellation_keeps_target_and_cleans_temp` PASS; cancellation giữa stream trả `operationCancelled`, target giữ nguyên và temp được cleanup.
+- `pre_commit_flush_and_sync_faults_leave_original_and_clean_temp` PASS cho fault sau flush và sau file sync; target cũ không bị thay và staging được dọn.
+- `cancellation_after_atomic_replace_stays_committed` PASS; cancellation sau commit point không đổi một mutation đã publish thành lỗi mơ hồ, result vẫn báo `commitState=committed`.
+- `readonly_mode_is_preserved_and_symlink_swap_is_rejected` PASS trên macOS: mode `0444` được bảo toàn qua atomic replace; symlink swap ngay trước version recheck bị fail-closed bằng `symlink_traversal_rejected` và victim không bị sửa.
+- Approval summary của `fs_apply_edits` đã có `expectedVersion`, `editCount`, tổng replacement bytes ước tính và `contentRedacted=true`; test riêng xác nhận replacement payload không xuất hiện trong summary.
+- Thêm benchmark ignored `apply_edits_100mib_and_1gib_reports_peak_rss_and_throughput` và đã chạy thủ công trên máy này:
+  - 100 MiB: 5.260 s, 57.03 MiB/s theo tổng bytes read+write, peak RSS 5.44 MiB, RSS growth 0.55 MiB.
+  - 1 GiB: 53.707 s, 57.20 MiB/s, peak RSS 5.59 MiB, RSS growth 0.12 MiB.
+  - Cả hai trường hợp PASS ngưỡng RSS growth < 128 MiB và giữ nguyên kích thước file.
+- Validation PASS: `cargo fmt --check`, `cargo check --workspace`, `cargo test -p chatcmd-runtime`, `cargo test -p chatcmd-mcp`, `cargo test --workspace` và packaged catalog smoke.
+- `cargo clippy -p chatcmd-runtime --lib -- -D warnings` vẫn bị chặn bởi 5 lint nền ngoài Plan 09 trong `filesystem_find.rs`, `filesystem_read.rs`, `filesystem.rs`, `process_runner.rs`. Khi allow đúng bốn nhóm lint nền (`collapsible_if`, `too_many_arguments`, `redundant_guards`, `manual_clamp`), runtime lib Clippy PASS; không có lint mới từ phần `fs_apply_edits` vừa bổ sung.
+
+## CÔNG VIỆC CHƯA HOÀN THIỆN — phụ thuộc môi trường Windows
+
+- Chưa thể chạy E2E permission/read-only và symlink-swap của `fs_apply_edits` trên Windows trong lượt này vì máy thực thi hiện tại là macOS và chỉ cài hai Rust targets `aarch64-apple-darwin`, `x86_64-apple-darwin`; không có Windows runtime/runner để xác nhận hành vi thực tế. Phần macOS tương ứng đã PASS.
+
+Do vẫn còn đúng một xác minh phụ thuộc Windows chưa thể thực hiện từ môi trường hiện tại, Plan 09 tiếp tục giữ trạng thái `checked` thay vì `Checkdone` theo quy tắc rà soát.

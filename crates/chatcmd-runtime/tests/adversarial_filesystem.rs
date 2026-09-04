@@ -1,15 +1,16 @@
 mod support;
 
 use chatcmd_runtime::{
-    AtomicWriteOptions, FsSearchBudget, FsSearchRequest, FsStatBudget, FsStatRequest,
-    GitRunOptions, GitService, OperationContext, SearchMode, TextReadBudget, TextReadRange,
-    TextReadRequestV2, VersionStrength,
+    ApplyEditsBudget, ApplyEditsRequest, AtomicWriteOptions, EditCoordinateSystem, FsSearchBudget,
+    FsSearchRequest, FsStatBudget, FsStatRequest, GitRunOptions, GitService, OperationContext,
+    SearchMode, TextEdit, TextReadBudget, TextReadRange, TextReadRequestV2, VersionStrength,
 };
 use std::{
     io::{Read as _, Write as _},
     path::Path,
     process::Command,
     sync::{Arc, Barrier},
+    time::Instant,
 };
 use support::{
     fault_injection::{FaultAction, FaultGate, FaultPoint},
@@ -71,6 +72,100 @@ async fn metadata_version(workspace: &chatcmd_runtime::WorkspaceService, path: &
         .await
         .expect("stat fixture")
         .version_token
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn peak_rss_bytes() -> u64 {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+    // SAFETY: `usage` points to valid writable storage for `getrusage`, and the value is
+    // assumed initialized only when the OS reports success.
+    let status = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
+    assert_eq!(status, 0, "getrusage failed");
+    // SAFETY: successful `getrusage` initializes the complete `rusage` structure.
+    let usage = unsafe { usage.assume_init() };
+    #[cfg(target_os = "macos")]
+    {
+        u64::try_from(usage.ru_maxrss).unwrap_or(u64::MAX)
+    }
+    #[cfg(target_os = "linux")]
+    {
+        u64::try_from(usage.ru_maxrss)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(1024)
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+fn peak_rss_bytes() -> u64 {
+    0
+}
+
+#[tokio::test]
+#[ignore = "manual Plan 09 benchmark: streams 100 MiB and 1 GiB files"]
+async fn apply_edits_100mib_and_1gib_reports_peak_rss_and_throughput() {
+    const MIB: u64 = 1024 * 1024;
+    let directory = tempfile::tempdir().expect("benchmark directory");
+    let workspace = workspace(directory.path());
+
+    for size in [100 * MIB, 1024 * MIB] {
+        let path = directory.path().join(format!("apply-edits-{size}.txt"));
+        let file = std::fs::File::create(&path).expect("create sparse benchmark file");
+        file.set_len(size).expect("size sparse benchmark file");
+        let expected_version = metadata_version(&workspace, &path).await;
+        let request = ApplyEditsRequest {
+            path: path.clone(),
+            expected_version,
+            coordinate_system: EditCoordinateSystem::Byte,
+            column_encoding: None,
+            edits: vec![TextEdit {
+                start_byte: Some(size / 2),
+                end_byte: Some(size / 2 + 1),
+                start: None,
+                end: None,
+                text: "x".to_owned(),
+            }],
+            dry_run: false,
+            preserve_line_endings: true,
+            preserve_bom: true,
+            budget: ApplyEditsBudget {
+                timeout_ms: 5 * 60_000,
+                max_bytes_read: 2 * 1024 * MIB,
+                max_bytes_written: 2 * 1024 * MIB,
+                max_edits: 16,
+            },
+        };
+        let rss_before = peak_rss_bytes();
+        let started = Instant::now();
+        let result = workspace
+            .apply_edits(
+                &OperationContext::new("plan09-benchmark", "agent", "fs_apply_edits"),
+                &request,
+            )
+            .await
+            .expect("apply benchmark edit");
+        let elapsed = started.elapsed();
+        let peak_rss = peak_rss_bytes();
+        let rss_growth = peak_rss.saturating_sub(rss_before);
+        let processed = result.bytes_read.saturating_add(result.bytes_written);
+        let throughput_mib_s = processed as f64 / MIB as f64 / elapsed.as_secs_f64();
+
+        println!(
+            "PLAN09_BENCH size_mib={} elapsed_ms={} throughput_mib_s={:.2} peak_rss_mib={:.2} rss_growth_mib={:.2}",
+            size / MIB,
+            elapsed.as_millis(),
+            throughput_mib_s,
+            peak_rss as f64 / MIB as f64,
+            rss_growth as f64 / MIB as f64
+        );
+        assert!(result.applied);
+        assert_eq!(std::fs::metadata(&path).expect("metadata").len(), size);
+        if peak_rss != 0 {
+            assert!(
+                rss_growth < 128 * MIB,
+                "fs_apply_edits RSS growth exceeded 128 MiB: {rss_growth} bytes"
+            );
+        }
+    }
 }
 
 #[tokio::test]
