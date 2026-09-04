@@ -142,6 +142,39 @@ fn catalog_names_are_sorted_stable_and_unique() {
 }
 
 #[test]
+fn blob_schemas_expose_bounded_caller_budget() {
+    let manifest = canonical_manifest();
+    let tools = manifest["tools"].as_array().expect("manifest tools");
+    for name in [
+        "blob_begin",
+        "blob_write_chunk",
+        "blob_status",
+        "blob_seal",
+        "blob_abort",
+    ] {
+        let tool = tools
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap_or_else(|| panic!("missing {name}"));
+        let schema = tool["schema"].to_string();
+        assert!(schema.contains("budget"), "{name} budget missing");
+        assert!(schema.contains("timeoutMs"), "{name} timeout missing");
+        assert!(
+            schema.contains("maxBytesRead"),
+            "{name} read budget missing"
+        );
+        assert!(
+            schema.contains("maxBytesWritten"),
+            "{name} write budget missing"
+        );
+        assert!(
+            schema.contains("maxOpenFiles"),
+            "{name} open-file budget missing"
+        );
+    }
+}
+
+#[test]
 fn fs_write_text_schema_requires_exactly_one_content_source() {
     let manifest = canonical_manifest();
     let tools = manifest["tools"].as_array().expect("manifest tools");

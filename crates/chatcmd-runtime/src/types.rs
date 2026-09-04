@@ -1,3 +1,4 @@
+use crate::ToolUsage;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, future::Future, path::PathBuf, pin::Pin, sync::Arc};
@@ -139,6 +140,10 @@ pub struct RuntimeError {
     pub message: String,
     pub retryable: bool,
     pub approval_required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<ToolUsage>,
 }
 
 impl RuntimeError {
@@ -149,6 +154,8 @@ impl RuntimeError {
             message: message.into(),
             retryable: false,
             approval_required: false,
+            phase: None,
+            usage: None,
         }
     }
 
@@ -159,6 +166,8 @@ impl RuntimeError {
             message: message.into(),
             retryable: true,
             approval_required: false,
+            phase: None,
+            usage: None,
         }
     }
 
@@ -169,6 +178,8 @@ impl RuntimeError {
             message: message.into(),
             retryable: false,
             approval_required: true,
+            phase: None,
+            usage: None,
         }
     }
 }
@@ -362,6 +373,8 @@ pub struct FsMutationBudget {
     pub max_bytes_read: u64,
     #[serde(default = "default_fs_mutation_max_bytes")]
     pub max_bytes_written: u64,
+    #[serde(default = "default_fs_mutation_max_open_files")]
+    pub max_open_files: u32,
 }
 
 impl Default for FsMutationBudget {
@@ -371,6 +384,7 @@ impl Default for FsMutationBudget {
             max_files: default_fs_mutation_max_files(),
             max_bytes_read: default_fs_mutation_max_bytes(),
             max_bytes_written: default_fs_mutation_max_bytes(),
+            max_open_files: default_fs_mutation_max_open_files(),
         }
     }
 }
@@ -383,6 +397,9 @@ const fn default_fs_mutation_max_files() -> u64 {
 }
 const fn default_fs_mutation_max_bytes() -> u64 {
     1024 * 1024 * 1024 * 1024
+}
+const fn default_fs_mutation_max_open_files() -> u32 {
+    32
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]

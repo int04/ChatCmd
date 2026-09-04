@@ -1,7 +1,7 @@
 use crate::{
-    AdmissionController, FsEntry, OperationContext, PolicyContext, PolicyEngine, RuntimeError,
-    RuntimeResult, TextReadBudget, TextReadRange, TextReadRequestV2, TextReadResult,
-    TextReadResultV2,
+    AdmissionController, FsEntry, IoResourceGovernor, OperationContext, PolicyContext,
+    PolicyEngine, RuntimeError, RuntimeResult, TextReadBudget, TextReadRange, TextReadRequestV2,
+    TextReadResult, TextReadResultV2,
 };
 use std::{
     ffi::OsString,
@@ -205,6 +205,7 @@ pub struct WorkspaceService {
     search_states: Arc<search::SearchStateStore>,
     version_key: Arc<[u8; 32]>,
     admission: AdmissionController,
+    io_resources: IoResourceGovernor,
     repository_index: Arc<RepositoryIndex>,
     mutation_journal_sink: Option<Arc<dyn MutationJournalSink>>,
     mutation_fault_injector: Option<Arc<dyn MutationFaultInjector>>,
@@ -239,6 +240,7 @@ impl WorkspaceService {
             search_states: Arc::new(search::SearchStateStore::default()),
             version_key: Arc::new(version_key),
             admission: AdmissionController::new(8, 2, 1024 * 1024 * 1024),
+            io_resources: IoResourceGovernor::new(256, 4 * 1024 * 1024 * 1024),
             repository_index: Arc::new(RepositoryIndex::default()),
             mutation_journal_sink: None,
             mutation_fault_injector: None,
@@ -294,6 +296,7 @@ impl WorkspaceService {
             search_states: self.search_states.clone(),
             version_key: self.version_key.clone(),
             admission: self.admission.clone(),
+            io_resources: self.io_resources.clone(),
             repository_index: self.repository_index.clone(),
             mutation_journal_sink: self.mutation_journal_sink.clone(),
             mutation_fault_injector: self.mutation_fault_injector.clone(),

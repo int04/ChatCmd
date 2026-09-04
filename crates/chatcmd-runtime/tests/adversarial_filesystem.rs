@@ -137,6 +137,7 @@ async fn blob_upload_commit_reports_peak_rss_throughput_and_cleanup() {
                     expected_sha256: Some(final_hash.clone()),
                     chunk_size_bytes: Some(CHUNK_BYTES),
                     ttl_seconds: None,
+                    budget: Default::default(),
                 },
             )
             .expect("begin benchmark blob");
@@ -149,6 +150,7 @@ async fn blob_upload_commit_reports_peak_rss_throughput_and_cleanup() {
                         offset: index * MIB,
                         data_base64: encoded.clone(),
                         chunk_sha256: None,
+                        budget: Default::default(),
                     },
                 )
                 .expect("write benchmark chunk");
@@ -160,6 +162,7 @@ async fn blob_upload_commit_reports_peak_rss_throughput_and_cleanup() {
                     upload_id: begin.upload_id.clone(),
                     final_size_bytes: size,
                     sha256: final_hash,
+                    budget: Default::default(),
                 },
             )
             .expect("seal benchmark blob");

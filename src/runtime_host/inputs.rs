@@ -1,9 +1,9 @@
 use std::{collections::BTreeMap, path::PathBuf};
 
 use chatcmd_runtime::{
-    FindEntryType, FindPatternMode, FsConflictPolicy, FsDeleteMode, FsFindBudget, FsListBudget,
-    FsListMetadata, FsListSort, FsMutationBudget, FsStatBudget, FsVerifyMode, ShellSignal,
-    VersionStrength,
+    BlobToolBudget, FindEntryType, FindPatternMode, FsConflictPolicy, FsDeleteMode, FsFindBudget,
+    FsListBudget, FsListMetadata, FsListSort, FsMutationBudget, FsStatBudget, FsVerifyMode,
+    ShellSignal, VersionStrength,
 };
 use serde::Deserialize;
 
@@ -413,7 +413,11 @@ input!(WriteRawInput {
     require_atomic: bool
 });
 
-input!(BlobStatusInput { upload_id: String });
+input!(BlobStatusInput {
+    upload_id: String,
+    #[serde(default)]
+    budget: BlobToolBudget
+});
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

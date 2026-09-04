@@ -670,20 +670,30 @@ tool_args!(BlobBeginArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     chunk_size_bytes: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    ttl_seconds: Option<u64>
+    ttl_seconds: Option<u64>,
+    #[serde(default)]
+    budget: chatcmd_runtime::BlobToolBudget
 });
 tool_args!(BlobChunkArgs {
     upload_id: String,
     offset: u64,
     data_base64: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    chunk_sha256: Option<String>
+    chunk_sha256: Option<String>,
+    #[serde(default)]
+    budget: chatcmd_runtime::BlobToolBudget
 });
-tool_args!(BlobStatusArgs { upload_id: String });
+tool_args!(BlobStatusArgs {
+    upload_id: String,
+    #[serde(default)]
+    budget: chatcmd_runtime::BlobToolBudget
+});
 tool_args!(BlobSealArgs {
     upload_id: String,
     final_size_bytes: u64,
-    sha256: String
+    sha256: String,
+    #[serde(default)]
+    budget: chatcmd_runtime::BlobToolBudget
 });
 tool_args!(GitDiffArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -981,27 +991,27 @@ tool_methods!(
     (
         blob_begin,
         BlobBeginArgs,
-        "Begin an owner-scoped sequential blob upload. Required purpose=fsWriteText|fsWriteRaw|fsApplyEdits|artifact; optional expectedSizeBytes, contentType, expectedSha256, chunkSizeBytes, ttlSeconds. Returns opaque contentRef and uploadId."
+        "Begin an owner-scoped sequential blob upload. Required purpose=fsWriteText|fsWriteRaw|fsApplyEdits|artifact; optional expectedSizeBytes, contentType, expectedSha256, chunkSizeBytes, ttlSeconds and budget {timeoutMs,maxBytesRead,maxBytesWritten,maxOpenFiles}. Caller budgets can only lower server hard caps. Returns opaque contentRef and uploadId."
     ),
     (
         blob_write_chunk,
         BlobChunkArgs,
-        "Append one bounded Base64 chunk. Required uploadId, offset, dataBase64; optional chunkSha256. Offset must equal nextOffset; an identical retry is idempotent."
+        "Append one bounded Base64 chunk. Required uploadId, offset, dataBase64; optional chunkSha256 and budget {timeoutMs,maxBytesRead,maxBytesWritten,maxOpenFiles}. Caller budgets can only lower server hard caps. Offset must equal nextOffset; an identical retry is idempotent."
     ),
     (
         blob_status,
         BlobStatusArgs,
-        "Inspect an owner-scoped upload and resume from nextOffset. Required uploadId."
+        "Inspect an owner-scoped upload and resume from nextOffset. Required uploadId; optional budget {timeoutMs,maxBytesRead,maxBytesWritten,maxOpenFiles}. Caller budgets can only lower server hard caps."
     ),
     (
         blob_seal,
         BlobSealArgs,
-        "Verify size and SHA-256, then make an upload immutable. Required uploadId, finalSizeBytes, sha256."
+        "Verify size and SHA-256, then make an upload immutable. Required uploadId, finalSizeBytes, sha256; optional budget {timeoutMs,maxBytesRead,maxBytesWritten,maxOpenFiles}. Caller budgets can only lower server hard caps."
     ),
     (
         blob_abort,
         BlobStatusArgs,
-        "Idempotently abort an owner-scoped upload and remove its temporary bytes. Required uploadId."
+        "Idempotently abort an owner-scoped upload and remove its temporary bytes. Required uploadId; optional budget {timeoutMs,maxBytesRead,maxBytesWritten,maxOpenFiles}. Caller budgets can only lower server hard caps."
     ),
     (
         fs_list,

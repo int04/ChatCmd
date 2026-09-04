@@ -57,6 +57,12 @@ impl ToolBudget {
         self.deadline = Some(Instant::now() + timeout.max(Duration::from_millis(1)));
         self
     }
+
+    #[must_use]
+    pub fn with_deadline(mut self, deadline: Instant) -> Self {
+        self.deadline = Some(deadline);
+        self
+    }
 }
 
 fn lower<T: Ord + Copy>(left: Option<T>, right: Option<T>) -> Option<T> {
@@ -143,14 +149,16 @@ impl BudgetTracker {
     }
 
     pub fn checkpoint(&self) -> RuntimeResult<()> {
+        self.checkpoint_at(Instant::now())
+    }
+
+    /// Deterministic checkpoint variant used by tests and callers with an already sampled
+    /// monotonic instant. Production code should normally call [`Self::checkpoint`].
+    pub fn checkpoint_at(&self, now: Instant) -> RuntimeResult<()> {
         if self.cancellation.is_cancelled() {
             return Err(self.failure("operationCancelled", false));
         }
-        if self
-            .budget
-            .deadline
-            .is_some_and(|deadline| Instant::now() >= deadline)
-        {
+        if self.budget.deadline.is_some_and(|deadline| now >= deadline) {
             return Err(self.failure("timeBudgetExceeded", true));
         }
         Ok(())
@@ -260,10 +268,11 @@ impl BudgetTracker {
             .phase
             .lock()
             .map_or_else(|_| "unknown".to_owned(), |value| value.clone());
-        let usage = serde_json::to_string(&self.finish_usage()).unwrap_or_else(|_| "{}".to_owned());
-        let mut error =
-            RuntimeError::new(code, format!("tool stopped during {phase}; usage={usage}"));
+        let usage = self.finish_usage();
+        let mut error = RuntimeError::new(code, format!("tool stopped during {phase}"));
         error.retryable = retryable;
+        error.phase = Some(phase);
+        error.usage = Some(usage.into());
         error
     }
 }
@@ -359,6 +368,77 @@ impl Drop for AdmissionPermit {
     }
 }
 
+/// Shared guard for host-wide file-descriptor and temporary disk pressure.
+/// Persistent storage still uses subsystem quotas; this governor only bounds
+/// concurrent open files and in-flight staging reservations.
+#[derive(Clone)]
+pub struct IoResourceGovernor {
+    open_files: Arc<Semaphore>,
+    disk_limit: u64,
+    disk_reserved: Arc<AtomicU64>,
+}
+
+impl IoResourceGovernor {
+    #[must_use]
+    pub fn new(max_open_files: u32, max_in_flight_disk_bytes: u64) -> Self {
+        Self {
+            open_files: Arc::new(Semaphore::new(max_open_files.max(1) as usize)),
+            disk_limit: max_in_flight_disk_bytes.max(1),
+            disk_reserved: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    pub fn try_open_files(&self, count: u32) -> RuntimeResult<OwnedSemaphorePermit> {
+        self.open_files
+            .clone()
+            .try_acquire_many_owned(count.max(1))
+            .map_err(|_| {
+                let mut error =
+                    RuntimeError::new("resourceBusy", "open-file capacity is busy; retry later");
+                error.retryable = true;
+                error
+            })
+    }
+
+    pub fn try_reserve_disk(&self, bytes: u64) -> RuntimeResult<DiskReservation> {
+        self.disk_reserved
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                current
+                    .checked_add(bytes)
+                    .filter(|next| *next <= self.disk_limit)
+            })
+            .map_err(|_| {
+                let mut error = RuntimeError::new(
+                    "diskQuotaExceeded",
+                    "in-flight disk reservation exceeds the host limit",
+                );
+                error.retryable = true;
+                error
+            })?;
+        Ok(DiskReservation {
+            bytes,
+            disk_reserved: self.disk_reserved.clone(),
+        })
+    }
+
+    #[must_use]
+    pub fn reserved_disk_bytes(&self) -> u64 {
+        self.disk_reserved.load(Ordering::Acquire)
+    }
+}
+
+#[derive(Debug)]
+pub struct DiskReservation {
+    bytes: u64,
+    disk_reserved: Arc<AtomicU64>,
+}
+
+impl Drop for DiskReservation {
+    fn drop(&mut self) {
+        self.disk_reserved.fetch_sub(self.bytes, Ordering::AcqRel);
+    }
+}
+
 /// Coalesces frequent progress and always permits a terminal update.
 pub struct ProgressLimiter {
     interval: Duration,
@@ -408,6 +488,7 @@ impl ProgressLimiter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn policy_intersection_never_allows_caller_to_raise_caps() {
@@ -451,7 +532,11 @@ mod tests {
         token.cancel();
         let error = tracker.checkpoint().expect_err("cancelled");
         assert_eq!(error.code, "operationCancelled");
-        assert!(error.message.contains("\"entries\":2"));
+        assert_eq!(error.phase.as_deref(), Some("starting"));
+        assert_eq!(
+            error.usage.as_ref().and_then(|usage| usage.entries_scanned),
+            Some(2)
+        );
     }
 
     #[test]
@@ -473,5 +558,67 @@ mod tests {
         assert!(limiter.should_emit(false));
         assert!(!limiter.should_emit(false));
         assert!(limiter.should_emit(true));
+    }
+
+    #[test]
+    fn deterministic_deadline_checkpoint_uses_supplied_monotonic_time() {
+        let base = Instant::now();
+        let tracker = BudgetTracker::new(
+            CancellationToken::new(),
+            ToolBudget::default().with_deadline(base + Duration::from_secs(5)),
+        );
+        tracker
+            .checkpoint_at(base + Duration::from_secs(4))
+            .expect("before deadline");
+        let error = tracker
+            .checkpoint_at(base + Duration::from_secs(5))
+            .expect_err("at deadline");
+        assert_eq!(error.code, "timeBudgetExceeded");
+        assert!(error.retryable);
+    }
+
+    #[test]
+    fn io_governor_bounds_open_files_and_releases_disk_reservations() {
+        let governor = IoResourceGovernor::new(2, 10);
+        let files = governor.try_open_files(2).expect("open-file capacity");
+        assert_eq!(
+            governor
+                .try_open_files(1)
+                .expect_err("open-file limit")
+                .code,
+            "resourceBusy"
+        );
+        drop(files);
+        let _released = governor.try_open_files(1).expect("capacity released");
+
+        let disk = governor.try_reserve_disk(10).expect("disk reservation");
+        assert_eq!(governor.reserved_disk_bytes(), 10);
+        assert_eq!(
+            governor.try_reserve_disk(1).expect_err("disk limit").code,
+            "diskQuotaExceeded"
+        );
+        drop(disk);
+        assert_eq!(governor.reserved_disk_bytes(), 0);
+    }
+
+    #[test]
+    fn saturating_counter_never_wraps_for_extreme_inputs() {
+        let tracker = BudgetTracker::new(CancellationToken::new(), ToolBudget::default());
+        for amount in [0, 1, u64::MAX - 1, u64::MAX] {
+            tracker.record_entries(amount);
+        }
+        assert_eq!(tracker.finish_usage().entries, u64::MAX);
+    }
+
+    proptest! {
+        #[test]
+        fn saturating_entry_accounting_matches_u64_saturating_add(values in prop::collection::vec(any::<u64>(), 0..128)) {
+            let tracker = BudgetTracker::new(CancellationToken::new(), ToolBudget::default());
+            let expected = values.iter().copied().fold(0_u64, u64::saturating_add);
+            for value in values {
+                tracker.record_entries(value);
+            }
+            prop_assert_eq!(tracker.finish_usage().entries, expected);
+        }
     }
 }

@@ -22,19 +22,41 @@ impl ShellRuntime {
                 retired_sessions: Mutex::new(VecDeque::new()),
                 completed_requests: Mutex::new(HashMap::new()),
                 in_flight_requests: Mutex::new(HashSet::new()),
-                operations: Arc::new(Semaphore::new(concurrency)),
+                admission: AdmissionController::new(concurrency, 2, 64 * 1024 * 1024),
                 policy,
                 events,
             }),
         }
     }
 
-    async fn permit(&self) -> RuntimeResult<tokio::sync::OwnedSemaphorePermit> {
-        self.inner
-            .operations
-            .clone()
-            .try_acquire_owned()
-            .map_err(|_| RuntimeError::busy("local device operation limit reached"))
+    fn permit(
+        &self,
+        actor: &str,
+        weight: u32,
+        memory: u64,
+    ) -> RuntimeResult<crate::AdmissionPermit> {
+        self.inner.admission.try_admit(actor, weight, memory)
+    }
+
+    fn operation_tracker(
+        &self,
+        context: &OperationContext,
+        timeout: Duration,
+        max_bytes_read: Option<u64>,
+        max_bytes_written: Option<u64>,
+        max_output_bytes: Option<u64>,
+    ) -> BudgetTracker {
+        BudgetTracker::new(
+            context.cancellation.clone(),
+            ToolBudget {
+                max_bytes_read,
+                max_bytes_written,
+                max_output_bytes,
+                memory_reservation_bytes: Some(4 * 1024 * 1024),
+                ..ToolBudget::default()
+            }
+            .with_timeout(timeout),
+        )
     }
 
     pub async fn create(
@@ -52,7 +74,10 @@ impl ShellRuntime {
         request: ShellCreateRequest,
         additional_scopes: &[PathBuf],
     ) -> RuntimeResult<ShellSessionInfo> {
-        let _permit = self.permit().await?;
+        let _permit = self.permit(&context.agent_id, 2, 4 * 1024 * 1024)?;
+        let tracker = self.operation_tracker(context, Duration::from_secs(30), None, None, None);
+        tracker.set_phase("creatingShell");
+        tracker.checkpoint()?;
         if let Some(value) = self.cached(&request.request_id)? {
             return serde_json::from_value(value).map_err(|error| {
                 RuntimeError::new("idempotency_cache_corrupt", error.to_string())
@@ -206,6 +231,11 @@ impl ShellRuntime {
         if cfg!(windows) {
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
+        if let Err(error) = tracker.checkpoint() {
+            let _ = kill_tree(&session);
+            let _ = retire_session(&self.inner, &session.id);
+            return Err(error);
+        }
         let info = session_info(&session)?;
         self.store_cached(&request.request_id, &info)?;
         self.emit(context, "completed", None);
@@ -217,7 +247,16 @@ impl ShellRuntime {
         context: &OperationContext,
         request: ShellWriteRequest,
     ) -> RuntimeResult<usize> {
-        let _permit = self.permit().await?;
+        let _permit = self.permit(&context.agent_id, 1, 512 * 1024)?;
+        let tracker = self.operation_tracker(
+            context,
+            Duration::from_secs(30),
+            None,
+            Some(u64::try_from(self.inner.config.max_shell_paste_input_bytes).unwrap_or(u64::MAX)),
+            None,
+        );
+        tracker.set_phase("writingShellInput");
+        tracker.checkpoint()?;
         if let Some(value) = self.cached(&request.request_id)? {
             return serde_json::from_value(value).map_err(|error| {
                 RuntimeError::new("idempotency_cache_corrupt", error.to_string())
@@ -254,6 +293,7 @@ impl ShellRuntime {
             data.extend_from_slice(if cfg!(windows) { b"\r\n" } else { b"\n" });
         }
         let count = data.len();
+        tracker.consume_write_bytes(u64::try_from(count).unwrap_or(u64::MAX))?;
         {
             let mut writer = session.writer.lock().map_err(lock_error)?;
             let writer = writer
@@ -262,6 +302,7 @@ impl ShellRuntime {
             writer.write_all(&data).map_err(io_error)?;
             writer.flush().map_err(io_error)?;
         }
+        tracker.checkpoint()?;
         self.store_cached(&request.request_id, &count)?;
         self.emit(context, "completed", None);
         Ok(count)
@@ -273,7 +314,29 @@ impl ShellRuntime {
         after_sequence: u64,
         max_events: usize,
     ) -> RuntimeResult<ShellReadResult> {
-        let _permit = self.permit().await?;
+        let context = OperationContext::new("shell-read-compat", "shell-system", "shell_read");
+        self.read_with_context(&context, session_id, after_sequence, max_events)
+            .await
+            .map(|(result, _)| result)
+    }
+
+    pub async fn read_with_context(
+        &self,
+        context: &OperationContext,
+        session_id: &str,
+        after_sequence: u64,
+        max_events: usize,
+    ) -> RuntimeResult<(ShellReadResult, ToolUsage)> {
+        let _permit = self.permit(&context.agent_id, 1, 2 * 1024 * 1024)?;
+        let tracker = self.operation_tracker(
+            context,
+            Duration::from_secs(30),
+            Some(u64::try_from(self.inner.config.max_replay_bytes).unwrap_or(u64::MAX)),
+            None,
+            Some(u64::try_from(self.inner.config.max_replay_bytes).unwrap_or(u64::MAX)),
+        );
+        tracker.set_phase("readingShellOutput");
+        tracker.checkpoint()?;
         let session = self.session(session_id)?;
         let output = session.output.lock().map_err(lock_error)?;
         let oldest = output
@@ -282,14 +345,20 @@ impl ShellRuntime {
             .map_or(output.latest.saturating_add(1), |stored| {
                 stored.event.sequence
             });
-        let events = output
+        let events: Vec<_> = output
             .events
             .iter()
             .filter(|stored| stored.event.sequence > after_sequence)
             .take(max_events.clamp(1, 2000))
             .map(|stored| stored.event.clone())
             .collect();
-        Ok(ShellReadResult {
+        let output_bytes = events.iter().fold(0_u64, |total, event| {
+            total.saturating_add(u64::try_from(event.data.len()).unwrap_or(u64::MAX))
+        });
+        tracker.consume_read_bytes(output_bytes)?;
+        tracker.reserve_output(output_bytes)?;
+        tracker.checkpoint()?;
+        let result = ShellReadResult {
             session_id: session_id.into(),
             oldest_available_sequence: oldest,
             latest_available_sequence: output.latest,
@@ -297,7 +366,9 @@ impl ShellRuntime {
             dropped_bytes: output.dropped_bytes,
             dropped_events: output.dropped_events,
             events,
-        })
+        };
+        drop(output);
+        Ok((result, tracker.finish_usage().into()))
     }
 
     pub async fn wait(
@@ -305,10 +376,35 @@ impl ShellRuntime {
         session_id: &str,
         timeout: Duration,
     ) -> RuntimeResult<ShellWaitResult> {
-        let _permit = self.permit().await?;
+        let context = OperationContext::new("shell-wait-compat", "shell-system", "shell_wait");
+        self.wait_with_context(&context, session_id, timeout)
+            .await
+            .map(|(result, _)| result)
+    }
+
+    pub async fn wait_with_context(
+        &self,
+        context: &OperationContext,
+        session_id: &str,
+        timeout: Duration,
+    ) -> RuntimeResult<(ShellWaitResult, ToolUsage)> {
+        let _permit = self.permit(&context.agent_id, 1, 64 * 1024)?;
+        let effective_timeout = timeout
+            .min(Duration::from_secs(5 * 60))
+            .max(Duration::from_millis(1));
+        let tracker = BudgetTracker::new(
+            context.cancellation.clone(),
+            ToolBudget {
+                memory_reservation_bytes: Some(4 * 1024 * 1024),
+                ..ToolBudget::default()
+            },
+        );
+        tracker.set_phase("waitingForShell");
+        tracker.checkpoint()?;
         let session = self.session(session_id)?;
-        let deadline = tokio::time::Instant::now() + timeout;
+        let deadline = tokio::time::Instant::now() + effective_timeout;
         loop {
+            tracker.checkpoint()?;
             if let Some(code) = try_wait(&session)? {
                 let result = ShellWaitResult {
                     session_id: session_id.into(),
@@ -318,18 +414,23 @@ impl ShellRuntime {
                     last_sequence: last_sequence(&session)?,
                 };
                 retire_session(&self.inner, session_id)?;
-                return Ok(result);
+                return Ok((result, tracker.finish_usage().into()));
             }
             if tokio::time::Instant::now() >= deadline {
-                return Ok(ShellWaitResult {
+                let result = ShellWaitResult {
                     session_id: session_id.into(),
                     completed: false,
                     wait_timed_out: true,
                     exit_code: None,
                     last_sequence: last_sequence(&session)?,
-                });
+                };
+                return Ok((result, tracker.finish_usage().into()));
             }
-            tokio::select! { () = session.notify.notified() => {}, () = tokio::time::sleep(Duration::from_millis(25)) => {} }
+            tokio::select! {
+                () = context.cancellation.cancelled() => tracker.checkpoint()?,
+                () = session.notify.notified() => {},
+                () = tokio::time::sleep(Duration::from_millis(25)) => {}
+            }
         }
     }
 
@@ -339,7 +440,11 @@ impl ShellRuntime {
         session_id: &str,
         signal: ShellSignal,
     ) -> RuntimeResult<()> {
-        let _permit = self.permit().await?;
+        let _permit = self.permit(&context.agent_id, 1, 64 * 1024)?;
+        let tracker =
+            self.operation_tracker(context, Duration::from_secs(30), None, Some(16), None);
+        tracker.set_phase("signallingShell");
+        tracker.checkpoint()?;
         let session = self.session(session_id)?;
         let bytes: &[u8] = match signal {
             ShellSignal::CtrlC => b"\x03",
@@ -352,12 +457,14 @@ impl ShellRuntime {
                 }
             }
         };
+        tracker.consume_write_bytes(u64::try_from(bytes.len()).unwrap_or(u64::MAX))?;
         let mut writer = session.writer.lock().map_err(lock_error)?;
         writer
             .as_mut()
             .ok_or_else(|| RuntimeError::new("session_closed", "terminal input is closed"))?
             .write_all(bytes)
             .map_err(io_error)?;
+        tracker.checkpoint()?;
         self.emit(context, "completed", None);
         Ok(())
     }
@@ -368,7 +475,22 @@ impl ShellRuntime {
         columns: u16,
         rows: u16,
     ) -> RuntimeResult<ShellSessionInfo> {
-        let _permit = self.permit().await?;
+        let context = OperationContext::new("shell-resize-compat", "shell-system", "shell_resize");
+        self.resize_with_context(&context, session_id, columns, rows)
+            .await
+    }
+
+    pub async fn resize_with_context(
+        &self,
+        context: &OperationContext,
+        session_id: &str,
+        columns: u16,
+        rows: u16,
+    ) -> RuntimeResult<ShellSessionInfo> {
+        let _permit = self.permit(&context.agent_id, 1, 64 * 1024)?;
+        let tracker = self.operation_tracker(context, Duration::from_secs(30), None, None, None);
+        tracker.set_phase("resizingShell");
+        tracker.checkpoint()?;
         let session = self.session(session_id)?;
         let columns = columns.clamp(1, 500);
         let rows = rows.clamp(1, 300);
@@ -385,6 +507,7 @@ impl ShellRuntime {
             .map_err(pty_error)?;
         session.columns.store(columns, Ordering::Release);
         session.rows.store(rows, Ordering::Release);
+        tracker.checkpoint()?;
         session_info(&session)
     }
 
@@ -394,7 +517,11 @@ impl ShellRuntime {
         session_id: &str,
         force: bool,
     ) -> RuntimeResult<()> {
-        let _permit = self.permit().await?;
+        let _permit = self.permit(&context.agent_id, 1, 64 * 1024)?;
+        let tracker =
+            self.operation_tracker(context, Duration::from_secs(30), None, Some(16), None);
+        tracker.set_phase("closingShell");
+        tracker.checkpoint()?;
         if force {
             self.inner
                 .policy
@@ -415,6 +542,7 @@ impl ShellRuntime {
             let _ = writer.write_all(if cfg!(windows) { b"exit\r" } else { b"exit\n" });
             let _ = writer.flush();
         }
+        tracker.checkpoint()?;
         retire_session(&self.inner, session_id)?;
         self.emit(context, "completed", None);
         Ok(())

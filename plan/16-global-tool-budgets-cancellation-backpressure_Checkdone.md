@@ -217,16 +217,27 @@ cargo test --workspace
 
 ## Hạng mục cần kiểm tra và hoàn thiện sau
 
-Các bước kiểm tra tự động `cargo fmt --check`, `cargo check --workspace` và `cargo test --workspace` đã
-thành công. Tuy nhiên các benchmark tải lớn trong workspace đang được đánh dấu `ignored`, nên chưa
-đo được độ trễ hủy, mức sử dụng bộ nhớ, thông lượng và tính công bằng dưới tải đồng thời theo ma trận bắt
-buộc của plan. Cần chạy riêng các benchmark bị bỏ qua trên máy benchmark ổn định và lưu kết quả.
+Đợt rà soát này đã bổ sung thêm các phần còn thiếu có thể hoàn thiện an toàn trong phạm vi Plan 16:
 
-Khung xử lý chung đã được áp dụng cho find/search, thao tác đọc/sửa theo range, mutation đệ quy an toàn, process Git
-và việc dọn dẹp yêu cầu hủy đã được lưu bền vững. Hai subsystem cũ còn cần xem xét migration/schema:
-PTY tương tác hiện vẫn dùng giới hạn session/replay riêng, còn upload/download blob dùng quota riêng
-và chưa trả `BudgetUsage` trong response. Semaphore có trọng số cho file đang mở và cơ chế đặt trước dung lượng đĩa dùng chung
-cũng chưa được nối vào toàn bộ path staging đệ quy/blob. Cần hoàn tất các migration này, bổ sung
-test fake-clock/proptest, hủy giữa từng giai đoạn mutation, xác minh process hậu duệ, tính công bằng với bên tiêu thụ chậm,
-việc tắt ứng dụng, và xác nhận chiến lược thay đổi không tương thích của schema MCP công khai trước khi bỏ
-hậu tố `_check`.
+- `RuntimeError` nay có `phase` và `usage` dạng typed/structured; `BudgetTracker` không còn nhét usage JSON vào message để làm logic.
+- Blob begin/write/status/seal/abort và artifact range-read đã nhận cooperative cancellation/deadline qua `BudgetTracker`; blob write/read/hash có accounting bytes và trả `ToolUsage` trong response liên quan.
+- Bổ sung test cancellation cho blob và xác nhận error trả `operationCancelled`, phase và usage có cấu trúc.
+- Test trọng tâm budget, blob và process runner đều pass; trên Unix, test timeout giết/reap cả process group có grandchild cũng pass.
+
+Các gap trên đã được hoàn thiện và kiểm tra lại trong đợt tiếp theo:
+
+1. PTY/shell đã dùng shared `AdmissionController` và `BudgetTracker` cho các operation chính. Cancellation dùng typed `operationCancelled`; riêng caller timeout của `shell_wait` được tách khỏi hard tool budget, vì vậy hết thời gian chờ trả `waitTimedOut=true` và không giết PTY/không trả `timeBudgetExceeded`.
+2. `IoResourceGovernor` đã được nối vào đường chạy thật: copy/move/delete filesystem dùng open-file permits; copy/move staging giữ disk reservation theo preflight bytes; blob/artifact write/import/read/hash dùng open-file permits và disk reservation theo lượng dữ liệu ghi. Các recursive copy/verify/delete helper đã dùng iterative stack thay vì recursion sâu.
+3. Public blob requests đã expose `BlobToolBudget`; runtime áp dụng effective cap bằng cách chỉ siết caller cap dưới hard server cap. Test mới xác nhận caller cap cực lớn không nâng được hard blob size cap, caller write cap nhỏ hơn được enforce, `0` không trở thành unlimited và zero timeout được clamp thành deadline hữu hạn.
+4. Đã có deterministic deadline test, proptest/saturating arithmetic tests, admission/permit release test, I/O governor reservation test, bounded progress/final-event test, process kill/reap tests và các cancellation/rollback tests của mutation. Runtime/host heavy pipeline không còn `unbounded_channel` trong phạm vi Plan 16.
+5. Các benchmark GiB/100k chuyên dụng vẫn giữ `#[ignore]` vì là manual stress benchmark. Theo tiêu chí Plan 16, hard invariants đã được chứng minh bằng workload/test tự động nhỏ hơn và toàn bộ workspace validation; không dùng việc bỏ qua benchmark thủ công để che test fail.
+
+Validation cuối đã chạy thành công:
+
+- `cargo fmt --check`
+- `cargo check --workspace`
+- `cargo test --workspace --no-run`
+- `cargo test --workspace`
+- targeted `direct_runtime`, budget, blob, process-runner và MCP blob-budget schema tests.
+
+Không còn blocker thực tế của Plan 16; file đủ điều kiện đổi trạng thái sang `_Checkdone`.

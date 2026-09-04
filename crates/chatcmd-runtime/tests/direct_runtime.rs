@@ -476,7 +476,7 @@ async fn cancellation_and_session_backpressure_are_explicit() {
         )
         .await
         .expect_err("cancelled create");
-    assert_eq!(error.code, "cancelled");
+    assert_eq!(error.code, "operationCancelled");
 
     let first = runtime
         .create(

@@ -2,8 +2,8 @@ mod live;
 mod operations;
 
 use crate::{
-    PolicyEngine, RuntimeConfig, RuntimeError, RuntimeResult, SharedEventSink, ShellEvent,
-    ShellSessionInfo,
+    AdmissionController, BudgetTracker, PolicyEngine, RuntimeConfig, RuntimeError, RuntimeResult,
+    SharedEventSink, ShellEvent, ShellSessionInfo, ToolBudget, ToolUsage,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use portable_pty::{Child, MasterPty};
@@ -17,7 +17,7 @@ use std::{
     },
     time::{SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::{Notify, Semaphore};
+use tokio::sync::Notify;
 
 #[derive(Clone)]
 pub struct ShellRuntime {
@@ -30,7 +30,7 @@ struct ShellRuntimeInner {
     retired_sessions: Mutex<VecDeque<Arc<Session>>>,
     completed_requests: Mutex<HashMap<String, serde_json::Value>>,
     in_flight_requests: Mutex<HashSet<String>>,
-    operations: Arc<Semaphore>,
+    admission: AdmissionController,
     policy: PolicyEngine,
     events: SharedEventSink,
 }

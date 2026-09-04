@@ -348,9 +348,18 @@ impl WorkspaceService {
             .budget
             .max_bytes_written
             .min(2 * 1024 * 1024 * 1024 * 1024);
+        effective_request.budget.max_open_files =
+            effective_request.budget.max_open_files.clamp(1, 64);
         let request = &effective_request;
         let memory = request.budget.max_bytes_written.min(128 * 1024 * 1024);
         let _admission = self.admission.try_admit(&context.agent_id, 2, memory)?;
+        if request.budget.max_open_files < 2 {
+            return Err(RuntimeError::new(
+                "openFileBudgetExceeded",
+                "copy/move requires at least two open-file slots",
+            ));
+        }
+        let _open_files = self.io_resources.try_open_files(2)?;
         if request.follow_symlinks {
             return Err(RuntimeError::new(
                 "unsupported_symlink_policy",
@@ -489,6 +498,7 @@ impl WorkspaceService {
             result.bytes_copied = 0;
             return Ok(result);
         }
+        let _disk_reservation = self.io_resources.try_reserve_disk(preflight.bytes)?;
         write_journal(&journal_path, &journal)?;
         let worker_request = request.clone();
         let cancellation = context.cancellation.clone();
@@ -723,10 +733,13 @@ impl WorkspaceService {
             .budget
             .max_bytes_written
             .min(2 * 1024 * 1024 * 1024 * 1024);
+        effective_request.budget.max_open_files =
+            effective_request.budget.max_open_files.clamp(1, 64);
         let request = &effective_request;
         let _admission = self
             .admission
             .try_admit(&context.agent_id, 2, 8 * 1024 * 1024)?;
+        let _open_files = self.io_resources.try_open_files(1)?;
         let resolved = self.existing_for(&request.path, PathAccess::Delete)?;
         if self
             .allowed_scopes
@@ -1358,83 +1371,103 @@ fn copy_tree_checked(
     counts: &mut MutationCounts,
     fault_injector: Option<&dyn crate::MutationFaultInjector>,
 ) -> RuntimeResult<()> {
-    check_checkpoint(cancellation, deadline)?;
-    let before = fs::symlink_metadata(source).map_err(io_error)?;
-    reject_reparse_metadata(&before)?;
-    if before.is_dir() {
-        fs::create_dir(destination).map_err(io_error)?;
-        counts.directories = counts.directories.saturating_add(1);
-        for entry in fs::read_dir(source).map_err(io_error)? {
-            let entry = entry.map_err(io_error)?;
-            copy_tree_checked(
-                &entry.path(),
-                &destination.join(entry.file_name()),
-                request,
-                cancellation,
-                deadline,
-                counts,
-                fault_injector,
-            )?;
-        }
-        if request.preserve_metadata {
-            fs::set_permissions(destination, before.permissions()).map_err(io_error)?;
-        }
-    } else if before.is_file() {
-        let mut input = fs::File::open(source).map_err(io_error)?;
-        let mut output = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(destination)
-            .map_err(io_error)?;
-        let mut buffer = vec![0_u8; 1024 * 1024];
-        loop {
-            check_checkpoint(cancellation, deadline)?;
-            let read = input.read(&mut buffer).map_err(io_error)?;
-            if read == 0 {
-                break;
+    enum Work {
+        Visit(PathBuf, PathBuf),
+        FinalizeDirectory(PathBuf, fs::Permissions),
+    }
+
+    let mut stack = vec![Work::Visit(source.to_path_buf(), destination.to_path_buf())];
+    while let Some(work) = stack.pop() {
+        check_checkpoint(cancellation, deadline)?;
+        match work {
+            Work::FinalizeDirectory(path, permissions) => {
+                if request.preserve_metadata {
+                    fs::set_permissions(path, permissions).map_err(io_error)?;
+                }
             }
-            counts.bytes = counts
-                .bytes
-                .saturating_add(u64::try_from(read).unwrap_or(u64::MAX));
-            if counts.bytes > request.budget.max_bytes_read
-                || counts.bytes > request.budget.max_bytes_written
-            {
-                return Err(RuntimeError::new(
-                    "budget_exceeded",
-                    "copy exceeded byte budget",
-                ));
+            Work::Visit(source, destination) => {
+                let before = fs::symlink_metadata(&source).map_err(io_error)?;
+                reject_reparse_metadata(&before)?;
+                if before.is_dir() {
+                    fs::create_dir(&destination).map_err(io_error)?;
+                    counts.directories = counts.directories.saturating_add(1);
+                    if counts.files.saturating_add(counts.directories) > request.budget.max_files {
+                        return Err(RuntimeError::new(
+                            "budget_exceeded",
+                            "copy exceeded maxFiles",
+                        ));
+                    }
+                    stack.push(Work::FinalizeDirectory(
+                        destination.clone(),
+                        before.permissions(),
+                    ));
+                    for entry in fs::read_dir(&source).map_err(io_error)? {
+                        let entry = entry.map_err(io_error)?;
+                        stack.push(Work::Visit(
+                            entry.path(),
+                            destination.join(entry.file_name()),
+                        ));
+                    }
+                } else if before.is_file() {
+                    let mut input = fs::File::open(&source).map_err(io_error)?;
+                    let mut output = fs::OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&destination)
+                        .map_err(io_error)?;
+                    let mut buffer = vec![0_u8; 1024 * 1024];
+                    loop {
+                        check_checkpoint(cancellation, deadline)?;
+                        let read = input.read(&mut buffer).map_err(io_error)?;
+                        if read == 0 {
+                            break;
+                        }
+                        counts.bytes = counts
+                            .bytes
+                            .saturating_add(u64::try_from(read).unwrap_or(u64::MAX));
+                        if counts.bytes > request.budget.max_bytes_read
+                            || counts.bytes > request.budget.max_bytes_written
+                        {
+                            return Err(RuntimeError::new(
+                                "budget_exceeded",
+                                "copy exceeded byte budget",
+                            ));
+                        }
+                        output.write_all(&buffer[..read]).map_err(io_error)?;
+                        if let Some(injector) = fault_injector {
+                            injector.checkpoint("copyBytes", counts.files, counts.bytes)?;
+                        }
+                    }
+                    output.sync_all().map_err(io_error)?;
+                    if request.preserve_metadata {
+                        fs::set_permissions(&destination, before.permissions())
+                            .map_err(io_error)?;
+                    }
+                    let after = fs::symlink_metadata(&source).map_err(io_error)?;
+                    if FileIdentity::from_metadata(&before) != FileIdentity::from_metadata(&after) {
+                        return Err(RuntimeError::new(
+                            "source_changed",
+                            "source changed while it was copied",
+                        ));
+                    }
+                    counts.files = counts.files.saturating_add(1);
+                    if let Some(injector) = fault_injector {
+                        injector.checkpoint("copyFile", counts.files, counts.bytes)?;
+                    }
+                    if counts.files.saturating_add(counts.directories) > request.budget.max_files {
+                        return Err(RuntimeError::new(
+                            "budget_exceeded",
+                            "copy exceeded maxFiles",
+                        ));
+                    }
+                } else {
+                    return Err(RuntimeError::new(
+                        "unsupported_file_type",
+                        "mutation source contains an unsupported file type",
+                    ));
+                }
             }
-            output.write_all(&buffer[..read]).map_err(io_error)?;
-            if let Some(injector) = fault_injector {
-                injector.checkpoint("copyBytes", counts.files, counts.bytes)?;
-            }
         }
-        output.sync_all().map_err(io_error)?;
-        if request.preserve_metadata {
-            fs::set_permissions(destination, before.permissions()).map_err(io_error)?;
-        }
-        let after = fs::symlink_metadata(source).map_err(io_error)?;
-        if FileIdentity::from_metadata(&before) != FileIdentity::from_metadata(&after) {
-            return Err(RuntimeError::new(
-                "source_changed",
-                "source changed while it was copied",
-            ));
-        }
-        counts.files = counts.files.saturating_add(1);
-        if let Some(injector) = fault_injector {
-            injector.checkpoint("copyFile", counts.files, counts.bytes)?;
-        }
-        if counts.files.saturating_add(counts.directories) > request.budget.max_files {
-            return Err(RuntimeError::new(
-                "budget_exceeded",
-                "copy exceeded maxFiles",
-            ));
-        }
-    } else {
-        return Err(RuntimeError::new(
-            "unsupported_file_type",
-            "mutation source contains an unsupported file type",
-        ));
     }
     Ok(())
 }
@@ -1449,38 +1482,35 @@ fn verify_trees(
     if mode == FsVerifyMode::None {
         return Ok(());
     }
-    check_checkpoint(cancellation, deadline)?;
-    let source_metadata = fs::symlink_metadata(source).map_err(io_error)?;
-    let destination_metadata = fs::symlink_metadata(destination).map_err(io_error)?;
-    reject_reparse_metadata(&source_metadata)?;
-    reject_reparse_metadata(&destination_metadata)?;
-    if source_metadata.is_dir() != destination_metadata.is_dir()
-        || (!source_metadata.is_dir() && source_metadata.len() != destination_metadata.len())
-    {
-        return Err(RuntimeError::new(
-            "verification_failed",
-            "staged copy metadata differs from source",
-        ));
-    }
-    if source_metadata.is_dir() {
-        for entry in fs::read_dir(source).map_err(io_error)? {
-            let entry = entry.map_err(io_error)?;
-            verify_trees(
-                &entry.path(),
-                &destination.join(entry.file_name()),
-                mode,
-                cancellation,
-                deadline,
-            )?;
+    let mut stack = vec![(source.to_path_buf(), destination.to_path_buf())];
+    while let Some((source, destination)) = stack.pop() {
+        check_checkpoint(cancellation, deadline)?;
+        let source_metadata = fs::symlink_metadata(&source).map_err(io_error)?;
+        let destination_metadata = fs::symlink_metadata(&destination).map_err(io_error)?;
+        reject_reparse_metadata(&source_metadata)?;
+        reject_reparse_metadata(&destination_metadata)?;
+        if source_metadata.is_dir() != destination_metadata.is_dir()
+            || (!source_metadata.is_dir() && source_metadata.len() != destination_metadata.len())
+        {
+            return Err(RuntimeError::new(
+                "verification_failed",
+                "staged copy metadata differs from source",
+            ));
         }
-    } else if mode == FsVerifyMode::Content
-        && hash_file(source, cancellation, deadline)?
-            != hash_file(destination, cancellation, deadline)?
-    {
-        return Err(RuntimeError::new(
-            "verification_failed",
-            "staged file content hash differs from source",
-        ));
+        if source_metadata.is_dir() {
+            for entry in fs::read_dir(&source).map_err(io_error)? {
+                let entry = entry.map_err(io_error)?;
+                stack.push((entry.path(), destination.join(entry.file_name())));
+            }
+        } else if mode == FsVerifyMode::Content
+            && hash_file(&source, cancellation, deadline)?
+                != hash_file(&destination, cancellation, deadline)?
+        {
+            return Err(RuntimeError::new(
+                "verification_failed",
+                "staged file content hash differs from source",
+            ));
+        }
     }
     Ok(())
 }
@@ -1510,24 +1540,35 @@ fn remove_tree_checked(
     cancellation: &tokio_util::sync::CancellationToken,
     deadline: Instant,
 ) -> RuntimeResult<()> {
-    check_checkpoint(cancellation, deadline)?;
-    let metadata = fs::symlink_metadata(path).map_err(io_error)?;
-    reject_reparse_metadata(&metadata)?;
-    if metadata.is_dir() {
-        if recursive {
-            for entry in fs::read_dir(path).map_err(io_error)? {
-                remove_tree_checked(
-                    &entry.map_err(io_error)?.path(),
-                    true,
-                    cancellation,
-                    deadline,
-                )?;
+    enum Work {
+        Visit(PathBuf),
+        RemoveDirectory(PathBuf),
+    }
+
+    let mut stack = vec![Work::Visit(path.to_path_buf())];
+    while let Some(work) = stack.pop() {
+        check_checkpoint(cancellation, deadline)?;
+        match work {
+            Work::RemoveDirectory(path) => fs::remove_dir(path).map_err(io_error)?,
+            Work::Visit(path) => {
+                let metadata = fs::symlink_metadata(&path).map_err(io_error)?;
+                reject_reparse_metadata(&metadata)?;
+                if metadata.is_dir() {
+                    if recursive {
+                        stack.push(Work::RemoveDirectory(path.clone()));
+                        for entry in fs::read_dir(&path).map_err(io_error)? {
+                            stack.push(Work::Visit(entry.map_err(io_error)?.path()));
+                        }
+                    } else {
+                        fs::remove_dir(path).map_err(io_error)?;
+                    }
+                } else {
+                    fs::remove_file(path).map_err(io_error)?;
+                }
             }
         }
-        fs::remove_dir(path).map_err(io_error)
-    } else {
-        fs::remove_file(path).map_err(io_error)
     }
+    Ok(())
 }
 
 fn tree_size_no_follow(path: &Path) -> RuntimeResult<u64> {

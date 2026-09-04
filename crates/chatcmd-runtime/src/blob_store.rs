@@ -1,6 +1,9 @@
 //! Bounded, owner-scoped storage for large tool payloads.
 
-use crate::{OperationContext, RuntimeError, RuntimeResult};
+use crate::{
+    BudgetTracker, IoResourceGovernor, OperationContext, RuntimeError, RuntimeResult, ToolBudget,
+    ToolUsage,
+};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -25,6 +28,43 @@ const MAX_BLOB_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_OWNER_BYTES: u64 = 2 * MAX_BLOB_BYTES;
 const MAX_GLOBAL_BYTES: u64 = 8 * MAX_BLOB_BYTES;
 const MAX_OWNER_UPLOADS: usize = 16;
+const BLOB_OPERATION_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+const DEFAULT_BLOB_TIMEOUT_MS: u64 = 60_000;
+const DEFAULT_BLOB_MAX_OPEN_FILES: u32 = 4;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, schemars::JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct BlobToolBudget {
+    #[serde(default = "default_blob_timeout_ms")]
+    pub timeout_ms: u64,
+    #[serde(default = "default_blob_max_bytes")]
+    pub max_bytes_read: u64,
+    #[serde(default = "default_blob_max_bytes")]
+    pub max_bytes_written: u64,
+    #[serde(default = "default_blob_max_open_files")]
+    pub max_open_files: u32,
+}
+
+impl Default for BlobToolBudget {
+    fn default() -> Self {
+        Self {
+            timeout_ms: default_blob_timeout_ms(),
+            max_bytes_read: default_blob_max_bytes(),
+            max_bytes_written: default_blob_max_bytes(),
+            max_open_files: default_blob_max_open_files(),
+        }
+    }
+}
+
+const fn default_blob_timeout_ms() -> u64 {
+    DEFAULT_BLOB_TIMEOUT_MS
+}
+const fn default_blob_max_bytes() -> u64 {
+    MAX_BLOB_BYTES
+}
+const fn default_blob_max_open_files() -> u32 {
+    DEFAULT_BLOB_MAX_OPEN_FILES
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -40,6 +80,8 @@ pub struct BlobBeginRequest {
     pub chunk_size_bytes: Option<usize>,
     #[serde(default)]
     pub ttl_seconds: Option<u64>,
+    #[serde(default)]
+    pub budget: BlobToolBudget,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -50,6 +92,7 @@ pub struct BlobBeginResult {
     pub chunk_size_bytes: usize,
     pub expires_at_ms: u64,
     pub max_size_bytes: u64,
+    pub usage: ToolUsage,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -60,6 +103,8 @@ pub struct BlobChunkRequest {
     pub data_base64: String,
     #[serde(default)]
     pub chunk_sha256: Option<String>,
+    #[serde(default)]
+    pub budget: BlobToolBudget,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -68,12 +113,16 @@ pub struct BlobSealRequest {
     pub upload_id: String,
     pub final_size_bytes: u64,
     pub sha256: String,
+    #[serde(default)]
+    pub budget: BlobToolBudget,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct BlobIdRequest {
     pub upload_id: String,
+    #[serde(default)]
+    pub budget: BlobToolBudget,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -88,6 +137,7 @@ pub struct BlobStatus {
     pub expected_size_bytes: Option<u64>,
     pub sha256: Option<String>,
     pub expires_at_ms: u64,
+    pub usage: ToolUsage,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -109,12 +159,14 @@ pub struct ManagedArtifactRead {
     pub expires_at_ms: u64,
     pub offset: u64,
     pub next_offset: Option<u64>,
+    pub usage: ToolUsage,
 }
 
 #[derive(Clone)]
 pub struct BlobStore {
     root: Arc<PathBuf>,
     entries: Arc<Mutex<HashMap<String, BlobEntry>>>,
+    io_resources: IoResourceGovernor,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -210,12 +262,27 @@ impl BlobStore {
         })
     }
 
+    fn acquire_open_files(
+        &self,
+        budget: &BlobToolBudget,
+        required: u32,
+    ) -> RuntimeResult<tokio::sync::OwnedSemaphorePermit> {
+        if budget.max_open_files < required {
+            return Err(RuntimeError::new(
+                "openFileBudgetExceeded",
+                format!("blob operation requires at least {required} open-file slots"),
+            ));
+        }
+        self.io_resources.try_open_files(required)
+    }
+
     pub fn new(root: PathBuf) -> RuntimeResult<Self> {
         fs::create_dir_all(&root).map_err(io_error)?;
         let entries = recover_entries(&root)?;
         Ok(Self {
             root: Arc::new(root),
             entries: Arc::new(Mutex::new(entries)),
+            io_resources: IoResourceGovernor::new(128, MAX_GLOBAL_BYTES),
         })
     }
 
@@ -241,6 +308,8 @@ impl BlobStore {
         if size_bytes > MAX_BLOB_BYTES {
             return Err(quota_error("artifact exceeds the maximum size"));
         }
+        let _open_files = self.io_resources.try_open_files(2)?;
+        let _disk_reservation = self.io_resources.try_reserve_disk(size_bytes)?;
 
         let ttl_seconds = ttl_seconds.clamp(1, MAX_TTL_SECONDS);
         let upload_id = Uuid::new_v4().to_string();
@@ -329,6 +398,8 @@ impl BlobStore {
         if size_bytes > MAX_BLOB_BYTES {
             return Err(quota_error("artifact exceeds the maximum size"));
         }
+        let _open_files = self.io_resources.try_open_files(2)?;
+        let _disk_reservation = self.io_resources.try_reserve_disk(size_bytes)?;
         let sha256 = sha256_file(source)?;
         let ttl_seconds = ttl_seconds.clamp(1, MAX_TTL_SECONDS);
         let upload_id = Uuid::new_v4().to_string();
@@ -414,6 +485,10 @@ impl BlobStore {
         offset: u64,
         max_bytes: usize,
     ) -> RuntimeResult<ManagedArtifactRead> {
+        let tracker = internal_blob_tracker(context);
+        tracker.set_phase("readingArtifact");
+        tracker.checkpoint()?;
+        let _open_files = self.io_resources.try_open_files(1)?;
         let max_bytes = max_bytes.clamp(1, MAX_INLINE_BYTES);
         let (path, size_bytes, sha256, expires_at_ms) = {
             let mut entries = lock(&self.entries)?;
@@ -449,6 +524,8 @@ impl BlobStore {
         let mut reader = BufReader::with_capacity(64 * 1024, file).take(take_limit);
         let mut bytes = Vec::with_capacity(max_bytes.min(256 * 1024));
         reader.read_to_end(&mut bytes).map_err(io_error)?;
+        tracker.consume_read_bytes(u64::try_from(bytes.len()).unwrap_or(u64::MAX))?;
+        tracker.checkpoint()?;
         let available = size_bytes.saturating_sub(offset);
         let truncated = available > u64::try_from(max_bytes).unwrap_or(u64::MAX);
         if bytes.len() > max_bytes {
@@ -471,6 +548,7 @@ impl BlobStore {
             expires_at_ms,
             offset,
             next_offset,
+            usage: tracker.finish_usage().into(),
         })
     }
 
@@ -479,6 +557,10 @@ impl BlobStore {
         context: &OperationContext,
         request: BlobBeginRequest,
     ) -> RuntimeResult<BlobBeginResult> {
+        let tracker = blob_tracker(context, &request.budget);
+        tracker.set_phase("reservingBlob");
+        tracker.checkpoint()?;
+        let _open_files = self.acquire_open_files(&request.budget, 1)?;
         validate_purpose(&request.purpose)?;
         if request
             .expected_size_bytes
@@ -535,12 +617,14 @@ impl BlobStore {
             return Err(error);
         }
         entries.insert(upload_id.clone(), entry);
+        tracker.checkpoint()?;
         Ok(BlobBeginResult {
             upload_id,
             content_ref,
             chunk_size_bytes: chunk_size,
             expires_at_ms,
             max_size_bytes: MAX_BLOB_BYTES,
+            usage: tracker.finish_usage().into(),
         })
     }
 
@@ -549,6 +633,10 @@ impl BlobStore {
         context: &OperationContext,
         request: BlobChunkRequest,
     ) -> RuntimeResult<BlobStatus> {
+        let tracker = blob_tracker(context, &request.budget);
+        tracker.set_phase("decodingChunk");
+        tracker.checkpoint()?;
+        let _open_files = self.acquire_open_files(&request.budget, 2)?;
         let bytes = STANDARD
             .decode(&request.data_base64)
             .map_err(|_| RuntimeError::new("invalid_base64", "blob chunk is not valid Base64"))?;
@@ -578,7 +666,7 @@ impl BlobStore {
                     if *length == u64::try_from(bytes.len()).unwrap_or(u64::MAX)
                         && old_hash == &hash =>
                 {
-                    Ok(status(entry))
+                    Ok(status(entry, tracker.finish_usage().into()))
                 }
                 _ => Err(RuntimeError::new(
                     "blobChunkConflict",
@@ -600,6 +688,11 @@ impl BlobStore {
         if new_size > maximum || new_size > MAX_BLOB_BYTES {
             return Err(quota_error("chunk would exceed the blob size limit"));
         }
+        let _disk_reservation = self
+            .io_resources
+            .try_reserve_disk(u64::try_from(bytes.len()).unwrap_or(u64::MAX))?;
+        tracker.set_phase("writingChunk");
+        tracker.consume_write_bytes(u64::try_from(bytes.len()).unwrap_or(u64::MAX))?;
         let mut file = OpenOptions::new()
             .append(true)
             .open(&entry.path)
@@ -612,13 +705,26 @@ impl BlobStore {
         );
         entry.received = new_size;
         persist_entry(&self.root, entry)?;
-        Ok(status(entry))
+        tracker.checkpoint()?;
+        Ok(status(entry, tracker.finish_usage().into()))
     }
 
     pub fn status(&self, context: &OperationContext, upload_id: &str) -> RuntimeResult<BlobStatus> {
+        self.status_with_budget(context, upload_id, &BlobToolBudget::default())
+    }
+
+    pub fn status_with_budget(
+        &self,
+        context: &OperationContext,
+        upload_id: &str,
+        budget: &BlobToolBudget,
+    ) -> RuntimeResult<BlobStatus> {
+        let tracker = blob_tracker(context, budget);
+        tracker.set_phase("readingBlobStatus");
+        tracker.checkpoint()?;
         let mut entries = lock(&self.entries)?;
         let entry = checked_entry_mut(&mut entries, context, upload_id)?;
-        Ok(status(entry))
+        Ok(status(entry, tracker.finish_usage().into()))
     }
 
     pub fn seal(
@@ -626,13 +732,17 @@ impl BlobStore {
         context: &OperationContext,
         request: BlobSealRequest,
     ) -> RuntimeResult<BlobStatus> {
+        let tracker = blob_tracker(context, &request.budget);
+        tracker.set_phase("verifyingBlob");
+        tracker.checkpoint()?;
+        let _open_files = self.acquire_open_files(&request.budget, 1)?;
         let expected_hash = normalize_hash(Some(&request.sha256))?.ok_or_else(|| {
             RuntimeError::new("blobIntegrityRequired", "final SHA-256 is required")
         })?;
         let mut entries = lock(&self.entries)?;
         let entry = checked_entry_mut(&mut entries, context, &request.upload_id)?;
         if entry.state == BlobState::Sealed && entry.sha256.as_deref() == Some(&expected_hash) {
-            return Ok(status(entry));
+            return Ok(status(entry, tracker.finish_usage().into()));
         }
         if entry.state != BlobState::Uploading {
             return Err(state_error("blob cannot be sealed from its current state"));
@@ -647,7 +757,7 @@ impl BlobStore {
                 "final blob size does not match uploaded or expected size",
             ));
         }
-        let actual_hash = sha256_file(&entry.path)?;
+        let actual_hash = sha256_file_tracked(&entry.path, &tracker)?;
         if actual_hash != expected_hash
             || entry
                 .expected_sha256
@@ -662,7 +772,8 @@ impl BlobStore {
         entry.sha256 = Some(actual_hash);
         entry.state = BlobState::Sealed;
         persist_entry(&self.root, entry)?;
-        Ok(status(entry))
+        tracker.checkpoint()?;
+        Ok(status(entry, tracker.finish_usage().into()))
     }
 
     pub fn lease(
@@ -701,6 +812,18 @@ impl BlobStore {
     }
 
     pub fn abort(&self, context: &OperationContext, upload_id: &str) -> RuntimeResult<BlobStatus> {
+        self.abort_with_budget(context, upload_id, &BlobToolBudget::default())
+    }
+
+    pub fn abort_with_budget(
+        &self,
+        context: &OperationContext,
+        upload_id: &str,
+        budget: &BlobToolBudget,
+    ) -> RuntimeResult<BlobStatus> {
+        let tracker = blob_tracker(context, budget);
+        tracker.set_phase("abortingBlob");
+        tracker.checkpoint()?;
         let mut entries = lock(&self.entries)?;
         let entry = checked_entry_mut(&mut entries, context, upload_id)?;
         if entry.state != BlobState::Consumed {
@@ -708,7 +831,7 @@ impl BlobStore {
             let _ = fs::remove_file(&entry.path);
             let _ = fs::remove_file(metadata_path(&self.root, &entry.upload_id));
         }
-        Ok(status(entry))
+        Ok(status(entry, tracker.finish_usage().into()))
     }
 
     pub fn gc(&self) -> RuntimeResult<usize> {
@@ -769,6 +892,27 @@ impl BlobStore {
         }
         Ok(())
     }
+}
+
+fn blob_tracker(context: &OperationContext, requested: &BlobToolBudget) -> BudgetTracker {
+    let hard_timeout_ms = u64::try_from(BLOB_OPERATION_TIMEOUT.as_millis()).unwrap_or(u64::MAX);
+    let timeout_ms = requested.timeout_ms.min(hard_timeout_ms).max(1);
+    BudgetTracker::new(
+        context.cancellation.clone(),
+        ToolBudget {
+            max_bytes_read: Some(requested.max_bytes_read.min(MAX_BLOB_BYTES)),
+            max_bytes_written: Some(requested.max_bytes_written.min(MAX_BLOB_BYTES)),
+            max_output_bytes: Some(MAX_INLINE_BYTES as u64),
+            max_open_files: Some(requested.max_open_files.min(128)),
+            memory_reservation_bytes: Some(MAX_CHUNK_BYTES as u64),
+            ..ToolBudget::default()
+        }
+        .with_timeout(Duration::from_millis(timeout_ms)),
+    )
+}
+
+fn internal_blob_tracker(context: &OperationContext) -> BudgetTracker {
+    blob_tracker(context, &BlobToolBudget::default())
 }
 
 fn validate_purpose(purpose: &str) -> RuntimeResult<()> {
@@ -1016,7 +1160,7 @@ fn purge_expired(root: &Path, entries: &mut HashMap<String, BlobEntry>) {
     });
 }
 
-fn status(entry: &BlobEntry) -> BlobStatus {
+fn status(entry: &BlobEntry, usage: ToolUsage) -> BlobStatus {
     let _content_type = &entry.content_type;
     BlobStatus {
         upload_id: entry.upload_id.clone(),
@@ -1035,6 +1179,7 @@ fn status(entry: &BlobEntry) -> BlobStatus {
         expected_size_bytes: entry.expected_size,
         sha256: entry.sha256.clone(),
         expires_at_ms: entry.expires_at_ms,
+        usage,
     }
 }
 
@@ -1066,6 +1211,24 @@ fn sha256_file(path: &Path) -> RuntimeResult<String> {
         }
         hasher.update(&buffer[..read]);
     }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn sha256_file_tracked(path: &Path, tracker: &BudgetTracker) -> RuntimeResult<String> {
+    let file = File::open(path).map_err(io_error)?;
+    let mut reader = BufReader::with_capacity(64 * 1024, file);
+    let mut buffer = [0_u8; 64 * 1024];
+    let mut hasher = Sha256::new();
+    loop {
+        tracker.checkpoint()?;
+        let read = reader.read(&mut buffer).map_err(io_error)?;
+        if read == 0 {
+            break;
+        }
+        tracker.consume_read_bytes(u64::try_from(read).unwrap_or(u64::MAX))?;
+        hasher.update(&buffer[..read]);
+    }
+    tracker.checkpoint()?;
     Ok(format!("{:x}", hasher.finalize()))
 }
 
@@ -1128,6 +1291,130 @@ mod tests {
     }
 
     #[test]
+    fn cancelled_blob_operation_returns_structured_budget_error() {
+        let directory = tempdir().expect("tempdir");
+        let store = BlobStore::new(directory.path().to_path_buf()).expect("store");
+        let ctx = context("agent");
+        ctx.cancellation.cancel();
+        let error = store
+            .begin(
+                &ctx,
+                BlobBeginRequest {
+                    purpose: "fsWriteRaw".into(),
+                    expected_size_bytes: Some(1),
+                    content_type: None,
+                    expected_sha256: None,
+                    chunk_size_bytes: None,
+                    ttl_seconds: None,
+                    budget: Default::default(),
+                },
+            )
+            .expect_err("cancelled begin");
+        assert_eq!(error.code, "operationCancelled");
+        assert_eq!(error.phase.as_deref(), Some("reservingBlob"));
+        assert!(error.usage.is_some());
+    }
+
+    #[test]
+    fn caller_blob_budget_can_only_tighten_hard_caps_and_zero_is_not_unlimited() {
+        let directory = tempdir().expect("tempdir");
+        let store = BlobStore::new(directory.path().to_path_buf()).expect("store");
+        let ctx = context("agent");
+
+        let oversized = store
+            .begin(
+                &ctx,
+                BlobBeginRequest {
+                    purpose: "fsWriteRaw".into(),
+                    expected_size_bytes: Some(MAX_BLOB_BYTES.saturating_add(1)),
+                    content_type: None,
+                    expected_sha256: None,
+                    chunk_size_bytes: None,
+                    ttl_seconds: None,
+                    budget: BlobToolBudget {
+                        timeout_ms: u64::MAX,
+                        max_bytes_read: u64::MAX,
+                        max_bytes_written: u64::MAX,
+                        max_open_files: u32::MAX,
+                    },
+                },
+            )
+            .expect_err("caller budget must not raise the hard blob size cap");
+        assert_eq!(oversized.code, "blobQuotaExceeded");
+
+        let bytes = b"abcd";
+        let begin = store
+            .begin(
+                &ctx,
+                BlobBeginRequest {
+                    purpose: "fsWriteRaw".into(),
+                    expected_size_bytes: Some(bytes.len() as u64),
+                    content_type: None,
+                    expected_sha256: Some(sha256_hex(bytes)),
+                    chunk_size_bytes: Some(MIN_CHUNK_BYTES),
+                    ttl_seconds: None,
+                    budget: Default::default(),
+                },
+            )
+            .expect("begin");
+        let limited = store
+            .write_chunk(
+                &ctx,
+                BlobChunkRequest {
+                    upload_id: begin.upload_id.clone(),
+                    offset: 0,
+                    data_base64: STANDARD.encode(bytes),
+                    chunk_sha256: Some(sha256_hex(bytes)),
+                    budget: BlobToolBudget {
+                        max_bytes_written: 3,
+                        ..BlobToolBudget::default()
+                    },
+                },
+            )
+            .expect_err("caller write cap must tighten the hard cap");
+        assert_eq!(limited.code, "byteBudgetExceeded");
+        assert_eq!(
+            store
+                .status(&ctx, &begin.upload_id)
+                .expect("status")
+                .next_offset,
+            0
+        );
+
+        let zero = store
+            .write_chunk(
+                &ctx,
+                BlobChunkRequest {
+                    upload_id: begin.upload_id,
+                    offset: 0,
+                    data_base64: STANDARD.encode(bytes),
+                    chunk_sha256: Some(sha256_hex(bytes)),
+                    budget: BlobToolBudget {
+                        max_bytes_written: 0,
+                        ..BlobToolBudget::default()
+                    },
+                },
+            )
+            .expect_err("zero caller cap must not mean unlimited");
+        assert_eq!(zero.code, "byteBudgetExceeded");
+
+        let zero_timeout = blob_tracker(
+            &ctx,
+            &BlobToolBudget {
+                timeout_ms: 0,
+                ..BlobToolBudget::default()
+            },
+        );
+        assert_eq!(
+            zero_timeout
+                .checkpoint_at(std::time::Instant::now() + Duration::from_secs(1))
+                .expect_err("zero timeout must clamp to a bounded deadline")
+                .code,
+            "timeBudgetExceeded"
+        );
+    }
+
+    #[test]
     fn sequential_upload_resumes_and_duplicate_is_idempotent() {
         let directory = tempdir().expect("tempdir");
         let store = BlobStore::new(directory.path().to_path_buf()).expect("store");
@@ -1143,6 +1430,7 @@ mod tests {
                     expected_sha256: Some(sha256_hex(bytes)),
                     chunk_size_bytes: Some(MIN_CHUNK_BYTES),
                     ttl_seconds: None,
+                    budget: Default::default(),
                 },
             )
             .expect("begin");
@@ -1151,6 +1439,7 @@ mod tests {
             offset: 0,
             data_base64: STANDARD.encode(bytes),
             chunk_sha256: Some(sha256_hex(bytes)),
+            budget: Default::default(),
         };
         let first = store.write_chunk(&ctx, request.clone()).expect("chunk");
         let duplicate = store.write_chunk(&ctx, request).expect("duplicate");
@@ -1171,6 +1460,7 @@ mod tests {
                         upload_id: begin.upload_id,
                         final_size_bytes: bytes.len() as u64,
                         sha256: sha256_hex(bytes),
+                        budget: Default::default(),
                     },
                 )
                 .expect("seal")
@@ -1194,6 +1484,7 @@ mod tests {
                     expected_sha256: None,
                     chunk_size_bytes: None,
                     ttl_seconds: None,
+                    budget: Default::default(),
                 },
             )
             .expect("begin");
@@ -1205,6 +1496,7 @@ mod tests {
                     offset: 0,
                     data_base64: STANDARD.encode(b"abc"),
                     chunk_sha256: None,
+                    budget: Default::default(),
                 },
             )
             .expect("chunk");
@@ -1216,6 +1508,7 @@ mod tests {
                     offset: 0,
                     data_base64: STANDARD.encode(b"xyz"),
                     chunk_sha256: None,
+                    budget: Default::default(),
                 },
             )
             .expect_err("conflict");
@@ -1241,6 +1534,7 @@ mod tests {
                     expected_sha256: None,
                     chunk_size_bytes: None,
                     ttl_seconds: None,
+                    budget: Default::default(),
                 },
             )
             .expect("begin");
@@ -1252,6 +1546,7 @@ mod tests {
                     offset: 0,
                     data_base64: STANDARD.encode(b"abc"),
                     chunk_sha256: None,
+                    budget: Default::default(),
                 },
             )
             .expect("chunk");
@@ -1262,6 +1557,7 @@ mod tests {
                     upload_id: begin.upload_id.clone(),
                     final_size_bytes: 3,
                     sha256: "0".repeat(64),
+                    budget: Default::default(),
                 },
             )
             .expect_err("integrity mismatch");
@@ -1289,6 +1585,7 @@ mod tests {
                     expected_sha256: None,
                     chunk_size_bytes: None,
                     ttl_seconds: None,
+                    budget: Default::default(),
                 },
             )
             .expect("begin first");
@@ -1302,6 +1599,7 @@ mod tests {
                     expected_sha256: None,
                     chunk_size_bytes: None,
                     ttl_seconds: None,
+                    budget: Default::default(),
                 },
             )
             .expect("begin second");
@@ -1335,6 +1633,7 @@ mod tests {
                     expected_sha256: None,
                     chunk_size_bytes: None,
                     ttl_seconds: None,
+                    budget: Default::default(),
                 },
             )
             .expect("begin");
@@ -1346,6 +1645,7 @@ mod tests {
                     offset: 0,
                     data_base64: STANDARD.encode(bytes),
                     chunk_sha256: None,
+                    budget: Default::default(),
                 },
             )
             .expect("chunk");
@@ -1356,6 +1656,7 @@ mod tests {
                     upload_id: begin.upload_id,
                     final_size_bytes: bytes.len() as u64,
                     sha256: sha256_hex(bytes),
+                    budget: Default::default(),
                 },
             )
             .expect("seal");
@@ -1390,6 +1691,7 @@ mod tests {
                         expected_sha256: None,
                         chunk_size_bytes: None,
                         ttl_seconds: None,
+                        budget: Default::default(),
                     },
                 )
                 .expect("begin");
@@ -1401,6 +1703,7 @@ mod tests {
                         offset: 0,
                         data_base64: STANDARD.encode(b"abc"),
                         chunk_sha256: None,
+                        budget: Default::default(),
                     },
                 )
                 .expect("first chunk");
@@ -1423,6 +1726,7 @@ mod tests {
                     offset: 3,
                     data_base64: STANDARD.encode(b"def"),
                     chunk_sha256: None,
+                    budget: Default::default(),
                 },
             )
             .expect("resumed chunk");
@@ -1433,6 +1737,7 @@ mod tests {
                     upload_id: begin.upload_id,
                     final_size_bytes: 6,
                     sha256: sha256_hex(b"abcdef"),
+                    budget: Default::default(),
                 },
             )
             .expect("seal after resume");
@@ -1455,6 +1760,7 @@ mod tests {
                         expected_sha256: None,
                         chunk_size_bytes: None,
                         ttl_seconds: None,
+                        budget: Default::default(),
                     },
                 )
                 .expect("begin");
@@ -1466,6 +1772,7 @@ mod tests {
                         offset: 0,
                         data_base64: STANDARD.encode(b"abc"),
                         chunk_sha256: None,
+                        budget: Default::default(),
                     },
                 )
                 .expect("chunk");
@@ -1476,6 +1783,7 @@ mod tests {
                         upload_id: begin.upload_id.clone(),
                         final_size_bytes: 3,
                         sha256: sha256_hex(b"abc"),
+                        budget: Default::default(),
                     },
                 )
                 .expect("seal");

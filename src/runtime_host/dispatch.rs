@@ -9,7 +9,7 @@ use chatcmd_core::{
 use chatcmd_mcp::RuntimeApi as _;
 use chatcmd_runtime::{
     CommandOutput, FsConflictPolicy, FsTransferRequest, OperationContext, RuntimeError,
-    RuntimeResult, ShellCreateRequest, ShellWriteRequest,
+    RuntimeResult, ShellCreateRequest, ShellWriteRequest, ToolUsage,
 };
 use serde_json::{Value, json};
 
@@ -174,9 +174,10 @@ impl RuntimeHost {
             }
             "shell_wait" => {
                 let input: ShellWait = parse(arguments)?;
-                let result = self
+                let (result, usage) = self
                     .shell
-                    .wait(
+                    .wait_with_context(
+                        &context,
                         &input.session_id,
                         Duration::from_millis(input.timeout_ms.clamp(1, 300_000)),
                     )
@@ -185,20 +186,21 @@ impl RuntimeHost {
                     self.update_session_status(&input.session_id, "exited", result.exit_code)
                         .await?;
                 }
-                value(result)
+                value_with_usage(result, usage)
             }
             "shell_read" => {
                 let input: ShellRead = parse(arguments)?;
-                let result = self
+                let (result, usage) = self
                     .shell
-                    .read(
+                    .read_with_context(
+                        &context,
                         &input.session_id,
                         input.after_sequence,
                         input.max_events.clamp(1, 2_000),
                     )
                     .await?;
                 self.persist_shell_events(&context, &result).await?;
-                value(result)
+                value_with_usage(result, usage)
             }
             "shell_signal" => {
                 let input: ShellSignalInput = parse(arguments)?;
@@ -211,7 +213,7 @@ impl RuntimeHost {
                 let input: ShellResize = parse(arguments)?;
                 value(
                     self.shell
-                        .resize(&input.session_id, input.columns, input.rows)
+                        .resize_with_context(&context, &input.session_id, input.columns, input.rows)
                         .await?,
                 )
             }
@@ -243,7 +245,11 @@ impl RuntimeHost {
             )?),
             "blob_status" => {
                 let input: BlobStatusInput = parse(arguments)?;
-                value(self.blob_store.status(&context, &input.upload_id)?)
+                value(self.blob_store.status_with_budget(
+                    &context,
+                    &input.upload_id,
+                    &input.budget,
+                )?)
             }
             "blob_seal" => value(self.blob_store.seal(
                 &context,
@@ -251,7 +257,11 @@ impl RuntimeHost {
             )?),
             "blob_abort" => {
                 let input: BlobStatusInput = parse(arguments)?;
-                value(self.blob_store.abort(&context, &input.upload_id)?)
+                value(self.blob_store.abort_with_budget(
+                    &context,
+                    &input.upload_id,
+                    &input.budget,
+                )?)
             }
             "fs_list" => {
                 let input: ListInput = parse(arguments)?;
@@ -998,6 +1008,19 @@ impl RuntimeHost {
             },
             "content": read.content, "truncated": read.truncated
         }))
+    }
+}
+
+fn value_with_usage<T: serde::Serialize>(value: T, usage: ToolUsage) -> RuntimeResult<Value> {
+    let mut output = serde_json::to_value(value)
+        .map_err(|error| RuntimeError::new("serialization_failed", error.to_string()))?;
+    let usage = serde_json::to_value(usage)
+        .map_err(|error| RuntimeError::new("serialization_failed", error.to_string()))?;
+    if let Value::Object(object) = &mut output {
+        object.insert("usage".to_owned(), usage);
+        Ok(output)
+    } else {
+        Ok(json!({ "result": output, "usage": usage }))
     }
 }
 
