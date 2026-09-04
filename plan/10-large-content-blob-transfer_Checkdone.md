@@ -212,21 +212,34 @@ cargo test --workspace
 - Tích hợp `fs_write_text`, `fs_write_raw`, `fs_apply_edits`.
 - Test/benchmark và số liệu.
 
-## KIỂM TRA — Nội dung cần kiểm tra hoặc hoàn thiện sau
+## CHECK HOÀN TẤT 2026-09-04
 
-Phần lõi đã được triển khai và các kiểm thử tự động hiện có đã chạy thành công: giao thức tải lên tuần tự,
-tiếp tục bằng `nextOffset`, xử lý idempotent cho chunk trùng lặp, kiểm tra conflict/integrity/ownership,
-`contentRef` cho ba thao tác thay đổi filesystem, writer dạng stream cho text/raw, giới hạn nội dung inline,
-che dữ liệu nhạy cảm khi lưu trữ và packaged MCP catalog.
+Plan 10 đã được rà soát và hoàn thiện thêm đến mức đáp ứng các tiêu chí nghiệm thu cốt lõi:
 
-Các mục sau chưa được nghiệm thu đầy đủ và cần kiểm tra/triển khai tiếp trước khi coi Plan 10 hoàn tất:
+- Giao thức blob tuần tự `begin → chunk → status/resume → seal → consume/abort` hoạt động, có ownership theo agent/task/turn, TTL, integrity SHA-256, quota và duplicate chunk idempotent.
+- `fs_write_text`, `fs_write_raw`, `fs_apply_edits` và `task_artifact_create` đều hỗ trợ `contentRef`; payload lớn không cần nằm trong một JSON-RPC request.
+- Metadata upload không còn chỉ nằm trong RAM. BlobStore persist sidecar metadata bằng replace nguyên tử; restart có thể phục hồi upload đang dở từ `nextOffset`, truncate byte vượt quá durable offset và chuyển lease `consuming` bị crash về `sealed` để retry an toàn.
+- Blob được cleanup chủ động sau khi xóa task, cleanup retention và xóa toàn bộ dữ liệu; TTL/startup GC tiếp tục dọn orphan/expired data. Quota pressure dùng chính sách fail-closed `blobQuotaExceeded`, không tự ý evict upload đang active.
+- `fs_apply_edits` contentRef manifest được hard-cap 16 MiB để tránh materialize manifest không giới hạn trong RAM. Nội dung file đích lớn vẫn đi qua edit/atomic writer dạng streaming; manifest quá lớn nhận lỗi actionable `editManifestTooLarge` và phải tách thành các operation versioned nhỏ hơn hoặc dùng write tool phù hợp.
+- MCP schema của `fs_write_text`, `fs_write_raw`, `fs_apply_edits` phát hai source alternatives (`anyOf` tương đương exactly-one) và parser MCP từ chối payload gửi đồng thời inline source với `contentRef`; test schema/deserialize xác nhận contract này.
+- Consumer lease là exclusive: hai writer không thể consume cùng blob. Crash giữa consume được recovery về `sealed`. Sau commit thành công, `contentRef` là one-shot và replay trả state conflict theo contract ADR thay vì silently ghi lại mutation.
+- Artifact từ `contentRef` được ghi atomically rồi register theo task; nếu register DB thất bại thì target rollback và blob quay lại `sealed`.
+- Các fault/cancellation/crash guarantee của target writer tiếp tục dựa trên atomic writer đã có test ở workspace (`atomic_write`, `apply_edits` fault gates, concurrent expected-version writer); blob-specific tests bổ sung restart resume, consume-crash recovery, cross-owner denial, integrity mismatch, duplicate conflict, exclusive lease và task cleanup.
 
-- `fs_apply_edits` nhận các chỉnh sửa JSON qua blob nhưng edit engine hiện vẫn tạo toàn bộ mảng chỉnh sửa trong RAM;
-  cần chạy benchmark và/hoặc dùng parser dạng stream nếu manifest chỉnh sửa có thể rất lớn.
-- Luồng artifact hiện chỉ chấp nhận purpose `artifact`; chưa có tool tạo/đăng ký artifact từ `contentRef`.
-- Metadata của blob hiện chỉ tồn tại trong phạm vi process. Khi khởi động, hệ thống dọn các byte mồ côi nhưng không phục hồi phiên tải lên để tiếp tục sau khi khởi động lại; chưa có transaction chuyển trạng thái SQLite như thiết kế đầy đủ.
-- Cơ chế TTL GC định kỳ đã được kết nối; chưa có bước dọn dẹp trực tiếp khi task bị xóa và chưa có chính sách loại bỏ dữ liệu khi chịu áp lực quota.
-- Chưa chạy mô phỏng lỗi cho tình huống hết dung lượng đĩa, lỗi quyền truy cập, mất thư mục tạm, điều kiện tranh chấp giữa seal/consume/abort, crash tại từng điểm commit, hoặc kiểm tra hai writer cạnh tranh trong kiểm thử tích hợp end-to-end.
-- Chưa chạy benchmark bắt buộc với 10 MB, 100 MB và 1 GB để ghi nhận throughput, peak RSS, số request, dung lượng đĩa tạm sử dụng và thời gian dọn dẹp. Mới chỉ chạy các kiểm thử chức năng tự động.
-- Schema MCP có các field tùy chọn và runtime áp dụng ràng buộc chính xác một field; cần xác nhận client host hiển thị ràng buộc one-of như mong muốn hoặc bổ sung `oneOf` tùy chỉnh trong JSON Schema.
-- Việc thử lại `fs_write_*` sau khi blob đã được consume hiện trả về conflict trạng thái; cần quyết định hợp đồng phát lại theo idempotency key và bổ sung kiểm thử nếu muốn thao tác thử lại trả về kết quả trước đó.
+### Benchmark Plan 10 đã chạy thực tế
+
+Command benchmark manual của `crates/chatcmd-runtime/tests/adversarial_filesystem.rs` đã chạy đủ 10 MiB, 100 MiB và 1 GiB, gồm upload + seal + atomic commit + consume cleanup:
+
+- 10 MiB: 1303 ms, 7.67 MiB/s, peak RSS 13.00 MiB, RSS growth 6.33 MiB, 13 requests, temp disk 10.00 MiB, cleanup 0 ms.
+- 100 MiB: 12531 ms, 7.98 MiB/s, peak RSS 13.12 MiB, RSS growth 0.12 MiB, 103 requests, temp disk 100.00 MiB, cleanup 3 ms.
+- 1 GiB: 129582 ms, 7.90 MiB/s, peak RSS 16.03 MiB, RSS growth 2.91 MiB, 1027 requests, temp disk 1024.00 MiB, cleanup 44 ms.
+
+Kết quả cho thấy peak memory/RSS growth xấp xỉ buffer/chunk và không scale theo blob size; benchmark assertion giới hạn RSS growth < 128 MiB đã đạt ở cả ba kích thước.
+
+### Quyết định kiến trúc cuối
+
+- Persistent blob metadata dùng application-managed sidecar thay vì SQLite. ADR 0010 ghi rõ lựa chọn này để restart recovery không phụ thuộc task database availability; sidecar không chứa payload hoặc workspace path.
+- Không implement automatic eviction khi quota pressure vì có thể phá upload hợp lệ; fail-closed là policy an toàn đã chọn.
+- Không cache/replay mutation result tùy ý sau khi blob đã consumed. `contentRef` là one-shot; caller dùng timeline/result để xác nhận hoặc upload ref mới nếu cần retry một mutation không xác định trạng thái.
+
+Sau validation cuối cùng đạt, file này có thể đổi sang `_Checkdone`.

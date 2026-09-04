@@ -202,7 +202,7 @@ async fn run_server(ready: Option<std::sync::mpsc::Sender<()>>) -> Result<()> {
         bootstrap.device.clone(),
         shell.clone(),
         workspace,
-        blob_store,
+        blob_store.clone(),
         git,
         process,
         skills.clone(),
@@ -235,6 +235,7 @@ async fn run_server(ready: Option<std::sync::mpsc::Sender<()>>) -> Result<()> {
         activity_registry,
         plan_prompt_registry,
         telemetry_registry,
+        blob_store.clone(),
         event_tx,
     ));
     api::start_data_cleanup_scheduler(state.clone());

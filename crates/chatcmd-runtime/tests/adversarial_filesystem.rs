@@ -1,10 +1,13 @@
 mod support;
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chatcmd_runtime::{
-    ApplyEditsBudget, ApplyEditsRequest, AtomicWriteOptions, EditCoordinateSystem, FsSearchBudget,
-    FsSearchRequest, FsStatBudget, FsStatRequest, GitRunOptions, GitService, OperationContext,
-    SearchMode, TextEdit, TextReadBudget, TextReadRange, TextReadRequestV2, VersionStrength,
+    ApplyEditsBudget, ApplyEditsRequest, AtomicWriteOptions, BlobBeginRequest, BlobChunkRequest,
+    BlobSealRequest, BlobStore, EditCoordinateSystem, FsSearchBudget, FsSearchRequest,
+    FsStatBudget, FsStatRequest, GitRunOptions, GitService, OperationContext, SearchMode, TextEdit,
+    TextReadBudget, TextReadRange, TextReadRequestV2, VersionStrength,
 };
+use sha2::{Digest, Sha256};
 use std::{
     io::{Read as _, Write as _},
     path::Path,
@@ -98,6 +101,118 @@ fn peak_rss_bytes() -> u64 {
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
 fn peak_rss_bytes() -> u64 {
     0
+}
+
+#[tokio::test]
+#[ignore = "manual Plan 10 benchmark: uploads and commits 10 MiB, 100 MiB and 1 GiB blobs"]
+async fn blob_upload_commit_reports_peak_rss_throughput_and_cleanup() {
+    const MIB: u64 = 1024 * 1024;
+    const CHUNK_BYTES: usize = MIB as usize;
+    let directory = tempfile::tempdir().expect("benchmark directory");
+    let workspace = workspace(directory.path());
+    let blob_root = directory.path().join("blob-store");
+    let store = BlobStore::new(blob_root.clone()).expect("blob store");
+    let mut context = OperationContext::new("plan10-benchmark", "agent", "fs_write_raw");
+    context.task_id = Some("plan10-benchmark-task".into());
+    context.turn_id = Some("plan10-benchmark-turn".into());
+    let chunk = vec![0x5a_u8; CHUNK_BYTES];
+    let encoded = STANDARD.encode(&chunk);
+
+    for size in [10 * MIB, 100 * MIB, 1024 * MIB] {
+        let chunks = size / MIB;
+        let mut hasher = Sha256::new();
+        for _ in 0..chunks {
+            hasher.update(&chunk);
+        }
+        let final_hash = format!("{:x}", hasher.finalize());
+        let rss_before = peak_rss_bytes();
+        let started = Instant::now();
+        let begin = store
+            .begin(
+                &context,
+                BlobBeginRequest {
+                    purpose: "fsWriteRaw".into(),
+                    expected_size_bytes: Some(size),
+                    content_type: Some("application/octet-stream".into()),
+                    expected_sha256: Some(final_hash.clone()),
+                    chunk_size_bytes: Some(CHUNK_BYTES),
+                    ttl_seconds: None,
+                },
+            )
+            .expect("begin benchmark blob");
+        for index in 0..chunks {
+            store
+                .write_chunk(
+                    &context,
+                    BlobChunkRequest {
+                        upload_id: begin.upload_id.clone(),
+                        offset: index * MIB,
+                        data_base64: encoded.clone(),
+                        chunk_sha256: None,
+                    },
+                )
+                .expect("write benchmark chunk");
+        }
+        store
+            .seal(
+                &context,
+                BlobSealRequest {
+                    upload_id: begin.upload_id.clone(),
+                    final_size_bytes: size,
+                    sha256: final_hash,
+                },
+            )
+            .expect("seal benchmark blob");
+        let temp_disk_bytes =
+            std::fs::metadata(blob_root.join(format!("{}.blob", begin.upload_id)))
+                .expect("blob metadata")
+                .len();
+        let lease = store
+            .lease(&context, &begin.content_ref, "fsWriteRaw")
+            .expect("lease benchmark blob");
+        let target = directory.path().join(format!("blob-commit-{size}.bin"));
+        workspace
+            .write_blob_atomic(
+                &context,
+                &target,
+                lease.path(),
+                AtomicWriteOptions::default(),
+                false,
+            )
+            .await
+            .expect("commit benchmark blob");
+        let cleanup_started = Instant::now();
+        lease.finish(true).expect("consume benchmark blob");
+        let cleanup_elapsed = cleanup_started.elapsed();
+        let elapsed = started.elapsed();
+        let peak_rss = peak_rss_bytes();
+        let rss_growth = peak_rss.saturating_sub(rss_before);
+        let throughput_mib_s = (size as f64 / MIB as f64) / elapsed.as_secs_f64();
+        let request_count = chunks + 3;
+        println!(
+            "PLAN10_BENCH size_mib={} elapsed_ms={} throughput_mib_s={:.2} peak_rss_mib={:.2} rss_growth_mib={:.2} requests={} temp_disk_mib={:.2} cleanup_ms={}",
+            size / MIB,
+            elapsed.as_millis(),
+            throughput_mib_s,
+            peak_rss as f64 / MIB as f64,
+            rss_growth as f64 / MIB as f64,
+            request_count,
+            temp_disk_bytes as f64 / MIB as f64,
+            cleanup_elapsed.as_millis()
+        );
+        assert_eq!(
+            std::fs::metadata(&target).expect("target metadata").len(),
+            size
+        );
+        assert!(!blob_root.join(format!("{}.blob", begin.upload_id)).exists());
+        if peak_rss != 0 {
+            assert!(
+                rss_growth < 128 * MIB,
+                "blob upload RSS growth exceeded 128 MiB: {rss_growth} bytes"
+            );
+        }
+        std::fs::remove_file(target).expect("remove benchmark target");
+    }
 }
 
 #[tokio::test]

@@ -124,6 +124,7 @@ fn catalog_names_are_sorted_stable_and_unique() {
     assert!(TOOL_NAMES.iter().any(|name| name == "fs_read_text_v2"));
     assert!(TOOL_NAMES.iter().any(|name| name == "fs_batch_read"));
     assert!(TOOL_NAMES.iter().any(|name| name == "fs_batch_stat"));
+    assert!(TOOL_NAMES.iter().any(|name| name == "task_artifact_create"));
     assert!(
         TOOL_NAMES
             .iter()
@@ -141,6 +142,100 @@ fn catalog_names_are_sorted_stable_and_unique() {
 }
 
 #[test]
+fn fs_write_text_schema_requires_exactly_one_content_source() {
+    let manifest = canonical_manifest();
+    let tools = manifest["tools"].as_array().expect("manifest tools");
+    let write = tools
+        .iter()
+        .find(|tool| tool["name"] == "fs_write_text")
+        .expect("fs_write_text");
+    let alternatives = write["schema"]["anyOf"]
+        .as_array()
+        .expect("source alternatives");
+    assert_eq!(alternatives.len(), 2);
+    let schema = write["schema"].to_string();
+    assert!(schema.contains("contentRef"));
+    assert!(schema.contains("content"));
+    assert!(
+        serde_json::from_value::<WriteTextArgs>(serde_json::json!({
+            "path": "file.txt",
+            "content": "inline"
+        }))
+        .is_ok()
+    );
+    assert!(
+        serde_json::from_value::<WriteTextArgs>(serde_json::json!({
+            "path": "file.txt",
+            "contentRef": "blob:v1:test"
+        }))
+        .is_ok()
+    );
+    assert!(
+        serde_json::from_value::<WriteTextArgs>(serde_json::json!({
+            "path": "file.txt",
+            "content": "inline",
+            "contentRef": "blob:v1:test"
+        }))
+        .is_err()
+    );
+}
+
+#[test]
+fn fs_write_raw_schema_requires_exactly_one_content_source() {
+    let manifest = canonical_manifest();
+    let tools = manifest["tools"].as_array().expect("manifest tools");
+    let write = tools
+        .iter()
+        .find(|tool| tool["name"] == "fs_write_raw")
+        .expect("fs_write_raw");
+    let alternatives = write["schema"]["anyOf"]
+        .as_array()
+        .expect("source alternatives");
+    assert_eq!(alternatives.len(), 2);
+    let schema = write["schema"].to_string();
+    assert!(schema.contains("base64"));
+    assert!(schema.contains("contentRef"));
+    assert!(
+        serde_json::from_value::<WriteRawArgs>(serde_json::json!({
+            "path": "file.bin",
+            "base64": "YWJj"
+        }))
+        .is_ok()
+    );
+    assert!(
+        serde_json::from_value::<WriteRawArgs>(serde_json::json!({
+            "path": "file.bin",
+            "contentRef": "blob:v1:test"
+        }))
+        .is_ok()
+    );
+    assert!(
+        serde_json::from_value::<WriteRawArgs>(serde_json::json!({
+            "path": "file.bin",
+            "base64": "YWJj",
+            "contentRef": "blob:v1:test"
+        }))
+        .is_err()
+    );
+}
+
+#[test]
+fn task_artifact_create_advertises_content_ref_contract() {
+    let manifest = canonical_manifest();
+    let tools = manifest["tools"].as_array().expect("manifest tools");
+    let create = tools
+        .iter()
+        .find(|tool| tool["name"] == "task_artifact_create")
+        .expect("task_artifact_create");
+    let properties = &create["schema"]["properties"];
+    assert!(properties.get("contentRef").is_some());
+    assert!(properties.get("relativePath").is_some());
+    assert!(properties.get("mediaType").is_some());
+    assert_eq!(create["capabilities"]["supportsContentRef"], true);
+    assert_eq!(create["capabilities"]["mutating"], true);
+}
+
+#[test]
 fn fs_apply_edits_advertises_versioned_streaming_contract() {
     let manifest = canonical_manifest();
     let tools = manifest["tools"].as_array().expect("manifest tools");
@@ -154,7 +249,6 @@ fn fs_apply_edits_advertises_versioned_streaming_contract() {
         "expectedVersion",
         "coordinateSystem",
         "columnEncoding",
-        "edits",
         "dryRun",
         "preserveLineEndings",
         "preserveBom",
@@ -165,6 +259,41 @@ fn fs_apply_edits_advertises_versioned_streaming_contract() {
             "missing fs_apply_edits field {field}"
         );
     }
+    let alternatives = apply["schema"]["anyOf"]
+        .as_array()
+        .expect("source alternatives");
+    assert_eq!(alternatives.len(), 2);
+    let schema = apply["schema"].to_string();
+    assert!(schema.contains("edits"));
+    assert!(schema.contains("contentRef"));
+    assert!(
+        serde_json::from_value::<ApplyEditsArgs>(serde_json::json!({
+            "path": "file.txt",
+            "expectedVersion": "v1-test",
+            "coordinateSystem": "byte",
+            "edits": []
+        }))
+        .is_ok()
+    );
+    assert!(
+        serde_json::from_value::<ApplyEditsArgs>(serde_json::json!({
+            "path": "file.txt",
+            "expectedVersion": "v1-test",
+            "coordinateSystem": "byte",
+            "contentRef": "blob:v1:test"
+        }))
+        .is_ok()
+    );
+    assert!(
+        serde_json::from_value::<ApplyEditsArgs>(serde_json::json!({
+            "path": "file.txt",
+            "expectedVersion": "v1-test",
+            "coordinateSystem": "byte",
+            "edits": [],
+            "contentRef": "blob:v1:test"
+        }))
+        .is_err()
+    );
     assert_eq!(apply["capabilities"]["mutating"], true);
     assert_eq!(apply["capabilities"]["streaming"], true);
     assert!(

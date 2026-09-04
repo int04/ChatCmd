@@ -22,6 +22,8 @@ use super::{
     value,
 };
 
+const MAX_EDIT_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
+
 pub(super) fn resolve_relative_paths(
     mut arguments: Value,
     base: Option<&Path>,
@@ -367,6 +369,13 @@ pub(super) async fn apply_edits(
             let lease = host
                 .blob_store
                 .lease(context, &content_ref, "fsApplyEdits")?;
+            if lease.size_bytes > MAX_EDIT_MANIFEST_BYTES {
+                lease.finish(false)?;
+                return Err(RuntimeError::new(
+                    "editManifestTooLarge",
+                    "fs_apply_edits contentRef manifest exceeds 16 MiB; split the edit manifest into smaller versioned operations or use fs_write_text/fs_write_raw for large replacement content",
+                ));
+            }
             let bytes = tokio::fs::read(lease.path())
                 .await
                 .map_err(|error| RuntimeError::new("blobIoError", error.to_string()))?;

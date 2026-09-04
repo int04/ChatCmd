@@ -35,6 +35,12 @@ input!(ProcessInput { process_id: u32 });
 input!(ArtifactInput {
     artifact_id: String
 });
+input!(ArtifactCreateInput {
+    content_ref: String,
+    relative_path: String,
+    #[serde(default)]
+    media_type: Option<String>
+});
 input!(ExecutionModeInput { mode: String });
 input!(ShellResize {
     session_id: String,

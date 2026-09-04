@@ -174,11 +174,16 @@ fn capability_flags(name: &str) -> ToolCapabilityFlags {
             || name.starts_with("fs_")
             || name.starts_with("git_")
             || name == "process_kill"
-            || name == "workspace_index_rebuild",
+            || name == "workspace_index_rebuild"
+            || name == "task_artifact_create",
         supports_cursor: matches!(name, "fs_list_v2" | "fs_find" | "fs_search" | "shell_read"),
         supports_content_ref: matches!(
             name,
-            "fs_write_text" | "fs_write_raw" | "fs_apply_edits" | "task_artifact_read"
+            "fs_write_text"
+                | "fs_write_raw"
+                | "fs_apply_edits"
+                | "task_artifact_read"
+                | "task_artifact_create"
         ),
         mutating: is_mutating(name),
         streaming: matches!(
@@ -244,7 +249,8 @@ fn risk_class(name: &str) -> ToolRiskClass {
         | "fs_apply_edits"
         | "workspace_index_rebuild"
         | "shell_write"
-        | "shell_resize" => ToolRiskClass::Modify,
+        | "shell_resize"
+        | "task_artifact_create" => ToolRiskClass::Modify,
         "fs_copy" | "fs_move" => ToolRiskClass::MoveCopy,
         "fs_delete" | "process_kill" | "blob_abort" | "shell_close" => ToolRiskClass::Destructive,
         "shell_create" | "shell_wait" | "shell_signal" | "git_status" | "git_diff" | "git_log"
@@ -325,6 +331,7 @@ fn is_mutating(name: &str) -> bool {
         || name.starts_with("shell_resize")
         || name.starts_with("shell_close")
         || name.starts_with("task_set_")
+        || name == "task_artifact_create"
         || name.starts_with("agent_")
 }
 

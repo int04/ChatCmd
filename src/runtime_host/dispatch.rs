@@ -1,7 +1,10 @@
-use std::time::{Duration, Instant};
+use std::{
+    path::{Component, Path},
+    time::{Duration, Instant},
+};
 
 use chatcmd_core::{
-    ArtifactId, ArtifactStore, ExecutionMode, TaskExecutionMode, TaskId, TaskStore,
+    Artifact, ArtifactId, ArtifactStore, ExecutionMode, TaskExecutionMode, TaskId, TaskStore,
 };
 use chatcmd_mcp::RuntimeApi as _;
 use chatcmd_runtime::{
@@ -728,6 +731,7 @@ impl RuntimeHost {
                 Ok(json!({ "mode": mode.as_str() }))
             }
             "task_artifact_list" => self.list_artifacts(&context).await,
+            "task_artifact_create" => self.create_artifact(&context, arguments).await,
             "task_artifact_read" => self.read_artifact(&context, arguments).await,
             "agent_user_message" => {
                 let input: UserMessageInput = parse(arguments)?;
@@ -760,6 +764,97 @@ impl RuntimeHost {
             "agent_turn_complete" => self.complete_agent_turn(&context, arguments).await,
             _ => Err(RuntimeError::new("tool_not_found", "unknown MCP tool")),
         }
+    }
+
+    async fn create_artifact(
+        &self,
+        context: &OperationContext,
+        arguments: Value,
+    ) -> RuntimeResult<Value> {
+        let task_id = context_task_id(context)?;
+        let input: ArtifactCreateInput = parse(arguments)?;
+        let relative = Path::new(&input.relative_path);
+        if input.relative_path.trim().is_empty()
+            || relative.is_absolute()
+            || relative
+                .components()
+                .any(|component| !matches!(component, Component::Normal(_)))
+        {
+            return Err(RuntimeError::new(
+                "invalid_arguments",
+                "relativePath must be a non-empty workspace-relative path without '.' or '..' components",
+            ));
+        }
+        let root = self.workspace.roots().first().ok_or_else(|| {
+            RuntimeError::new("workspace_unavailable", "no workspace root is configured")
+        })?;
+        let target = root.join(relative);
+        let target_existed = target.exists();
+        let before = capture_snapshot(&target);
+        let lease = self
+            .blob_store
+            .lease(context, &input.content_ref, "artifact")?;
+        let size_bytes = i64::try_from(lease.size_bytes).map_err(|_| {
+            RuntimeError::new("artifactTooLarge", "artifact size cannot be represented")
+        })?;
+        let sha256_hex = lease.sha256.clone();
+        let write_result = self
+            .workspace
+            .write_blob_atomic(
+                context,
+                &target,
+                lease.path(),
+                chatcmd_runtime::AtomicWriteOptions::default(),
+                false,
+            )
+            .await;
+        if let Err(error) = write_result {
+            lease.finish(false)?;
+            return Err(error);
+        }
+
+        let artifact_id = ArtifactId::new(format!("artifact-{}", uuid::Uuid::new_v4()))
+            .map_err(|error| invalid("artifactId", error))?;
+        let timestamp = now_ms();
+        let artifact = Artifact {
+            id: artifact_id.clone(),
+            task_id: task_id.clone(),
+            session_id: None,
+            relative_path: input.relative_path.clone(),
+            media_type: input.media_type.clone(),
+            size_bytes,
+            sha256_hex: Some(sha256_hex.clone()),
+            created_at_ms: timestamp,
+            updated_at_ms: timestamp,
+        };
+        if let Err(error) = self.repository.register_artifact(&artifact).await {
+            let _ = tokio::fs::remove_file(&target).await;
+            lease.finish(false)?;
+            return Err(storage_error(error));
+        }
+        lease.finish(true)?;
+        self.record_committed_change(
+            context,
+            &target,
+            None,
+            if target_existed {
+                FileChangeKind::Modified
+            } else {
+                FileChangeKind::Added
+            },
+            before,
+            capture_snapshot(&target),
+            None,
+            Some(artifact_id.as_str().to_owned()),
+        );
+        Ok(json!({
+            "artifactId": artifact_id.as_str(),
+            "taskId": task_id.as_str(),
+            "relativePath": input.relative_path,
+            "mediaType": input.media_type,
+            "sizeBytes": size_bytes,
+            "sha256Hex": sha256_hex
+        }))
     }
 
     async fn list_artifacts(&self, context: &OperationContext) -> RuntimeResult<Value> {

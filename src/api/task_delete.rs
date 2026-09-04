@@ -52,6 +52,10 @@ pub(super) async fn delete_task(
     }
     delete_task_data(&mut transaction, task_id.as_str()).await?;
     transaction.commit().await.map_err(db_problem)?;
+    for child_id in &descendant_ids {
+        let _ = state.blob_store.cleanup_task(child_id);
+    }
+    let _ = state.blob_store.cleanup_task(task_id.as_str());
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -246,6 +250,9 @@ async fn cleanup_expired_user_generated_data(
     deleted_any |= stale_terminals > 0;
 
     transaction.commit().await.map_err(db_problem)?;
+    for task_id in &task_ids {
+        let _ = state.blob_store.cleanup_task(task_id);
+    }
 
     if deleted_any {
         compact_database(state).await?;
@@ -375,6 +382,7 @@ async fn cleanup_user_generated_data(state: &Arc<AppState>) -> Result<(), Proble
     }
 
     transaction.commit().await.map_err(db_problem)?;
+    let _ = state.blob_store.cleanup_all();
 
     // VACUUM must run outside a transaction. This returns free pages to the OS so
     // the SQLite file shrinks after both manual and scheduled cleanup.

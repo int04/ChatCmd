@@ -128,6 +128,7 @@ impl RuntimeHost {
             self.activity_registry(),
             self.plan_prompt_registry(),
             self.telemetry_registry(),
+            self.blob_store.clone(),
             self.events.clone(),
         )
     }

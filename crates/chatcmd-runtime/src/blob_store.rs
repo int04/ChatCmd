@@ -95,14 +95,14 @@ pub struct BlobStore {
     entries: Arc<Mutex<HashMap<String, BlobEntry>>>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 struct BlobOwner {
     agent_id: String,
     task_id: Option<String>,
     turn_id: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 enum BlobState {
     Uploading,
     Sealed,
@@ -123,6 +123,23 @@ struct BlobEntry {
     chunk_size: usize,
     expires_at_ms: u64,
     path: PathBuf,
+    received: u64,
+    chunks: BTreeMap<u64, (u64, String)>,
+    sha256: Option<String>,
+    state: BlobState,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct BlobMetadata {
+    upload_id: String,
+    content_ref: String,
+    owner: BlobOwner,
+    purpose: String,
+    content_type: Option<String>,
+    expected_size: Option<u64>,
+    expected_sha256: Option<String>,
+    chunk_size: usize,
+    expires_at_ms: u64,
     received: u64,
     chunks: BTreeMap<u64, (u64, String)>,
     sha256: Option<String>,
@@ -173,15 +190,10 @@ impl BlobStore {
 
     pub fn new(root: PathBuf) -> RuntimeResult<Self> {
         fs::create_dir_all(&root).map_err(io_error)?;
-        for item in fs::read_dir(&root).map_err(io_error)? {
-            let path = item.map_err(io_error)?.path();
-            if path.is_file() {
-                let _ = fs::remove_file(path);
-            }
-        }
+        let entries = recover_entries(&root)?;
         Ok(Self {
             root: Arc::new(root),
-            entries: Arc::new(Mutex::new(HashMap::new())),
+            entries: Arc::new(Mutex::new(entries)),
         })
     }
 
@@ -211,7 +223,7 @@ impl BlobStore {
             .clamp(1, MAX_TTL_SECONDS);
         let owner = owner(context);
         let mut entries = lock(&self.entries)?;
-        purge_expired(&mut entries);
+        purge_expired(&self.root, &mut entries);
         let (owner_bytes, owner_uploads, global_bytes) = usage(&entries, &owner);
         let reserved = request.expected_size_bytes.unwrap_or(MAX_BLOB_BYTES);
         if owner_uploads >= MAX_OWNER_UPLOADS
@@ -229,25 +241,27 @@ impl BlobStore {
             .open(&path)
             .map_err(io_error)?;
         let expires_at_ms = now_ms().saturating_add(ttl.saturating_mul(1000));
-        entries.insert(
-            upload_id.clone(),
-            BlobEntry {
-                upload_id: upload_id.clone(),
-                content_ref: content_ref.clone(),
-                owner,
-                purpose: request.purpose,
-                content_type: request.content_type,
-                expected_size: request.expected_size_bytes,
-                expected_sha256: normalize_hash(request.expected_sha256.as_deref())?,
-                chunk_size,
-                expires_at_ms,
-                path,
-                received: 0,
-                chunks: BTreeMap::new(),
-                sha256: None,
-                state: BlobState::Uploading,
-            },
-        );
+        let entry = BlobEntry {
+            upload_id: upload_id.clone(),
+            content_ref: content_ref.clone(),
+            owner,
+            purpose: request.purpose,
+            content_type: request.content_type,
+            expected_size: request.expected_size_bytes,
+            expected_sha256: normalize_hash(request.expected_sha256.as_deref())?,
+            chunk_size,
+            expires_at_ms,
+            path,
+            received: 0,
+            chunks: BTreeMap::new(),
+            sha256: None,
+            state: BlobState::Uploading,
+        };
+        if let Err(error) = persist_entry(&self.root, &entry) {
+            let _ = fs::remove_file(&entry.path);
+            return Err(error);
+        }
+        entries.insert(upload_id.clone(), entry);
         Ok(BlobBeginResult {
             upload_id,
             content_ref,
@@ -324,6 +338,7 @@ impl BlobStore {
             (u64::try_from(bytes.len()).unwrap_or(u64::MAX), hash),
         );
         entry.received = new_size;
+        persist_entry(&self.root, entry)?;
         Ok(status(entry))
     }
 
@@ -373,6 +388,7 @@ impl BlobStore {
         }
         entry.sha256 = Some(actual_hash);
         entry.state = BlobState::Sealed;
+        persist_entry(&self.root, entry)?;
         Ok(status(entry))
     }
 
@@ -400,6 +416,7 @@ impl BlobStore {
             ));
         }
         entry.state = BlobState::Consuming;
+        persist_entry(&self.root, entry)?;
         Ok(BlobLease {
             store: self.clone(),
             upload_id: entry.upload_id.clone(),
@@ -416,6 +433,7 @@ impl BlobStore {
         if entry.state != BlobState::Consumed {
             entry.state = BlobState::Aborted;
             let _ = fs::remove_file(&entry.path);
+            let _ = fs::remove_file(metadata_path(&self.root, &entry.upload_id));
         }
         Ok(status(entry))
     }
@@ -423,8 +441,39 @@ impl BlobStore {
     pub fn gc(&self) -> RuntimeResult<usize> {
         let mut entries = lock(&self.entries)?;
         let before = entries.len();
-        purge_expired(&mut entries);
+        purge_expired(&self.root, &mut entries);
         Ok(before.saturating_sub(entries.len()))
+    }
+
+    /// Removes every tracked blob owned by a deleted task.
+    pub fn cleanup_task(&self, task_id: &str) -> RuntimeResult<usize> {
+        let mut entries = lock(&self.entries)?;
+        let mut removed_entries = Vec::new();
+        entries.retain(|_, entry| {
+            let remove = entry.owner.task_id.as_deref() == Some(task_id);
+            if remove {
+                removed_entries.push((entry.upload_id.clone(), entry.path.clone()));
+            }
+            !remove
+        });
+        let removed = removed_entries.len();
+        for (upload_id, path) in removed_entries {
+            let _ = fs::remove_file(path);
+            let _ = fs::remove_file(metadata_path(&self.root, &upload_id));
+        }
+        Ok(removed)
+    }
+
+    /// Removes all tracked blob bytes after a successful full user-data purge.
+    pub fn cleanup_all(&self) -> RuntimeResult<usize> {
+        let mut entries = lock(&self.entries)?;
+        let removed = entries.len();
+        for entry in entries.values() {
+            let _ = fs::remove_file(&entry.path);
+            let _ = fs::remove_file(metadata_path(&self.root, &entry.upload_id));
+        }
+        entries.clear();
+        Ok(removed)
     }
 
     fn finish_consume(&self, upload_id: &str, consumed: bool) -> RuntimeResult<()> {
@@ -440,6 +489,9 @@ impl BlobStore {
             };
             if consumed {
                 let _ = fs::remove_file(&entry.path);
+                let _ = fs::remove_file(metadata_path(&self.root, &entry.upload_id));
+            } else {
+                persist_entry(&self.root, entry)?;
             }
         }
         Ok(())
@@ -516,13 +568,156 @@ fn usage(entries: &HashMap<String, BlobEntry>, owner: &BlobOwner) -> (u64, usize
     (owner_bytes, owner_uploads, global_bytes)
 }
 
-fn purge_expired(entries: &mut HashMap<String, BlobEntry>) {
+fn metadata_path(root: &Path, upload_id: &str) -> PathBuf {
+    root.join(format!("{upload_id}.meta.json"))
+}
+
+fn metadata_from_entry(entry: &BlobEntry) -> BlobMetadata {
+    BlobMetadata {
+        upload_id: entry.upload_id.clone(),
+        content_ref: entry.content_ref.clone(),
+        owner: entry.owner.clone(),
+        purpose: entry.purpose.clone(),
+        content_type: entry.content_type.clone(),
+        expected_size: entry.expected_size,
+        expected_sha256: entry.expected_sha256.clone(),
+        chunk_size: entry.chunk_size,
+        expires_at_ms: entry.expires_at_ms,
+        received: entry.received,
+        chunks: entry.chunks.clone(),
+        sha256: entry.sha256.clone(),
+        state: entry.state,
+    }
+}
+
+fn persist_entry(root: &Path, entry: &BlobEntry) -> RuntimeResult<()> {
+    let bytes = serde_json::to_vec(&metadata_from_entry(entry))
+        .map_err(|error| RuntimeError::new("blobMetadataError", error.to_string()))?;
+    let target = metadata_path(root, &entry.upload_id);
+    let temporary = root.join(format!("{}.meta.tmp-{}", entry.upload_id, Uuid::new_v4()));
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&temporary)
+        .map_err(io_error)?;
+    if let Err(error) = file
+        .write_all(&bytes)
+        .and_then(|_| file.sync_all())
+        .and_then(|_| fs::rename(&temporary, &target))
+    {
+        let _ = fs::remove_file(&temporary);
+        return Err(io_error(error));
+    }
+    Ok(())
+}
+
+fn recover_entries(root: &Path) -> RuntimeResult<HashMap<String, BlobEntry>> {
+    let mut entries = HashMap::new();
+    let now = now_ms();
+    for item in fs::read_dir(root).map_err(io_error)? {
+        let path = item.map_err(io_error)?.path();
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if name.contains(".meta.tmp-") {
+            let _ = fs::remove_file(path);
+            continue;
+        }
+        if !name.ends_with(".meta.json") {
+            continue;
+        }
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                let _ = fs::remove_file(path);
+                continue;
+            }
+        };
+        let mut metadata = match serde_json::from_slice::<BlobMetadata>(&bytes) {
+            Ok(metadata) => metadata,
+            Err(_) => {
+                let _ = fs::remove_file(path);
+                continue;
+            }
+        };
+        let blob_path = root.join(format!("{}.blob", metadata.upload_id));
+        if metadata.expires_at_ms <= now
+            || matches!(metadata.state, BlobState::Aborted | BlobState::Consumed)
+            || !blob_path.is_file()
+            || !metadata.content_ref.starts_with("blob:v1:")
+            || validate_purpose(&metadata.purpose).is_err()
+        {
+            let _ = fs::remove_file(&blob_path);
+            let _ = fs::remove_file(&path);
+            continue;
+        }
+        let disk_len = match fs::metadata(&blob_path) {
+            Ok(value) => value.len(),
+            Err(_) => {
+                let _ = fs::remove_file(&path);
+                continue;
+            }
+        };
+        if disk_len < metadata.received {
+            let _ = fs::remove_file(&blob_path);
+            let _ = fs::remove_file(&path);
+            continue;
+        }
+        if disk_len > metadata.received
+            && OpenOptions::new()
+                .write(true)
+                .open(&blob_path)
+                .and_then(|file| file.set_len(metadata.received))
+                .is_err()
+        {
+            let _ = fs::remove_file(&blob_path);
+            let _ = fs::remove_file(&path);
+            continue;
+        }
+        if metadata.state == BlobState::Consuming {
+            metadata.state = BlobState::Sealed;
+        }
+        let entry = BlobEntry {
+            upload_id: metadata.upload_id.clone(),
+            content_ref: metadata.content_ref,
+            owner: metadata.owner,
+            purpose: metadata.purpose,
+            content_type: metadata.content_type,
+            expected_size: metadata.expected_size,
+            expected_sha256: metadata.expected_sha256,
+            chunk_size: metadata.chunk_size.clamp(MIN_CHUNK_BYTES, MAX_CHUNK_BYTES),
+            expires_at_ms: metadata.expires_at_ms,
+            path: blob_path,
+            received: metadata.received,
+            chunks: metadata.chunks,
+            sha256: metadata.sha256,
+            state: metadata.state,
+        };
+        persist_entry(root, &entry)?;
+        entries.insert(entry.upload_id.clone(), entry);
+    }
+
+    for item in fs::read_dir(root).map_err(io_error)? {
+        let path = item.map_err(io_error)?.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("blob") {
+            continue;
+        }
+        let keep = entries.values().any(|entry| entry.path == path);
+        if !keep {
+            let _ = fs::remove_file(path);
+        }
+    }
+    Ok(entries)
+}
+
+fn purge_expired(root: &Path, entries: &mut HashMap<String, BlobEntry>) {
     let now = now_ms();
     entries.retain(|_, entry| {
         let keep = entry.expires_at_ms > now
             && !matches!(entry.state, BlobState::Aborted | BlobState::Consumed);
         if !keep {
             let _ = fs::remove_file(&entry.path);
+            let _ = fs::remove_file(metadata_path(root, &entry.upload_id));
         }
         keep
     });
@@ -766,5 +961,229 @@ mod tests {
             store.status(&ctx, &begin.upload_id).expect("status").state,
             "uploading"
         );
+    }
+
+    #[test]
+    fn task_cleanup_removes_only_matching_owner_bytes() {
+        let directory = tempdir().expect("tempdir");
+        let store = BlobStore::new(directory.path().to_path_buf()).expect("store");
+        let first = context("agent");
+        let mut second = context("agent");
+        second.task_id = Some("other-task".into());
+        let a = store
+            .begin(
+                &first,
+                BlobBeginRequest {
+                    purpose: "fsWriteRaw".into(),
+                    expected_size_bytes: Some(1),
+                    content_type: None,
+                    expected_sha256: None,
+                    chunk_size_bytes: None,
+                    ttl_seconds: None,
+                },
+            )
+            .expect("begin first");
+        let b = store
+            .begin(
+                &second,
+                BlobBeginRequest {
+                    purpose: "fsWriteRaw".into(),
+                    expected_size_bytes: Some(1),
+                    content_type: None,
+                    expected_sha256: None,
+                    chunk_size_bytes: None,
+                    ttl_seconds: None,
+                },
+            )
+            .expect("begin second");
+        assert_eq!(store.cleanup_task("task").expect("cleanup"), 1);
+        assert_eq!(
+            store
+                .status(&first, &a.upload_id)
+                .expect_err("removed")
+                .code,
+            "blobNotFound"
+        );
+        assert_eq!(
+            store.status(&second, &b.upload_id).expect("kept").state,
+            "uploading"
+        );
+    }
+
+    #[test]
+    fn only_one_consumer_can_lease_a_sealed_blob() {
+        let directory = tempdir().expect("tempdir");
+        let store = BlobStore::new(directory.path().to_path_buf()).expect("store");
+        let ctx = context("agent");
+        let bytes = b"abc";
+        let begin = store
+            .begin(
+                &ctx,
+                BlobBeginRequest {
+                    purpose: "fsWriteRaw".into(),
+                    expected_size_bytes: Some(bytes.len() as u64),
+                    content_type: None,
+                    expected_sha256: None,
+                    chunk_size_bytes: None,
+                    ttl_seconds: None,
+                },
+            )
+            .expect("begin");
+        store
+            .write_chunk(
+                &ctx,
+                BlobChunkRequest {
+                    upload_id: begin.upload_id.clone(),
+                    offset: 0,
+                    data_base64: STANDARD.encode(bytes),
+                    chunk_sha256: None,
+                },
+            )
+            .expect("chunk");
+        store
+            .seal(
+                &ctx,
+                BlobSealRequest {
+                    upload_id: begin.upload_id,
+                    final_size_bytes: bytes.len() as u64,
+                    sha256: sha256_hex(bytes),
+                },
+            )
+            .expect("seal");
+        let first = store
+            .lease(&ctx, &begin.content_ref, "fsWriteRaw")
+            .expect("first lease");
+        let error = match store.lease(&ctx, &begin.content_ref, "fsWriteRaw") {
+            Ok(_) => panic!("second lease must conflict"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "blobStateConflict");
+        first.finish(false).expect("release");
+        store
+            .lease(&ctx, &begin.content_ref, "fsWriteRaw")
+            .expect("lease after rollback");
+    }
+
+    #[test]
+    fn upload_metadata_recovers_after_restart_and_resumes() {
+        let directory = tempdir().expect("tempdir");
+        let root = directory.path().to_path_buf();
+        let ctx = context("agent");
+        let begin = {
+            let store = BlobStore::new(root.clone()).expect("store");
+            let begin = store
+                .begin(
+                    &ctx,
+                    BlobBeginRequest {
+                        purpose: "fsWriteRaw".into(),
+                        expected_size_bytes: Some(6),
+                        content_type: None,
+                        expected_sha256: None,
+                        chunk_size_bytes: None,
+                        ttl_seconds: None,
+                    },
+                )
+                .expect("begin");
+            store
+                .write_chunk(
+                    &ctx,
+                    BlobChunkRequest {
+                        upload_id: begin.upload_id.clone(),
+                        offset: 0,
+                        data_base64: STANDARD.encode(b"abc"),
+                        chunk_sha256: None,
+                    },
+                )
+                .expect("first chunk");
+            begin
+        };
+
+        let store = BlobStore::new(root).expect("recovered store");
+        assert_eq!(
+            store
+                .status(&ctx, &begin.upload_id)
+                .expect("recovered status")
+                .next_offset,
+            3
+        );
+        store
+            .write_chunk(
+                &ctx,
+                BlobChunkRequest {
+                    upload_id: begin.upload_id.clone(),
+                    offset: 3,
+                    data_base64: STANDARD.encode(b"def"),
+                    chunk_sha256: None,
+                },
+            )
+            .expect("resumed chunk");
+        store
+            .seal(
+                &ctx,
+                BlobSealRequest {
+                    upload_id: begin.upload_id,
+                    final_size_bytes: 6,
+                    sha256: sha256_hex(b"abcdef"),
+                },
+            )
+            .expect("seal after resume");
+    }
+
+    #[test]
+    fn crash_during_consume_recovers_blob_to_sealed() {
+        let directory = tempdir().expect("tempdir");
+        let root = directory.path().to_path_buf();
+        let ctx = context("agent");
+        let begin = {
+            let store = BlobStore::new(root.clone()).expect("store");
+            let begin = store
+                .begin(
+                    &ctx,
+                    BlobBeginRequest {
+                        purpose: "fsWriteRaw".into(),
+                        expected_size_bytes: Some(3),
+                        content_type: None,
+                        expected_sha256: None,
+                        chunk_size_bytes: None,
+                        ttl_seconds: None,
+                    },
+                )
+                .expect("begin");
+            store
+                .write_chunk(
+                    &ctx,
+                    BlobChunkRequest {
+                        upload_id: begin.upload_id.clone(),
+                        offset: 0,
+                        data_base64: STANDARD.encode(b"abc"),
+                        chunk_sha256: None,
+                    },
+                )
+                .expect("chunk");
+            store
+                .seal(
+                    &ctx,
+                    BlobSealRequest {
+                        upload_id: begin.upload_id.clone(),
+                        final_size_bytes: 3,
+                        sha256: sha256_hex(b"abc"),
+                    },
+                )
+                .expect("seal");
+            let lease = store
+                .lease(&ctx, &begin.content_ref, "fsWriteRaw")
+                .expect("lease");
+            std::mem::forget(lease);
+            begin
+        };
+
+        let store = BlobStore::new(root).expect("recovered store");
+        assert_eq!(
+            store.status(&ctx, &begin.upload_id).expect("status").state,
+            "sealed"
+        );
+        store
+            .lease(&ctx, &begin.content_ref, "fsWriteRaw")
+            .expect("re-lease after crash");
     }
 }

@@ -224,6 +224,12 @@ tool_args!(ProcessArgs { process_id: u32 });
 tool_args!(ArtifactArgs {
     artifact_id: String
 });
+tool_args!(ArtifactCreateArgs {
+    content_ref: String,
+    relative_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    media_type: Option<String>
+});
 tool_args!(ExecutionModeArgs { mode: String });
 tool_args!(ShellResizeArgs {
     session_id: String,
@@ -484,12 +490,39 @@ tool_args!(BatchReadArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     budget: Option<chatcmd_runtime::TextReadBudget>
 });
-tool_args!(WriteTextArgs {
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+enum ForbiddenContentSourceValue {}
+
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(untagged)]
+enum WriteTextSourceArgs {
+    Inline {
+        content: String,
+        #[serde(
+            default,
+            rename = "contentRef",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[schemars(rename = "contentRef")]
+        content_ref: Option<ForbiddenContentSourceValue>,
+    },
+    Reference {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        content: Option<ForbiddenContentSourceValue>,
+        #[serde(rename = "contentRef")]
+        #[schemars(rename = "contentRef")]
+        content_ref: String,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct WriteTextArgs {
+    #[serde(flatten)]
+    common: CommonToolArgs,
     path: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    content: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    content_ref: Option<String>,
+    #[serde(flatten)]
+    source: WriteTextSourceArgs,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     overwrite: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -499,8 +532,8 @@ tool_args!(WriteTextArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     durability: Option<chatcmd_runtime::DurabilityMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    require_atomic: Option<bool>
-});
+    require_atomic: Option<bool>,
+}
 tool_args!(ReplaceTextArgs {
     path: String,
     old_text: String,
@@ -508,16 +541,40 @@ tool_args!(ReplaceTextArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     expected_occurrences: Option<usize>
 });
-tool_args!(ApplyEditsArgs {
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(untagged)]
+enum ApplyEditsSourceArgs {
+    Inline {
+        edits: Vec<chatcmd_runtime::TextEdit>,
+        #[serde(
+            default,
+            rename = "contentRef",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[schemars(rename = "contentRef")]
+        content_ref: Option<ForbiddenContentSourceValue>,
+    },
+    Reference {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        edits: Option<ForbiddenContentSourceValue>,
+        #[serde(rename = "contentRef")]
+        #[schemars(rename = "contentRef")]
+        content_ref: String,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct ApplyEditsArgs {
+    #[serde(flatten)]
+    common: CommonToolArgs,
     path: String,
     expected_version: String,
     coordinate_system: chatcmd_runtime::EditCoordinateSystem,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     column_encoding: Option<chatcmd_runtime::EditColumnEncoding>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    edits: Option<Vec<chatcmd_runtime::TextEdit>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    content_ref: Option<String>,
+    #[serde(flatten)]
+    source: ApplyEditsSourceArgs,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     dry_run: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -525,14 +582,39 @@ tool_args!(ApplyEditsArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     preserve_bom: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    budget: Option<chatcmd_runtime::ApplyEditsBudget>
-});
-tool_args!(WriteRawArgs {
+    budget: Option<chatcmd_runtime::ApplyEditsBudget>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(untagged)]
+enum WriteRawSourceArgs {
+    Inline {
+        base64: String,
+        #[serde(
+            default,
+            rename = "contentRef",
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[schemars(rename = "contentRef")]
+        content_ref: Option<ForbiddenContentSourceValue>,
+    },
+    Reference {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        base64: Option<ForbiddenContentSourceValue>,
+        #[serde(rename = "contentRef")]
+        #[schemars(rename = "contentRef")]
+        content_ref: String,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct WriteRawArgs {
+    #[serde(flatten)]
+    common: CommonToolArgs,
     path: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    base64: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    content_ref: Option<String>,
+    #[serde(flatten)]
+    source: WriteRawSourceArgs,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     overwrite: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -542,8 +624,8 @@ tool_args!(WriteRawArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     durability: Option<chatcmd_runtime::DurabilityMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    require_atomic: Option<bool>
-});
+    require_atomic: Option<bool>,
+}
 tool_args!(BlobBeginArgs {
     purpose: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1053,6 +1135,11 @@ tool_methods!(
         task_artifact_list,
         NoArgs,
         "List task artifacts. Uses taskId correlation from the common fields."
+    ),
+    (
+        task_artifact_create,
+        ArtifactCreateArgs,
+        "Consume a sealed artifact contentRef into an authorized workspace-relative path and register it for the current task. Required contentRef and relativePath; optional mediaType."
     ),
     (
         task_artifact_read,
