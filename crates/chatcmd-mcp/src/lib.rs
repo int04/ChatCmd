@@ -188,6 +188,18 @@ const fn default_true() -> bool {
     true
 }
 
+const fn default_quarantine_retention_seconds() -> u64 {
+    7 * 24 * 60 * 60
+}
+
+const fn default_quarantine_max_total_bytes() -> u64 {
+    10 * 1024 * 1024 * 1024
+}
+
+const fn default_quarantine_max_items() -> u64 {
+    10_000
+}
+
 tool_args!(NoArgs {});
 tool_args!(DeviceGetArgs { device_id: String });
 tool_args!(SessionArgs { session_id: String });
@@ -272,6 +284,23 @@ tool_args!(DeleteArgs {
     dry_run: bool,
     #[serde(default)]
     budget: chatcmd_runtime::FsMutationBudget
+});
+tool_args!(QuarantineRestoreArgs {
+    quarantine_path: String,
+    destination: String,
+    #[serde(default)]
+    replace: bool
+});
+tool_args!(QuarantineGcArgs {
+    path: String,
+    #[serde(default = "default_quarantine_retention_seconds")]
+    retention_seconds: u64,
+    #[serde(default = "default_quarantine_max_total_bytes")]
+    max_total_bytes: u64,
+    #[serde(default = "default_quarantine_max_items")]
+    max_items: u64,
+    #[serde(default)]
+    dry_run: bool
 });
 tool_args!(GitShowArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1064,6 +1093,16 @@ tool_methods!(
         fs_delete,
         DeleteArgs,
         "Delete within canonical workspace scope under policy. Default mode is quarantine; permanent deletion must be explicit. Optional recursive, expectedVersion, dryRun and bounded budget."
+    ),
+    (
+        fs_restore_quarantine,
+        QuarantineRestoreArgs,
+        "Restore a ChatCMD-managed quarantine path to a destination using the same verified staged move safety as fs_move. Required quarantinePath and destination; optional replace."
+    ),
+    (
+        fs_quarantine_gc,
+        QuarantineGcArgs,
+        "Garbage-collect ChatCMD-managed quarantine entries below a workspace directory using retention and total-byte quota limits. Required path; optional retentionSeconds, maxTotalBytes, maxItems and dryRun."
     ),
     (
         git_status,

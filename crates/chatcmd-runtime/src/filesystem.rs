@@ -39,6 +39,19 @@ pub use file_version::FileVersion;
 pub use repository_index::RepositoryIndex;
 pub use search::SearchProgress;
 
+pub trait MutationJournalSink: Send + Sync + std::fmt::Debug {
+    fn upsert_json(&self, journal_json: &str) -> RuntimeResult<()>;
+    fn remove(&self, operation_id: &str) -> RuntimeResult<()>;
+
+    fn list_json(&self) -> RuntimeResult<Vec<String>> {
+        Ok(Vec::new())
+    }
+}
+
+pub trait MutationFaultInjector: Send + Sync + std::fmt::Debug {
+    fn checkpoint(&self, point: &str, files: u64, bytes: u64) -> RuntimeResult<()>;
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PathAccess {
     Read,
@@ -193,6 +206,8 @@ pub struct WorkspaceService {
     version_key: Arc<[u8; 32]>,
     admission: AdmissionController,
     repository_index: Arc<RepositoryIndex>,
+    mutation_journal_sink: Option<Arc<dyn MutationJournalSink>>,
+    mutation_fault_injector: Option<Arc<dyn MutationFaultInjector>>,
 }
 
 impl WorkspaceService {
@@ -225,12 +240,29 @@ impl WorkspaceService {
             version_key: Arc::new(version_key),
             admission: AdmissionController::new(8, 2, 1024 * 1024 * 1024),
             repository_index: Arc::new(RepositoryIndex::default()),
+            mutation_journal_sink: None,
+            mutation_fault_injector: None,
         })
     }
 
     #[must_use]
     pub fn roots(&self) -> &[PathBuf] {
         &self.roots
+    }
+
+    #[must_use]
+    pub fn with_mutation_journal_sink(mut self, sink: Arc<dyn MutationJournalSink>) -> Self {
+        self.mutation_journal_sink = Some(sink);
+        self
+    }
+
+    #[must_use]
+    pub fn with_mutation_fault_injector(
+        mut self,
+        injector: Arc<dyn MutationFaultInjector>,
+    ) -> Self {
+        self.mutation_fault_injector = Some(injector);
+        self
     }
 
     pub fn with_additional_scopes(&self, scopes: &[PathBuf]) -> RuntimeResult<Self> {
@@ -263,6 +295,8 @@ impl WorkspaceService {
             version_key: self.version_key.clone(),
             admission: self.admission.clone(),
             repository_index: self.repository_index.clone(),
+            mutation_journal_sink: self.mutation_journal_sink.clone(),
+            mutation_fault_injector: self.mutation_fault_injector.clone(),
         })
     }
 

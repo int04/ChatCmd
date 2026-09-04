@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted for the local runtime safety baseline. SQLite-backed startup recovery and destructive-scale benchmarks remain follow-up validation items recorded in the checked Plan 12 file.
+Accepted for the local runtime safety baseline. Sidecar and SQLite-backed startup recovery are integrated and covered by deterministic crash tests. Real cross-device/network/removable mounts and some platform-specific metadata semantics remain environment validation items recorded in the checked Plan 12 file.
 
 ## Decision
 
@@ -12,7 +12,9 @@ A move removes its source only after staging verification and destination publis
 
 `fs_delete` defaults to same-filesystem quarantine. Permanent deletion is explicit and walks entries with no-follow metadata checks. Workspace roots and explicit grant roots remain undeletable and unmovable.
 
-Every mutating execution receives a UUID operation ID. Runtime sidecar journals are atomically replaced and synced at phase boundaries. Migration 0015 supplies the normalized SQLite operation journal for host-level recovery. Journal records contain paths, owner identity, state, counters, rollback actions, timestamps, and errors, never file content.
+Every mutating execution receives a UUID operation ID. Runtime sidecar journals are atomically replaced and synced at phase boundaries, then mirrored through a host-provided journal sink into migration 0015's normalized SQLite operation journal before destructive transitions. Startup recovery scans sidecars and also queries durable SQLite rows so a missing sidecar does not leave an orphan operation forever. Successful recovery removes both records; unresolved permanent-delete partial states are retained rather than guessed away. Journal records contain paths, owner identity, state, counters, rollback actions, timestamps, and errors, never file content.
+
+Replacement records intent before renaming the old destination, distinguishes `backingUpDestination`, `destinationBackedUp`, and `publishing`, and can therefore recover safely from crashes between the filesystem rename and the following journal transition. If publish has already happened, recovery keeps the published destination and only cleans operation-owned stage/backup paths. A move interrupted before source cleanup keeps the source rather than attempting speculative deletion during startup recovery. Quarantine recovery never treats retained quarantine data as disposable staging.
 
 ## Guarantees by filesystem
 

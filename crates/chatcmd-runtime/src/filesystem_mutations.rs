@@ -1,8 +1,9 @@
 use super::*;
 use crate::{
     AtomicWriteOptions, AtomicWriteResult, FsConflictPolicy, FsDeleteMode, FsDeleteRequest,
-    FsMutationBudget, FsMutationResult, FsStatBudget, FsStatRequest, FsTransferRequest,
-    FsVerifyMode, VersionStrength,
+    FsMutationBudget, FsMutationResult, FsQuarantineGcRequest, FsQuarantineGcResult,
+    FsQuarantineRestoreRequest, FsStatBudget, FsStatRequest, FsTransferRequest, FsVerifyMode,
+    VersionStrength,
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
@@ -450,6 +451,9 @@ impl WorkspaceService {
             &destination_path,
             &stage,
             &backup,
+            serde_json::to_value(request).unwrap_or(serde_json::Value::Null),
+            self.mutation_journal_sink.clone(),
+            self.mutation_fault_injector.clone(),
         );
         let preflight = tokio::task::spawn_blocking({
             let source = source.clone();
@@ -489,6 +493,7 @@ impl WorkspaceService {
         let worker_request = request.clone();
         let cancellation = context.cancellation.clone();
         let destination_guard = destination.clone();
+        let fault_injector = self.mutation_fault_injector.clone();
         let worker = tokio::task::spawn_blocking(move || {
             journal.phase = "staging".into();
             write_journal(&journal_path, &journal)?;
@@ -501,6 +506,7 @@ impl WorkspaceService {
                 &cancellation,
                 deadline,
                 &mut copied,
+                fault_injector.as_deref(),
             ) {
                 let rollback = remove_checked_best_effort(&stage);
                 journal.phase = if rollback {
@@ -591,11 +597,23 @@ impl WorkspaceService {
             }
             let mut backup_created = false;
             if destination_path.exists() {
-                fs::rename(&destination_path, &backup).map_err(io_error)?;
-                backup_created = true;
+                journal.phase = "backingUpDestination".into();
                 journal.backup_created = true;
                 write_journal(&journal_path, &journal)?;
+                fs::rename(&destination_path, &backup).map_err(io_error)?;
+                backup_created = true;
+                if let Some(injector) = fault_injector.as_deref() {
+                    injector.checkpoint(
+                        "afterBackupRenameBeforeJournal",
+                        copied.files,
+                        copied.bytes,
+                    )?;
+                }
+                journal.phase = "destinationBackedUp".into();
+                write_journal(&journal_path, &journal)?;
             }
+            journal.phase = "publishing".into();
+            write_journal(&journal_path, &journal)?;
             if let Err(error) = fs::rename(&stage, &destination_path) {
                 let mut rollback = remove_checked_best_effort(&stage);
                 if backup_created {
@@ -617,6 +635,9 @@ impl WorkspaceService {
                     rollback,
                     &runtime_error,
                 ));
+            }
+            if let Some(injector) = fault_injector.as_deref() {
+                injector.checkpoint("afterPublishBeforeJournal", copied.files, copied.bytes)?;
             }
             journal.phase = "published".into();
             write_journal(&journal_path, &journal)?;
@@ -642,7 +663,7 @@ impl WorkspaceService {
             }
             journal.phase.clone_from(&state);
             write_journal(&journal_path, &journal)?;
-            let _ = fs::remove_file(&journal_path);
+            remove_journal(&journal_path, &journal)?;
             Ok(FsMutationResult {
                 operation_id,
                 state,
@@ -768,6 +789,9 @@ impl WorkspaceService {
             &quarantine,
             &quarantine,
             &quarantine,
+            serde_json::to_value(request).unwrap_or(serde_json::Value::Null),
+            self.mutation_journal_sink.clone(),
+            self.mutation_fault_injector.clone(),
         );
         write_journal(&journal_path, &journal)?;
         let cancellation = context.cancellation.clone();
@@ -802,7 +826,7 @@ impl WorkspaceService {
                 journal.phase = "completed".into();
                 write_journal(&journal_path, &journal)?;
             }
-            let _ = fs::remove_file(&journal_path);
+            remove_journal(&journal_path, &journal)?;
             Ok(FsMutationResult {
                 operation_id,
                 state: "completed".into(),
@@ -820,6 +844,310 @@ impl WorkspaceService {
             })
         }).await.map_err(join_error)?
     }
+
+    pub async fn restore_quarantine(
+        &self,
+        context: &OperationContext,
+        request: &FsQuarantineRestoreRequest,
+    ) -> RuntimeResult<FsMutationResult> {
+        let quarantine = self.existing_for(&request.quarantine_path, PathAccess::MoveSource)?;
+        let name = quarantine
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        if !name.starts_with(".chatcmd-quarantine-") {
+            return Err(RuntimeError::new(
+                "invalid_quarantine_path",
+                "restore source must be a ChatCMD-managed quarantine path",
+            ));
+        }
+        let transfer = FsTransferRequest {
+            source: quarantine.as_ref().to_path_buf(),
+            destination: request.destination.clone(),
+            conflict_policy: if request.replace {
+                FsConflictPolicy::Replace
+            } else {
+                FsConflictPolicy::Error
+            },
+            atomic_publish: true,
+            verify: FsVerifyMode::Metadata,
+            preserve_metadata: true,
+            follow_symlinks: false,
+            dry_run: false,
+            expected_source_version: None,
+            expected_destination_version: None,
+            budget: FsMutationBudget::default(),
+        };
+        self.move_safe(context, &transfer).await
+    }
+
+    pub async fn quarantine_gc(
+        &self,
+        context: &OperationContext,
+        request: &FsQuarantineGcRequest,
+    ) -> RuntimeResult<FsQuarantineGcResult> {
+        let root = self.existing_for(&request.path, PathAccess::Read)?;
+        self.policy
+            .authorize(&PolicyContext {
+                agent_id: context.agent_id.clone(),
+                tool_name: "fs_quarantine_gc".into(),
+                root: Some(root.root.clone()),
+                destructive: !request.dry_run,
+            })
+            .await?;
+        root.revalidate()?;
+        if !root.is_dir() {
+            return Err(RuntimeError::new(
+                "invalid_path",
+                "quarantine GC path must be a directory",
+            ));
+        }
+        let root_path = root.as_ref().to_path_buf();
+        let retention = Duration::from_secs(request.retention_seconds);
+        let cutoff = SystemTime::now()
+            .checked_sub(retention)
+            .unwrap_or(UNIX_EPOCH);
+        let max_items = request.max_items.min(100_000);
+        let cancellation = context.cancellation.clone();
+        let dry_run = request.dry_run;
+        let max_total_bytes = request.max_total_bytes;
+        tokio::task::spawn_blocking(move || {
+            let mut candidates = Vec::<QuarantineCandidate>::new();
+            let mut stack = vec![root_path];
+            let scan_deadline = Instant::now() + Duration::from_secs(300);
+            while let Some(directory) = stack.pop() {
+                check_checkpoint(&cancellation, scan_deadline)?;
+                for entry in fs::read_dir(&directory).map_err(io_error)? {
+                    let entry = entry.map_err(io_error)?;
+                    let path = entry.path();
+                    let metadata = fs::symlink_metadata(&path).map_err(io_error)?;
+                    reject_reparse_metadata(&metadata)?;
+                    let managed = path
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .is_some_and(|name| name.starts_with(".chatcmd-quarantine-"));
+                    if managed {
+                        if u64::try_from(candidates.len()).unwrap_or(u64::MAX) >= max_items {
+                            return Err(RuntimeError::new(
+                                "budget_exceeded",
+                                "quarantine GC exceeded maxItems",
+                            ));
+                        }
+                        let bytes = tree_size_no_follow(&path)?;
+                        candidates.push(QuarantineCandidate {
+                            path,
+                            bytes,
+                            modified: metadata.modified().unwrap_or(UNIX_EPOCH),
+                        });
+                    } else if metadata.is_dir() {
+                        stack.push(path);
+                    }
+                }
+            }
+            candidates.sort_by_key(|item| item.modified);
+            let total_bytes = candidates
+                .iter()
+                .fold(0_u64, |total, item| total.saturating_add(item.bytes));
+            let mut retained_bytes = total_bytes;
+            let mut removed_items = 0_u64;
+            let mut bytes_removed = 0_u64;
+            let deadline = Instant::now() + Duration::from_secs(300);
+            for candidate in &candidates {
+                let expired = candidate.modified <= cutoff;
+                let over_quota = retained_bytes > max_total_bytes;
+                if !expired && !over_quota {
+                    continue;
+                }
+                if !dry_run {
+                    remove_tree_checked(&candidate.path, true, &cancellation, deadline)?;
+                }
+                removed_items = removed_items.saturating_add(1);
+                bytes_removed = bytes_removed.saturating_add(candidate.bytes);
+                retained_bytes = retained_bytes.saturating_sub(candidate.bytes);
+            }
+            Ok(FsQuarantineGcResult {
+                scanned_items: u64::try_from(candidates.len()).unwrap_or(u64::MAX),
+                removed_items,
+                bytes_removed,
+                retained_bytes,
+                dry_run,
+                warnings: Vec::new(),
+            })
+        })
+        .await
+        .map_err(join_error)?
+    }
+
+    /// Recovers operation-owned staging/backup paths left behind by an interrupted
+    /// filesystem mutation. Sidecar journals are authoritative when present; the
+    /// optional durable sink is also queried so a SQLite row cannot remain orphaned
+    /// indefinitely when its sidecar has already disappeared. Every recorded path
+    /// must remain inside one configured workspace root before recovery touches it.
+    pub async fn recover_interrupted_mutations(&self) -> RuntimeResult<u64> {
+        let roots = self.roots.clone();
+        let sink = self.mutation_journal_sink.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut recovered = 0_u64;
+            let mut seen = std::collections::HashSet::new();
+            for root in &roots {
+                let mut stack = vec![root.clone()];
+                while let Some(directory) = stack.pop() {
+                    let entries = match fs::read_dir(&directory) {
+                        Ok(entries) => entries,
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                        Err(error) => return Err(io_error(error)),
+                    };
+                    for entry in entries {
+                        let entry = entry.map_err(io_error)?;
+                        let path = entry.path();
+                        let metadata = match fs::symlink_metadata(&path) {
+                            Ok(metadata) => metadata,
+                            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                            Err(error) => return Err(io_error(error)),
+                        };
+                        reject_reparse_metadata(&metadata)?;
+                        if metadata.is_dir() {
+                            stack.push(path);
+                            continue;
+                        }
+                        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+                            continue;
+                        };
+                        if !name.starts_with(".chatcmd-operation-") || !name.ends_with(".json") {
+                            continue;
+                        }
+                        let bytes = fs::read(&path).map_err(io_error)?;
+                        let mut journal: MutationJournal =
+                            serde_json::from_slice(&bytes).map_err(|error| {
+                                RuntimeError::new(
+                                    "journal_error",
+                                    format!(
+                                        "invalid recovery journal {}: {error}",
+                                        path.display()
+                                    ),
+                                )
+                            })?;
+                        journal.sink = sink.clone();
+                        if !journal_paths_within_root(&journal, root) {
+                            return Err(RuntimeError::new(
+                                "journal_path_escape",
+                                format!(
+                                    "recovery journal {} references a path outside its workspace root",
+                                    path.display()
+                                ),
+                            ));
+                        }
+                        seen.insert(journal.operation_id.clone());
+                        if recover_mutation_journal(&path, &journal)? {
+                            recovered = recovered.saturating_add(1);
+                        }
+                    }
+                }
+            }
+
+            if let Some(sink) = sink.as_ref() {
+                for journal_json in sink.list_json()? {
+                    let mut journal: MutationJournal =
+                        serde_json::from_str(&journal_json).map_err(|error| {
+                            RuntimeError::new(
+                                "journal_error",
+                                format!("invalid durable recovery journal: {error}"),
+                            )
+                        })?;
+                    if seen.contains(&journal.operation_id) {
+                        continue;
+                    }
+                    let Some(root) = roots
+                        .iter()
+                        .find(|root| journal_paths_within_root(&journal, root))
+                    else {
+                        return Err(RuntimeError::new(
+                            "journal_path_escape",
+                            format!(
+                                "durable recovery journal {} references a path outside configured workspace roots",
+                                journal.operation_id
+                            ),
+                        ));
+                    };
+                    journal.sink = Some(sink.clone());
+                    let journal_parent = if journal.operation_type == "delete" {
+                        journal.source.parent()
+                    } else {
+                        journal.destination.parent()
+                    }
+                    .ok_or_else(|| {
+                        RuntimeError::new(
+                            "journal_error",
+                            format!(
+                                "durable recovery journal {} has no journal parent",
+                                journal.operation_id
+                            ),
+                        )
+                    })?;
+                    let journal_path = journal_parent.join(format!(
+                        ".chatcmd-operation-{}.json",
+                        journal.operation_id
+                    ));
+                    if !journal_path.starts_with(root) {
+                        return Err(RuntimeError::new(
+                            "journal_path_escape",
+                            "durable recovery sidecar path escapes workspace root",
+                        ));
+                    }
+                    if recover_mutation_journal(&journal_path, &journal)? {
+                        recovered = recovered.saturating_add(1);
+                    }
+                }
+            }
+            Ok(recovered)
+        })
+        .await
+        .map_err(join_error)?
+    }
+}
+
+fn recover_mutation_journal(path: &Path, journal: &MutationJournal) -> RuntimeResult<bool> {
+    if journal.operation_type == "delete" {
+        let mode = journal
+            .requested_options
+            .get("mode")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("quarantine");
+        if mode == "quarantine" {
+            let source_exists = journal.source.exists();
+            let quarantine_exists = journal.destination.exists();
+            if source_exists && quarantine_exists {
+                return Ok(false);
+            }
+            remove_journal(path, journal)?;
+            return Ok(true);
+        }
+        if journal.phase == "deleting" && journal.source.exists() {
+            return Ok(false);
+        }
+        remove_journal(path, journal)?;
+        return Ok(true);
+    }
+
+    let published = matches!(
+        journal.phase.as_str(),
+        "published" | "removingSource" | "completed" | "completedWithSourceRemaining"
+    );
+    let mut complete = true;
+    if journal.staging_path.exists() {
+        complete &= remove_checked_best_effort(&journal.staging_path);
+    }
+    if journal.backup_path.exists() {
+        if published || journal.destination.exists() {
+            complete &= remove_checked_best_effort(&journal.backup_path);
+        } else {
+            complete &= fs::rename(&journal.backup_path, &journal.destination).is_ok();
+        }
+    }
+    if complete {
+        remove_journal(path, journal)?;
+    }
+    Ok(complete)
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
@@ -827,6 +1155,13 @@ struct MutationCounts {
     files: u64,
     directories: u64,
     bytes: u64,
+}
+
+#[derive(Debug)]
+struct QuarantineCandidate {
+    path: PathBuf,
+    bytes: u64,
+    modified: SystemTime,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -840,6 +1175,8 @@ struct MutationJournal {
     destination: PathBuf,
     staging_path: PathBuf,
     backup_path: PathBuf,
+    #[serde(default)]
+    requested_options: serde_json::Value,
     phase: String,
     counts: MutationCounts,
     backup_created: bool,
@@ -847,7 +1184,14 @@ struct MutationJournal {
     warnings: Vec<String>,
     error: Option<String>,
     updated_at_unix_ms: u128,
+    #[serde(skip)]
+    sink: Option<std::sync::Arc<MutationJournalSinkDyn>>,
+    #[serde(skip)]
+    fault_injector: Option<std::sync::Arc<MutationFaultInjectorDyn>>,
 }
+
+type MutationJournalSinkDyn = dyn crate::MutationJournalSink;
+type MutationFaultInjectorDyn = dyn crate::MutationFaultInjector;
 
 impl MutationJournal {
     fn new(
@@ -858,6 +1202,9 @@ impl MutationJournal {
         destination: &Path,
         staging_path: &Path,
         backup_path: &Path,
+        requested_options: serde_json::Value,
+        sink: Option<std::sync::Arc<MutationJournalSinkDyn>>,
+        fault_injector: Option<std::sync::Arc<MutationFaultInjectorDyn>>,
     ) -> Self {
         Self {
             operation_id: operation_id.to_owned(),
@@ -868,6 +1215,7 @@ impl MutationJournal {
             destination: destination.to_path_buf(),
             staging_path: staging_path.to_path_buf(),
             backup_path: backup_path.to_path_buf(),
+            requested_options,
             phase: "planned".into(),
             counts: MutationCounts::default(),
             backup_created: false,
@@ -878,8 +1226,21 @@ impl MutationJournal {
             warnings: Vec::new(),
             error: None,
             updated_at_unix_ms: now_unix_ms(),
+            sink,
+            fault_injector,
         }
     }
+}
+
+fn journal_paths_within_root(journal: &MutationJournal, root: &Path) -> bool {
+    [
+        journal.source.as_path(),
+        journal.destination.as_path(),
+        journal.staging_path.as_path(),
+        journal.backup_path.as_path(),
+    ]
+    .into_iter()
+    .all(|path| path.starts_with(root))
 }
 
 fn empty_mutation_result(operation_id: &str, dry_run: bool) -> FsMutationResult {
@@ -995,6 +1356,7 @@ fn copy_tree_checked(
     cancellation: &tokio_util::sync::CancellationToken,
     deadline: Instant,
     counts: &mut MutationCounts,
+    fault_injector: Option<&dyn crate::MutationFaultInjector>,
 ) -> RuntimeResult<()> {
     check_checkpoint(cancellation, deadline)?;
     let before = fs::symlink_metadata(source).map_err(io_error)?;
@@ -1011,6 +1373,7 @@ fn copy_tree_checked(
                 cancellation,
                 deadline,
                 counts,
+                fault_injector,
             )?;
         }
         if request.preserve_metadata {
@@ -1042,6 +1405,9 @@ fn copy_tree_checked(
                 ));
             }
             output.write_all(&buffer[..read]).map_err(io_error)?;
+            if let Some(injector) = fault_injector {
+                injector.checkpoint("copyBytes", counts.files, counts.bytes)?;
+            }
         }
         output.sync_all().map_err(io_error)?;
         if request.preserve_metadata {
@@ -1055,6 +1421,9 @@ fn copy_tree_checked(
             ));
         }
         counts.files = counts.files.saturating_add(1);
+        if let Some(injector) = fault_injector {
+            injector.checkpoint("copyFile", counts.files, counts.bytes)?;
+        }
         if counts.files.saturating_add(counts.directories) > request.budget.max_files {
             return Err(RuntimeError::new(
                 "budget_exceeded",
@@ -1161,6 +1530,23 @@ fn remove_tree_checked(
     }
 }
 
+fn tree_size_no_follow(path: &Path) -> RuntimeResult<u64> {
+    let mut total = 0_u64;
+    let mut stack = vec![path.to_path_buf()];
+    while let Some(current) = stack.pop() {
+        let metadata = fs::symlink_metadata(&current).map_err(io_error)?;
+        reject_reparse_metadata(&metadata)?;
+        if metadata.is_dir() {
+            for entry in fs::read_dir(&current).map_err(io_error)? {
+                stack.push(entry.map_err(io_error)?.path());
+            }
+        } else if metadata.is_file() {
+            total = total.saturating_add(metadata.len());
+        }
+    }
+    Ok(total)
+}
+
 fn remove_checked_best_effort(path: &Path) -> bool {
     if !path.exists() {
         return true;
@@ -1201,7 +1587,27 @@ fn write_journal(path: &Path, journal: &MutationJournal) -> RuntimeResult<()> {
         .map_err(io_error)?;
     file.write_all(&value).map_err(io_error)?;
     file.sync_all().map_err(io_error)?;
-    fs::rename(&temporary, path).map_err(io_error)
+    fs::rename(&temporary, path).map_err(io_error)?;
+    if let Some(sink) = &journal.sink {
+        let json = std::str::from_utf8(&value)
+            .map_err(|error| RuntimeError::new("journal_error", error.to_string()))?;
+        sink.upsert_json(json)?;
+    }
+    if let Some(injector) = &journal.fault_injector {
+        injector.checkpoint(&journal.phase, journal.counts.files, journal.counts.bytes)?;
+    }
+    Ok(())
+}
+
+fn remove_journal(path: &Path, journal: &MutationJournal) -> RuntimeResult<()> {
+    if let Some(sink) = &journal.sink {
+        sink.remove(&journal.operation_id)?;
+    }
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(io_error(error)),
+    }
 }
 
 fn now_unix_ms() -> u128 {

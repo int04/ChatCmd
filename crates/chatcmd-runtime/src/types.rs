@@ -427,6 +427,52 @@ pub struct FsDeleteRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FsQuarantineRestoreRequest {
+    pub quarantine_path: PathBuf,
+    pub destination: PathBuf,
+    #[serde(default)]
+    pub replace: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FsQuarantineGcRequest {
+    pub path: PathBuf,
+    #[serde(default = "default_quarantine_retention_seconds")]
+    pub retention_seconds: u64,
+    #[serde(default = "default_quarantine_max_total_bytes")]
+    pub max_total_bytes: u64,
+    #[serde(default = "default_quarantine_max_items")]
+    pub max_items: u64,
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct FsQuarantineGcResult {
+    pub scanned_items: u64,
+    pub removed_items: u64,
+    pub bytes_removed: u64,
+    pub retained_bytes: u64,
+    pub dry_run: bool,
+    pub warnings: Vec<String>,
+}
+
+const fn default_quarantine_retention_seconds() -> u64 {
+    7 * 24 * 60 * 60
+}
+
+const fn default_quarantine_max_total_bytes() -> u64 {
+    10 * 1024 * 1024 * 1024
+}
+
+const fn default_quarantine_max_items() -> u64 {
+    10_000
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct FsMutationResult {
     pub operation_id: String,

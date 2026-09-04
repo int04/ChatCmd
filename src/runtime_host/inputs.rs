@@ -90,6 +90,23 @@ input!(DeleteInput {
     #[serde(default)]
     budget: FsMutationBudget
 });
+input!(QuarantineRestoreInput {
+    quarantine_path: PathBuf,
+    destination: PathBuf,
+    #[serde(default)]
+    replace: bool
+});
+input!(QuarantineGcInput {
+    path: PathBuf,
+    #[serde(default = "default_quarantine_retention_seconds")]
+    retention_seconds: u64,
+    #[serde(default = "default_quarantine_max_total_bytes")]
+    max_total_bytes: u64,
+    #[serde(default = "default_quarantine_max_items")]
+    max_items: u64,
+    #[serde(default)]
+    dry_run: bool
+});
 input!(GitShow {
     cwd: Option<PathBuf>,
     revision: String,
@@ -173,6 +190,18 @@ pub(super) struct ShellWrite {
 
 const fn default_true() -> bool {
     true
+}
+
+const fn default_quarantine_retention_seconds() -> u64 {
+    7 * 24 * 60 * 60
+}
+
+const fn default_quarantine_max_total_bytes() -> u64 {
+    10 * 1024 * 1024 * 1024
+}
+
+const fn default_quarantine_max_items() -> u64 {
+    10_000
 }
 
 #[derive(Deserialize)]

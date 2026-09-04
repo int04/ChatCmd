@@ -548,12 +548,14 @@ fn extract_paths(tool: &str, arguments: &Value) -> RuntimeResult<Vec<PathBuf>> {
             PathFieldRole::Path
             | PathFieldRole::Source
             | PathFieldRole::Destination
+            | PathFieldRole::QuarantinePath
             | PathFieldRole::WorkingDirectory
             | PathFieldRole::Cwd => {
                 let key = match role {
                     PathFieldRole::Path => "path",
                     PathFieldRole::Source => "source",
                     PathFieldRole::Destination => "destination",
+                    PathFieldRole::QuarantinePath => "quarantinePath",
                     PathFieldRole::WorkingDirectory => "workingDirectory",
                     PathFieldRole::Cwd => "cwd",
                     _ => unreachable!(),

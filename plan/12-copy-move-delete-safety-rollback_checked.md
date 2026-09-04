@@ -237,3 +237,30 @@ Plan 12 đã có mức an toàn cơ sở được kiểm thử, nhưng các hạ
 - Xác thực ACL, timestamp, sparse extent, cấu trúc hard link, rename chỉ thay đổi chữ hoa/thường, tên không phải UTF-8, đường dẫn dài, các writer/mover/deleter chạy đồng thời và TOCTOU do hoán đổi symlink trên mọi OS được hỗ trợ. Các bit quyền đã được bảo toàn; những lớp metadata còn lại được ghi trong ADR 0012 là chỉ hỗ trợ ở mức best-effort.
 
 Các kiểm tra tự động đã hoàn tất trong quá trình triển khai: `cargo fmt --all --check`, `cargo check --workspace`, bộ 7 kiểm thử tích hợp `mutation_safety`, `cargo test -p chatcmd-runtime`, `cargo test -p chatcmd-storage`, `cargo test -p chatcmd-mcp` và `cargo test --workspace`. Mọi kiểm thử đã thực thi đều chạy thành công; các fixture hiệu năng thủ công có từ trước vẫn được bỏ qua.
+
+## RÀ SOÁT 2026-09-04 — CÔNG VIỆC CHƯA HOÀN THIỆN
+
+Trong lượt rà soát này đã bổ sung thêm phần recovery thực tế cho journal sidecar thay vì chỉ để lại recovery record:
+
+- `WorkspaceService::recover_interrupted_mutations()` quét các journal `.chatcmd-operation-*.json` còn sót trong workspace khi ứng dụng khởi động.
+- Recovery chỉ chấp nhận journal mà toàn bộ source/destination/stage/backup nằm trong cùng workspace root; journal cố trỏ ra ngoài root bị từ chối bằng `journal_path_escape` trước khi đụng dữ liệu.
+- Operation chưa publish sẽ dọn staging và khôi phục destination backup nếu cần; operation đã publish sẽ chỉ dọn stage/backup thuộc operation, không tự ý xóa source còn sót.
+- `src/main.rs` gọi recovery ngay sau khi khởi tạo `WorkspaceService` và log số operation được phục hồi.
+- Bổ sung 2 test mới: rollback stage/backup sau crash giả lập và từ chối journal path escape. Bộ `mutation_safety` hiện có 9 test và đều pass.
+
+Các phần dưới đây **vẫn chưa hoàn thiện**, vì cần thay đổi kiến trúc lớn hơn hoặc môi trường/filesystem chuyên dụng; không được coi Plan 12 là `Checkdone` cho tới khi hoàn tất:
+
+1. **SQLite journal transaction-safe chưa được nối vào từng state transition.** Migration `0015_filesystem_operation_journal.sql` đã tồn tại nhưng runtime mutation hiện vẫn ghi sidecar đồng bộ bên trong `spawn_blocking`. Để nối SQLite đúng yêu cầu cần một async journal sink/state-machine boundary hoặc di chuyển state machine ra khỏi blocking worker; không nên chèn gọi SQL ad-hoc vào blocking worker vì dễ phá cancellation/ordering và có nguy cơ deadlock/runtime misuse.
+2. **Quarantine restore + retention/quota GC chưa có tool/flow hoàn chỉnh.** Quarantine hiện an toàn theo same-filesystem rename và trả recovery path, nhưng restore/expiry vẫn thủ công.
+3. **Fault injection đầy đủ từng phase/byte/file chưa có.** Cần deterministic hooks cho `staging`, `verifying`, `readyToPublish`, backup rename, publish, source cleanup, journal write và disk-full simulation để kiểm chứng mọi terminal state/rollback path.
+4. **Benchmark bắt buộc 100.000 file nhỏ và 10 GB sparse/stream chưa được chạy trong lượt này.** Cần máy/volume dành riêng để đo throughput, peak RSS, open-file count, journal growth, progress event count và cancellation latency mà không gây tải phá hủy lên workspace phát triển.
+5. **Cross-device/network/removable filesystem thực tế chưa xác thực.** Cần fixture hoặc mount thật để kiểm tra EXDEV, durability/rename semantics và failure behavior; môi trường hiện tại chỉ xác thực same-filesystem local macOS.
+6. **Artifact chi tiết cho danh sách lỗi lớn và progress throttling riêng cho mutation chưa hoàn thiện.** Result hiện bounded ở mức summary nhưng chưa externalize danh sách lỗi lớn theo từng file.
+7. **Metadata/OS matrix nâng cao vẫn best-effort:** ACL, timestamp, sparse extents, hard-link topology, case-only rename, non-UTF-8 names, path length cực đại và TOCTOU symlink swap cần chạy trên mọi OS/filesystem hỗ trợ.
+
+Validation của lượt rà soát này:
+
+- `cargo fmt --all --check`: pass sau khi format code mới.
+- `cargo test -p chatcmd-runtime --test mutation_safety`: **9/9 pass**.
+- `cargo check --workspace`: pass.
+- `cargo test --workspace`: phần lớn suite pass nhưng một lần dừng ở test Plan 11 `atomic_write::process_kill_before_commit_keeps_old_target_complete` do timing/orphan-temp expectation; rerun riêng test đó ngay sau đó pass. Đây là flake ngoài phạm vi Plan 12, không phát sinh từ thay đổi mutation recovery.

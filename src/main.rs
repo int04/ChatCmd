@@ -11,6 +11,7 @@ mod desktop_tray;
 #[cfg(feature = "embedded-web")]
 mod embedded_web;
 mod log_helper;
+mod mutation_journal_bridge;
 mod runtime_host;
 mod version;
 mod websocket;
@@ -153,6 +154,10 @@ async fn run_server(ready: Option<std::sync::mpsc::Sender<()>>) -> Result<()> {
     seed_catalog(&repository)
         .await
         .context("seed MCP tool catalog")?;
+    let mutation_journal_sink = Arc::new(
+        mutation_journal_bridge::SqliteMutationJournalSink::start(repository.clone())
+            .context("start filesystem journal persistence")?,
+    );
 
     let root = std::env::current_dir()
         .context("resolve current workspace")?
@@ -173,7 +178,18 @@ async fn run_server(ready: Option<std::sync::mpsc::Sender<()>>) -> Result<()> {
         ..RuntimeConfig::default()
     };
     let workspace = WorkspaceService::new(&config.roots, policy_engine.clone())
-        .context("initialize workspace service")?;
+        .context("initialize workspace service")?
+        .with_mutation_journal_sink(mutation_journal_sink);
+    let recovered_mutations = workspace
+        .recover_interrupted_mutations()
+        .await
+        .context("recover interrupted filesystem mutations")?;
+    if recovered_mutations > 0 {
+        info!(
+            recovered_mutations,
+            "Recovered interrupted filesystem mutations"
+        );
+    }
     let blob_root = database_path
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."))

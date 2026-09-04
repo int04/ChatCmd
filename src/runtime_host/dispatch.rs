@@ -594,6 +594,18 @@ impl RuntimeHost {
             "fs_delete" => {
                 filesystem_dispatch::delete(self, workspace, &context, parse(arguments)?).await
             }
+            "fs_restore_quarantine" => {
+                filesystem_dispatch::restore_quarantine(
+                    self,
+                    workspace,
+                    &context,
+                    parse(arguments)?,
+                )
+                .await
+            }
+            "fs_quarantine_gc" => {
+                filesystem_dispatch::quarantine_gc(workspace, &context, parse(arguments)?).await
+            }
             "git_status" => {
                 let input: GitCwdInput = parse(arguments)?;
                 let cwd = self.resolve_git_cwd(&context, input.cwd).await?;

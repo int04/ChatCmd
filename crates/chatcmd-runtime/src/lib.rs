@@ -16,7 +16,9 @@ mod workspace_ignore;
 
 pub use blob_store::*;
 pub use budget::*;
-pub use filesystem::{FileVersion, SearchProgress, WorkspaceService};
+pub use filesystem::{
+    FileVersion, MutationFaultInjector, MutationJournalSink, SearchProgress, WorkspaceService,
+};
 pub use git_service::GitService;
 pub use policy::{
     ApprovalDecision, ExecutionPolicy, PolicyAuthorizer, PolicyContext, PolicyDecision,

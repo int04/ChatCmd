@@ -8,8 +8,9 @@ use std::{
 };
 
 use chatcmd_runtime::{
-    ApplyEditsRequest, FsDeleteRequest, MAX_INLINE_BYTES, OperationContext, RuntimeError,
-    RuntimeResult, SearchProgress, WorkspaceService,
+    ApplyEditsRequest, FsDeleteRequest, FsQuarantineGcRequest, FsQuarantineRestoreRequest,
+    MAX_INLINE_BYTES, OperationContext, RuntimeError, RuntimeResult, SearchProgress,
+    WorkspaceService,
 };
 use serde_json::{Value, json};
 
@@ -17,7 +18,8 @@ use super::turn_file_changes::{FileChangeKind, capture_snapshot};
 use super::{
     RuntimeHost,
     inputs::{
-        ApplyEditsInput, DeleteInput, ReplaceTextInput, SearchInput, WriteRawInput, WriteTextInput,
+        ApplyEditsInput, DeleteInput, QuarantineGcInput, QuarantineRestoreInput, ReplaceTextInput,
+        SearchInput, WriteRawInput, WriteTextInput,
     },
     value,
 };
@@ -31,7 +33,7 @@ pub(super) fn resolve_relative_paths(
     let Some(object) = arguments.as_object_mut() else {
         return Ok(arguments);
     };
-    for key in ["path", "source", "destination"] {
+    for key in ["path", "source", "destination", "quarantinePath"] {
         let Some(raw) = object.get(key).and_then(Value::as_str) else {
             continue;
         };
@@ -463,6 +465,60 @@ pub(super) async fn delete(
         );
     }
     serde_json::to_value(deleted)
+        .map_err(|error| RuntimeError::new("serialization_failed", error.to_string()))
+}
+
+pub(super) async fn restore_quarantine(
+    host: &RuntimeHost,
+    workspace: &WorkspaceService,
+    context: &OperationContext,
+    input: QuarantineRestoreInput,
+) -> RuntimeResult<Value> {
+    let before = capture_snapshot(&input.destination);
+    let result = workspace
+        .restore_quarantine(
+            context,
+            &FsQuarantineRestoreRequest {
+                quarantine_path: input.quarantine_path.clone(),
+                destination: input.destination.clone(),
+                replace: input.replace,
+            },
+        )
+        .await?;
+    if result.destination_published && result.source_removed {
+        host.record_committed_change(
+            context,
+            &input.destination,
+            Some(input.quarantine_path),
+            FileChangeKind::Moved,
+            before,
+            capture_snapshot(&input.destination),
+            None,
+            result.detail_artifact_ref.clone(),
+        );
+    }
+    serde_json::to_value(result)
+        .map_err(|error| RuntimeError::new("serialization_failed", error.to_string()))
+}
+
+pub(super) async fn quarantine_gc(
+    workspace: &WorkspaceService,
+    context: &OperationContext,
+    input: QuarantineGcInput,
+) -> RuntimeResult<Value> {
+    let result = workspace
+        .quarantine_gc(
+            context,
+            &FsQuarantineGcRequest {
+                path: input.path,
+                retention_seconds: input.retention_seconds,
+                max_total_bytes: input.max_total_bytes,
+                max_items: input.max_items,
+                dry_run: input.dry_run,
+            },
+        )
+        .await?;
+    serde_json::to_value(result)
         .map_err(|error| RuntimeError::new("serialization_failed", error.to_string()))
 }
 

@@ -66,6 +66,7 @@ pub enum PathFieldRole {
     RequestPaths,
     Source,
     Destination,
+    QuarantinePath,
     WorkingDirectory,
     Cwd,
 }
@@ -205,7 +206,10 @@ fn capability_flags(name: &str) -> ToolCapabilityFlags {
                 | "fs_move"
                 | "fs_delete"
         ),
-        supports_dry_run: matches!(name, "fs_apply_edits" | "fs_copy" | "fs_move" | "fs_delete"),
+        supports_dry_run: matches!(
+            name,
+            "fs_apply_edits" | "fs_copy" | "fs_move" | "fs_delete" | "fs_quarantine_gc"
+        ),
         supports_expected_version: matches!(
             name,
             "fs_stat"
@@ -251,8 +255,10 @@ fn risk_class(name: &str) -> ToolRiskClass {
         | "shell_write"
         | "shell_resize"
         | "task_artifact_create" => ToolRiskClass::Modify,
-        "fs_copy" | "fs_move" => ToolRiskClass::MoveCopy,
-        "fs_delete" | "process_kill" | "blob_abort" | "shell_close" => ToolRiskClass::Destructive,
+        "fs_copy" | "fs_move" | "fs_restore_quarantine" => ToolRiskClass::MoveCopy,
+        "fs_delete" | "fs_quarantine_gc" | "process_kill" | "blob_abort" | "shell_close" => {
+            ToolRiskClass::Destructive
+        }
         "shell_create" | "shell_wait" | "shell_signal" | "git_status" | "git_diff" | "git_log"
         | "git_branch" | "git_show" | "git_commit" => ToolRiskClass::ProcessExecution,
         "task_set_execution_mode"
@@ -267,10 +273,13 @@ fn risk_class(name: &str) -> ToolRiskClass {
 }
 
 fn path_fields(name: &str) -> Vec<PathFieldRole> {
-    use PathFieldRole::{Cwd, Destination, Path, Paths, RequestPaths, Source, WorkingDirectory};
+    use PathFieldRole::{
+        Cwd, Destination, Path, Paths, QuarantinePath, RequestPaths, Source, WorkingDirectory,
+    };
     match name {
         "fs_batch_stat" | "fs_batch_read" => vec![Paths, RequestPaths],
         "fs_copy" | "fs_move" => vec![Source, Destination],
+        "fs_restore_quarantine" => vec![QuarantinePath, Destination],
         "git_commit" => vec![Cwd, Paths],
         "git_diff" | "git_log" | "git_show" => vec![Cwd, Path],
         "git_status" | "git_branch" => vec![Cwd],
@@ -324,7 +333,13 @@ fn is_mutating(name: &str) -> bool {
         || name.starts_with("fs_create")
         || matches!(
             name,
-            "fs_copy" | "fs_move" | "fs_delete" | "git_commit" | "process_kill"
+            "fs_copy"
+                | "fs_move"
+                | "fs_delete"
+                | "fs_restore_quarantine"
+                | "fs_quarantine_gc"
+                | "git_commit"
+                | "process_kill"
         )
         || name.starts_with("shell_write")
         || name.starts_with("shell_signal")
