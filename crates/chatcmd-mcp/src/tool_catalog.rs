@@ -199,6 +199,10 @@ fn capability_flags(name: &str) -> ToolCapabilityFlags {
         supports_budget: matches!(
             name,
             "fs_stat"
+                | "fs_list_v2"
+                | "fs_read_text_v2"
+                | "fs_batch_read"
+                | "fs_batch_stat"
                 | "fs_find"
                 | "fs_search"
                 | "fs_apply_edits"

@@ -489,7 +489,7 @@ async fn task_detail_page(
         .map(|(_, _, value)| value)
         .collect::<Vec<_>>();
     let subagent_approvals = pending_subagent_approvals(state, id).await?;
-    let approval_grants = sqlx::query("SELECT id,allowed_tools_json,path_scopes_json,max_calls,used_calls,max_files_scanned,used_files_scanned,max_bytes_read,used_bytes_read,expires_at_ms,state FROM approval_grants WHERE task_id=? AND state='active' AND expires_at_ms>? ORDER BY created_at_ms DESC")
+    let approval_grants = sqlx::query("SELECT id,allowed_tools_json,path_scopes_json,max_calls,used_calls,max_files_scanned,used_files_scanned,max_bytes_read,used_bytes_read,expires_at_ms,state,inherited_from,child_attempt FROM approval_grants WHERE task_id=? AND state='active' AND expires_at_ms>? ORDER BY created_at_ms DESC")
         .bind(id).bind(now_ms()).fetch_all(state.repository.pool()).await.map_err(db_problem)?
         .into_iter().map(|row| json!({
             "id": row.get::<String,_>("id"),
@@ -498,7 +498,9 @@ async fn task_detail_page(
             "maxCalls": row.get::<i64,_>("max_calls"), "usedCalls": row.get::<i64,_>("used_calls"),
             "maxFilesScanned": row.get::<Option<i64>,_>("max_files_scanned"), "usedFilesScanned": row.get::<i64,_>("used_files_scanned"),
             "maxBytesRead": row.get::<Option<i64>,_>("max_bytes_read"), "usedBytesRead": row.get::<i64,_>("used_bytes_read"),
-            "expiresAtUtc": iso_ms(row.get::<i64,_>("expires_at_ms")), "state": row.get::<String,_>("state")
+            "expiresAtUtc": iso_ms(row.get::<i64,_>("expires_at_ms")), "state": row.get::<String,_>("state"),
+            "inheritedFrom": row.get::<Option<String>,_>("inherited_from"),
+            "childAttempt": row.get::<Option<i64>,_>("child_attempt")
         })).collect::<Vec<_>>();
     let execution_mode_id = TaskId::new(execution_mode_task_id).map_err(|_| bad_id())?;
     Ok(Json(json!({

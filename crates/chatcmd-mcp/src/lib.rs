@@ -720,9 +720,20 @@ tool_args!(GitLogArgs {
     #[serde(flatten, default)]
     options: chatcmd_runtime::GitRunOptions
 });
+#[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SubagentApprovalGrantArgs {
+    allowed_tools: Vec<String>,
+    path_scopes: Vec<String>,
+    max_calls: u64,
+    max_files_scanned: u64,
+    max_bytes_read: u64,
+}
 tool_args!(SubagentStartArgs {
     name: String,
-    request: String
+    request: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    approval_grant: Option<SubagentApprovalGrantArgs>
 });
 tool_args!(SubagentWaitArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]

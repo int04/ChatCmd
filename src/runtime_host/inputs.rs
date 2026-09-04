@@ -5,7 +5,7 @@ use chatcmd_runtime::{
     FsListBudget, FsListMetadata, FsListSort, FsMutationBudget, FsStatBudget, FsVerifyMode,
     ShellSignal, VersionStrength,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 macro_rules! input {
     ($name:ident { $($(#[$meta:meta])* $field:ident : $ty:ty),* $(,)? }) => {
@@ -630,11 +630,23 @@ mod tests {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(super) struct SubagentApprovalGrantInput {
+    pub(super) allowed_tools: Vec<String>,
+    pub(super) path_scopes: Vec<String>,
+    pub(super) max_calls: u64,
+    pub(super) max_files_scanned: u64,
+    pub(super) max_bytes_read: u64,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(super) struct SubagentStartInput {
     pub(super) name: String,
     pub(super) request: String,
+    #[serde(default)]
+    pub(super) approval_grant: Option<SubagentApprovalGrantInput>,
 }
 
 #[derive(Deserialize)]

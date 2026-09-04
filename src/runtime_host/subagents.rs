@@ -6,6 +6,8 @@ use sqlx::Row as _;
 use tokio::time::{Instant, sleep};
 use uuid::Uuid;
 
+use super::approval::SubagentGrantInheritance;
+use super::inputs::SubagentApprovalGrantInput;
 use super::{RuntimeHost, now_ms};
 
 const SUBAGENT_MARKER_PREFIX: &str = "CMDGPT_SUBAGENT_ID=";
@@ -27,13 +29,24 @@ impl RuntimeHost {
         context: &OperationContext,
         name: &str,
         request: &str,
+        approval_grant: Option<&SubagentApprovalGrantInput>,
     ) -> RuntimeResult<Value> {
         let parent_task_id = required_context_value(context.task_id.as_deref(), "taskId")?;
         let parent_turn_id = required_context_value(context.turn_id.as_deref(), "turnId")?;
         let name = validate_text("name", name, MAX_SUBAGENT_NAME_CHARS)?;
         let request = validate_text("request", request, MAX_SUBAGENT_REQUEST_CHARS)?;
-        let deterministic_id =
-            subagent_id_for_registration(parent_task_id, parent_turn_id, name, request);
+        validate_subagent_approval_request(approval_grant)?;
+        let approval_grant_json = approval_grant
+            .map(serde_json::to_string)
+            .transpose()
+            .map_err(|_| RuntimeError::new("invalid_arguments", "approvalGrant is invalid"))?;
+        let deterministic_id = subagent_id_for_registration(
+            parent_task_id,
+            parent_turn_id,
+            name,
+            request,
+            approval_grant_json.as_deref(),
+        );
         let deterministic_task_id = child_task_id_for_subagent(&deterministic_id);
         let _slot_guard = loop {
             let guard = self.subagent_registration_gate.lock().await;
@@ -54,12 +67,13 @@ impl RuntimeHost {
             .map_err(|_| RuntimeError::new("storage_error", "sub-agent transaction failed"))?;
 
         if let Some(row) = sqlx::query(
-            "SELECT id,child_task_id,status FROM subagent_runs WHERE parent_task_id=? AND parent_turn_id=? AND name=? AND request=? ORDER BY created_at_ms,id LIMIT 1",
+            "SELECT id,child_task_id,status FROM subagent_runs WHERE parent_task_id=? AND parent_turn_id=? AND name=? AND request=? AND requested_approval_grant_json IS ? ORDER BY created_at_ms,id LIMIT 1",
         )
         .bind(parent_task_id)
         .bind(parent_turn_id)
         .bind(name)
         .bind(request)
+        .bind(approval_grant_json.as_deref())
         .fetch_optional(&mut *transaction)
         .await
         .map_err(|_| RuntimeError::new("storage_error", "sub-agent idempotency lookup failed"))?
@@ -90,13 +104,14 @@ impl RuntimeHost {
             .execute(&mut *transaction)
             .await
             .map_err(|_| RuntimeError::new("storage_error", "sub-agent task reservation failed"))?;
-        let inserted = sqlx::query("INSERT INTO subagent_runs(id,parent_task_id,parent_turn_id,child_task_id,name,request,status,created_at_ms,updated_at_ms,max_runtime_ms) VALUES(?,?,?,?,?,?,'pending',?,?,?) ON CONFLICT(id) DO NOTHING")
+        let inserted = sqlx::query("INSERT INTO subagent_runs(id,parent_task_id,parent_turn_id,child_task_id,name,request,requested_approval_grant_json,status,created_at_ms,updated_at_ms,max_runtime_ms) VALUES(?,?,?,?,?,?,?,'pending',?,?,?) ON CONFLICT(id) DO NOTHING")
             .bind(&deterministic_id)
             .bind(parent_task_id)
             .bind(parent_turn_id)
             .bind(&deterministic_task_id)
             .bind(name)
             .bind(request)
+            .bind(approval_grant_json.as_deref())
             .bind(now)
             .bind(now)
             .bind(subagent_max_runtime_ms())
@@ -173,7 +188,7 @@ impl RuntimeHost {
         let Some(subagent_id) = first_user_message.and_then(extract_subagent_id) else {
             return Ok(());
         };
-        let row = sqlx::query("SELECT r.parent_task_id,r.parent_turn_id,r.name,r.child_task_id,r.status AS registered_status,r.fallback_state FROM subagent_runs r JOIN tasks parent ON parent.id=r.parent_task_id WHERE r.id=? AND parent.agent_id=? LIMIT 1")
+        let row = sqlx::query("SELECT r.parent_task_id,r.parent_turn_id,r.name,r.child_task_id,r.status AS registered_status,r.fallback_state,r.requested_approval_grant_json FROM subagent_runs r JOIN tasks parent ON parent.id=r.parent_task_id WHERE r.id=? AND parent.agent_id=? LIMIT 1")
             .bind(&subagent_id)
             .bind(&context.agent_id)
             .fetch_optional(self.repository.pool())
@@ -185,6 +200,17 @@ impl RuntimeHost {
                 "delegated sub-agent marker is invalid or belongs to another agent",
             ));
         };
+        let requested_approval_grant = row
+            .get::<Option<String>, _>("requested_approval_grant_json")
+            .map(|raw| {
+                serde_json::from_str::<SubagentApprovalGrantInput>(&raw).map_err(|_| {
+                    RuntimeError::new(
+                        "storage_error",
+                        "stored sub-agent approval grant request is invalid",
+                    )
+                })
+            })
+            .transpose()?;
         let parent_task_id = row.get::<String, _>("parent_task_id");
         if parent_task_id == child_task_id {
             return Err(RuntimeError::new(
@@ -227,6 +253,9 @@ impl RuntimeHost {
         let fallback_claim = matches!(fallback_state.as_str(), "requested" | "started");
         let now = now_ms();
         let lease_expires_at = now.saturating_add(subagent_lease_ms());
+        let mut transaction = self.repository.pool().begin().await.map_err(|_| {
+            RuntimeError::new("storage_error", "sub-agent claim transaction failed")
+        })?;
         let claimed = sqlx::query("UPDATE subagent_runs SET child_task_id=?,status='running',fallback_state=CASE WHEN fallback_state IN ('requested','started') THEN 'claimed' ELSE fallback_state END,worker_id=?,attempt=attempt+1,lease_acquired_at_ms=?,lease_expires_at_ms=?,last_heartbeat_at_ms=?,started_at_ms=?,terminal_reason=NULL,updated_at_ms=?,completed_at_ms=NULL WHERE id=? AND status='pending' AND (child_task_id IS NULL OR child_task_id=?)")
             .bind(child_task_id)
             .bind(self.subagent_worker_id.as_ref())
@@ -237,10 +266,13 @@ impl RuntimeHost {
             .bind(now)
             .bind(&subagent_id)
             .bind(child_task_id)
-            .execute(self.repository.pool())
+            .execute(&mut *transaction)
             .await
             .map_err(|_| RuntimeError::new("storage_error", "sub-agent claim failed"))?;
         if claimed.rows_affected() != 1 {
+            transaction.rollback().await.map_err(|_| {
+                RuntimeError::new("storage_error", "sub-agent claim rollback failed")
+            })?;
             let current =
                 sqlx::query("SELECT child_task_id,status FROM subagent_runs WHERE id=? LIMIT 1")
                     .bind(&subagent_id)
@@ -265,6 +297,36 @@ impl RuntimeHost {
                 format!("delegated sub-agent is already {current_status}"),
             ));
         }
+        let attempt = sqlx::query_scalar::<_, i64>("SELECT attempt FROM subagent_runs WHERE id=?")
+            .bind(&subagent_id)
+            .fetch_one(&mut *transaction)
+            .await
+            .map_err(|_| RuntimeError::new("storage_error", "sub-agent attempt lookup failed"))?;
+        if let Some(requested_approval_grant) = requested_approval_grant.as_ref()
+            && let Err(error) = self
+                .inherit_subagent_approval_grant(
+                    &mut transaction,
+                    SubagentGrantInheritance {
+                        owner_agent_id: &context.agent_id,
+                        parent_task_id: &parent_task_id,
+                        parent_turn_id: &parent_turn_id,
+                        child_task_id,
+                        child_turn_id: context.turn_id.as_deref(),
+                        child_attempt: attempt,
+                        lease_expires_at_ms: lease_expires_at,
+                    },
+                    requested_approval_grant,
+                )
+                .await
+        {
+            transaction.rollback().await.map_err(|_| {
+                RuntimeError::new("storage_error", "sub-agent claim rollback failed")
+            })?;
+            return Err(error);
+        }
+        transaction.commit().await.map_err(|_| {
+            RuntimeError::new("storage_error", "sub-agent claim transaction commit failed")
+        })?;
         self.publish_subagent_status(
             &parent_task_id,
             &parent_turn_id,
@@ -408,6 +470,12 @@ impl RuntimeHost {
             })?;
             return Ok(current.as_deref() == Some(terminal_status));
         }
+        sqlx::query("UPDATE approval_grants SET state='revoked',updated_at_ms=? WHERE task_id=? AND state='active'")
+            .bind(now)
+            .bind(child_task_id)
+            .execute(self.repository.pool())
+            .await
+            .map_err(|_| RuntimeError::new("storage_error", "child approval grant revoke failed"))?;
         let subagent_id = row.get::<String, _>("id");
         let parent_task_id = row.get::<String, _>("parent_task_id");
         let parent_turn_id = row.get::<String, _>("parent_turn_id");
@@ -483,6 +551,15 @@ impl RuntimeHost {
             .await
             .map_err(|_| RuntimeError::new("storage_error", "sub-agent heartbeat failed"))?
             .rows_affected();
+        if affected == 1 {
+            sqlx::query("UPDATE approval_grants SET expires_at_ms=MIN(COALESCE((SELECT parent.expires_at_ms FROM approval_grants parent WHERE parent.id=approval_grants.inherited_from),expires_at_ms),?),updated_at_ms=? WHERE task_id=? AND state='active' AND inherited_from IS NOT NULL")
+                .bind(lease_expires_at)
+                .bind(now)
+                .bind(child_task_id)
+                .execute(self.repository.pool())
+                .await
+                .map_err(|_| RuntimeError::new("storage_error", "child approval grant heartbeat failed"))?;
+        }
         Ok(affected == 1)
     }
 
@@ -616,6 +693,11 @@ impl RuntimeHost {
             .bind(json!({"reason": reason}).to_string()).bind(now).bind(child_task_id)
             .execute(self.repository.pool()).await
             .map_err(|_| RuntimeError::new("storage_error", "timed-out child approval cleanup failed"))?;
+        sqlx::query("UPDATE approval_grants SET state='revoked',updated_at_ms=? WHERE task_id=? AND state='active'")
+            .bind(now)
+            .bind(child_task_id)
+            .execute(self.repository.pool()).await
+            .map_err(|_| RuntimeError::new("storage_error", "timed-out child grant cleanup failed"))?;
         if let Some(turn_id) = sqlx::query_scalar::<_, String>("SELECT turn_id FROM timeline_events WHERE task_id=? AND turn_id IS NOT NULL ORDER BY created_at_ms DESC,event_id DESC LIMIT 1")
             .bind(child_task_id).fetch_optional(self.repository.pool()).await
             .map_err(|_| RuntimeError::new("storage_error", "timed-out child turn lookup failed"))?
@@ -837,13 +919,44 @@ fn validate_text<'a>(field: &str, value: &'a str, max_chars: usize) -> RuntimeRe
     Ok(value)
 }
 
+fn validate_subagent_approval_request(
+    request: Option<&SubagentApprovalGrantInput>,
+) -> RuntimeResult<()> {
+    let Some(request) = request else {
+        return Ok(());
+    };
+    if request.allowed_tools.is_empty() || request.path_scopes.is_empty() {
+        return Err(RuntimeError::new(
+            "invalid_arguments",
+            "approvalGrant requires non-empty allowedTools and pathScopes",
+        ));
+    }
+    if request.allowed_tools.len() > 64 || request.path_scopes.len() > 64 {
+        return Err(RuntimeError::new(
+            "invalid_arguments",
+            "approvalGrant exceeds the maximum number of tool/path scopes",
+        ));
+    }
+    if request.max_calls == 0 || request.max_files_scanned == 0 || request.max_bytes_read == 0 {
+        return Err(RuntimeError::new(
+            "invalid_arguments",
+            "approvalGrant budgets must all be greater than zero",
+        ));
+    }
+    Ok(())
+}
+
 fn subagent_id_for_registration(
     parent_task_id: &str,
     parent_turn_id: &str,
     name: &str,
     request: &str,
+    approval_grant_json: Option<&str>,
 ) -> String {
-    let material = format!("{parent_task_id}\0{parent_turn_id}\0{name}\0{request}");
+    let material = format!(
+        "{parent_task_id}\0{parent_turn_id}\0{name}\0{request}\0{}",
+        approval_grant_json.unwrap_or_default()
+    );
     format!(
         "subagent-{}",
         Uuid::new_v5(&Uuid::NAMESPACE_OID, material.as_bytes())
@@ -891,14 +1004,24 @@ mod tests {
 
     #[test]
     fn registration_id_is_stable_for_semantic_retry() {
-        let first = subagent_id_for_registration("parent", "turn", "Reader", "Read lib.rs");
+        let first = subagent_id_for_registration("parent", "turn", "Reader", "Read lib.rs", None);
         assert_eq!(
             first,
-            subagent_id_for_registration("parent", "turn", "Reader", "Read lib.rs")
+            subagent_id_for_registration("parent", "turn", "Reader", "Read lib.rs", None)
         );
         assert_ne!(
             first,
-            subagent_id_for_registration("parent", "turn", "Reader", "Read another.rs")
+            subagent_id_for_registration("parent", "turn", "Reader", "Read another.rs", None)
+        );
+        assert_ne!(
+            first,
+            subagent_id_for_registration(
+                "parent",
+                "turn",
+                "Reader",
+                "Read lib.rs",
+                Some("{\"allowedTools\":[\"fs_read_text\"]}")
+            )
         );
     }
 

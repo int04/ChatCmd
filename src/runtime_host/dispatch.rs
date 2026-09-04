@@ -521,7 +521,7 @@ impl RuntimeHost {
                         None,
                         None,
                     );
-                    self.mark_repository_index_stale_for_path(&workspace, &input.path)
+                    self.mark_repository_index_stale_for_path(workspace, &input.path)
                         .await?;
                 }
                 value(entry)
@@ -565,7 +565,7 @@ impl RuntimeHost {
                         None,
                         result.detail_artifact_ref.clone(),
                     );
-                    self.mark_repository_index_stale_for_path(&workspace, &destination)
+                    self.mark_repository_index_stale_for_path(workspace, &destination)
                         .await?;
                 }
                 value(result)
@@ -605,9 +605,9 @@ impl RuntimeHost {
                         None,
                         result.detail_artifact_ref.clone(),
                     );
-                    self.mark_repository_index_stale_for_path(&workspace, &source)
+                    self.mark_repository_index_stale_for_path(workspace, &source)
                         .await?;
-                    self.mark_repository_index_stale_for_path(&workspace, &destination)
+                    self.mark_repository_index_stale_for_path(workspace, &destination)
                         .await?;
                 }
                 value(result)
@@ -787,8 +787,13 @@ impl RuntimeHost {
             }
             "agent_subagent_start" => {
                 let input: SubagentStartInput = parse(arguments)?;
-                self.register_subagent(&context, &input.name, &input.request)
-                    .await
+                self.register_subagent(
+                    &context,
+                    &input.name,
+                    &input.request,
+                    input.approval_grant.as_ref(),
+                )
+                .await
             }
             "agent_subagent_wait" => {
                 let input: SubagentWaitInput = parse(arguments)?;

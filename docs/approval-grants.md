@@ -1,8 +1,12 @@
 # Scoped approval grants
 
-ChatCMD keeps approval decisions bounded to one agent and task. A child task never queries a
-parent grant; delegation therefore cannot widen authority. `inherited_from` is reserved for an
-explicit future intersection flow and is constrained by a foreign key.
+ChatCMD keeps approval decisions bounded to one agent and task. Child tasks receive no approval
+authority implicitly. A parent may explicitly request a child safe-read grant, but the runtime
+creates it only as a bounded intersection of one active parent grant: requested tools must remain
+approval-required safe reads, canonical path scopes must stay inside the parent scopes, and child
+budgets are atomically reserved from the parent's remaining budget. The child grant records
+`inherited_from`, binds the current child attempt, and expires no later than either the parent grant
+or the child lease. Terminal child transitions revoke any remaining active child grants.
 
 ## Risk matrix
 

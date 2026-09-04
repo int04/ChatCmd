@@ -4,14 +4,15 @@ use std::{
 };
 
 use chatcmd_core::{Approval, ApprovalState, SettingsStore as _, TaskId, TaskStore as _};
-use chatcmd_mcp::{PathFieldRole, ToolRiskClass, catalog_hash, tool_capabilities};
+use chatcmd_mcp::{PathFieldRole, TOOL_NAMES, ToolRiskClass, catalog_hash, tool_capabilities};
 use chatcmd_runtime::{OperationContext, RuntimeError, RuntimeResult};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use sqlx::Row as _;
+use sqlx::{Row as _, Sqlite, Transaction};
 use uuid::Uuid;
 
+use super::inputs::SubagentApprovalGrantInput;
 use super::{RuntimeHost, invalid, now_ms, storage_error};
 
 const APPROVAL_TIMEOUT: Duration = Duration::from_secs(120);
@@ -41,6 +42,16 @@ enum GrantPathScopeKind {
 struct GrantCharge {
     files: i64,
     bytes_read: i64,
+}
+
+pub(super) struct SubagentGrantInheritance<'a> {
+    pub owner_agent_id: &'a str,
+    pub parent_task_id: &'a str,
+    pub parent_turn_id: &'a str,
+    pub child_task_id: &'a str,
+    pub child_turn_id: Option<&'a str>,
+    pub child_attempt: i64,
+    pub lease_expires_at_ms: i64,
 }
 
 impl RuntimeHost {
@@ -250,8 +261,17 @@ impl RuntimeHost {
         tool: &str,
     ) -> RuntimeResult<Value> {
         let scopes = self.approval_path_scopes(context).await?;
+        let allowed_tools = TOOL_NAMES
+            .iter()
+            .filter(|name| {
+                let capabilities = tool_capabilities(name);
+                capabilities.approval_required && capabilities.risk_class.is_safe_read()
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        debug_assert!(allowed_tools.iter().any(|name| name == tool));
         Ok(json!({
-            "allowedTools": [tool], "pathScopes": scopes, "maxCalls": SAFE_READ_MAX_CALLS,
+            "allowedTools": allowed_tools, "pathScopes": scopes, "maxCalls": SAFE_READ_MAX_CALLS,
             "maxFilesScanned": SAFE_READ_MAX_FILES, "maxBytesRead": SAFE_READ_MAX_BYTES,
             "expiresAtMs": now_ms().saturating_add(SAFE_READ_GRANT_TTL_MS),
             "optionConstraints": {"includeIgnored": false, "includeHidden": false}
@@ -332,6 +352,19 @@ impl RuntimeHost {
             if !tools.iter().any(|value| value == tool) {
                 continue;
             }
+            let option_constraints = row.get::<String, _>("option_constraints_json");
+            if !option_constraints_match(arguments, &option_constraints) {
+                record_grant_denial(
+                    self.repository.pool(),
+                    &row.get::<String, _>("id"),
+                    task_id,
+                    tool,
+                    paths.len(),
+                    "option constraints mismatch",
+                )
+                .await?;
+                continue;
+            }
             let scopes: Vec<GrantPathScope> =
                 serde_json::from_str(&row.get::<String, _>("path_scopes_json")).unwrap_or_default();
             if paths.iter().any(|path| !path_allowed(path, &scopes)) {
@@ -378,6 +411,196 @@ impl RuntimeHost {
         Ok(false)
     }
 
+    pub(super) async fn inherit_subagent_approval_grant(
+        &self,
+        transaction: &mut Transaction<'_, Sqlite>,
+        inheritance: SubagentGrantInheritance<'_>,
+        request: &SubagentApprovalGrantInput,
+    ) -> RuntimeResult<String> {
+        let SubagentGrantInheritance {
+            owner_agent_id,
+            parent_task_id,
+            parent_turn_id,
+            child_task_id,
+            child_turn_id,
+            child_attempt,
+            lease_expires_at_ms,
+        } = inheritance;
+        let max_calls = i64::try_from(request.max_calls).map_err(|_| {
+            RuntimeError::new("invalid_arguments", "approvalGrant maxCalls is too large")
+        })?;
+        let max_files_scanned = i64::try_from(request.max_files_scanned).map_err(|_| {
+            RuntimeError::new(
+                "invalid_arguments",
+                "approvalGrant maxFilesScanned is too large",
+            )
+        })?;
+        let max_bytes_read = i64::try_from(request.max_bytes_read).map_err(|_| {
+            RuntimeError::new(
+                "invalid_arguments",
+                "approvalGrant maxBytesRead is too large",
+            )
+        })?;
+        let mut requested_tools = request.allowed_tools.clone();
+        requested_tools.sort();
+        requested_tools.dedup();
+        if requested_tools.len() != request.allowed_tools.len()
+            || requested_tools.iter().any(|tool| {
+                let capabilities = tool_capabilities(tool);
+                !capabilities.approval_required || !capabilities.risk_class.is_safe_read()
+            })
+        {
+            return Err(RuntimeError::new(
+                "approval_grant_inheritance_denied",
+                "child approval grants may contain only distinct approval-required safe-read tools",
+            ));
+        }
+        let mut requested_scopes = Vec::with_capacity(request.path_scopes.len());
+        for path in &request.path_scopes {
+            let canonical = std::fs::canonicalize(path).map_err(|_| {
+                RuntimeError::new(
+                    "approval_grant_inheritance_denied",
+                    "child approval grant path does not exist",
+                )
+            })?;
+            let kind = if canonical.is_dir() {
+                GrantPathScopeKind::Subtree
+            } else {
+                GrantPathScopeKind::Exact
+            };
+            requested_scopes.push(GrantPathScope {
+                path: normalized_path(&canonical),
+                kind,
+                identity: path_identity(&canonical),
+            });
+        }
+        requested_scopes.sort_by(|left, right| left.path.cmp(&right.path));
+        requested_scopes.dedup_by(|left, right| left.path == right.path);
+        if requested_scopes.len() != request.path_scopes.len() {
+            return Err(RuntimeError::new(
+                "approval_grant_inheritance_denied",
+                "child approval grant path scopes must be distinct after canonicalization",
+            ));
+        }
+
+        let now = now_ms();
+        let rows = sqlx::query("SELECT id,allowed_tools_json,path_scopes_json,option_constraints_json,max_calls,used_calls,max_files_scanned,used_files_scanned,max_bytes_read,used_bytes_read,expires_at_ms FROM approval_grants WHERE owner_agent_id=? AND task_id=? AND state='active' AND expires_at_ms>? AND catalog_hash=? AND (turn_id IS NULL OR turn_id=?) ORDER BY created_at_ms DESC,id")
+        .bind(owner_agent_id)
+        .bind(parent_task_id)
+        .bind(now)
+        .bind(catalog_hash())
+        .bind(parent_turn_id)
+        .fetch_all(&mut **transaction)
+        .await
+        .map_err(|_| RuntimeError::new("storage_error", "parent approval grant lookup failed"))?;
+        for row in rows {
+            let parent_tools: Vec<String> =
+                serde_json::from_str(&row.get::<String, _>("allowed_tools_json"))
+                    .unwrap_or_default();
+            if requested_tools
+                .iter()
+                .any(|tool| !parent_tools.iter().any(|parent| parent == tool))
+            {
+                continue;
+            }
+            let parent_scopes: Vec<GrantPathScope> =
+                serde_json::from_str(&row.get::<String, _>("path_scopes_json")).unwrap_or_default();
+            if requested_scopes.iter().any(|scope| {
+                let requested = Path::new(&scope.path);
+                !path_allowed(requested, &parent_scopes)
+            }) {
+                continue;
+            }
+            let parent_id = row.get::<String, _>("id");
+            let parent_expires_at = row.get::<i64, _>("expires_at_ms");
+            let child_expires_at = parent_expires_at.min(lease_expires_at_ms);
+            if child_expires_at <= now {
+                continue;
+            }
+            let affected = sqlx::query("UPDATE approval_grants SET used_calls=used_calls+?,used_files_scanned=used_files_scanned+?,used_bytes_read=used_bytes_read+?,updated_at_ms=?,state=CASE WHEN used_calls+?>=max_calls THEN 'exhausted' ELSE state END WHERE id=? AND state='active' AND expires_at_ms>? AND catalog_hash=? AND used_calls+?<=max_calls AND (max_files_scanned IS NULL OR used_files_scanned+?<=max_files_scanned) AND (max_bytes_read IS NULL OR used_bytes_read+?<=max_bytes_read)")
+            .bind(max_calls)
+            .bind(max_files_scanned)
+            .bind(max_bytes_read)
+            .bind(now)
+            .bind(max_calls)
+            .bind(&parent_id)
+            .bind(now)
+            .bind(catalog_hash())
+            .bind(max_calls)
+            .bind(max_files_scanned)
+            .bind(max_bytes_read)
+            .execute(&mut **transaction)
+            .await
+            .map_err(|_| RuntimeError::new("storage_error", "parent approval grant reservation failed"))?
+            .rows_affected();
+            if affected != 1 {
+                continue;
+            }
+            let child_grant_id = Uuid::new_v4().to_string();
+            let allowed_tools_json = serde_json::to_string(&requested_tools).map_err(|_| {
+                RuntimeError::new("storage_error", "child approval tool serialization failed")
+            })?;
+            let path_scopes_json = serde_json::to_string(&requested_scopes).map_err(|_| {
+                RuntimeError::new("storage_error", "child approval path serialization failed")
+            })?;
+            let option_constraints_json = row.get::<String, _>("option_constraints_json");
+            sqlx::query("UPDATE approval_grants SET state='revoked',updated_at_ms=? WHERE task_id=? AND state='active' AND child_attempt IS NOT ?")
+            .bind(now)
+            .bind(child_task_id)
+            .bind(child_attempt)
+            .execute(&mut **transaction)
+            .await
+            .map_err(|_| RuntimeError::new("storage_error", "stale child approval grant revoke failed"))?;
+            sqlx::query("INSERT INTO approval_grants(id,owner_agent_id,task_id,turn_id,child_attempt,allowed_tools_json,path_scopes_json,option_constraints_json,max_calls,max_files_scanned,max_bytes_read,max_bytes_written,expires_at_ms,inherited_from,catalog_hash,state,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,NULL,?,?,?,'active',?,?)")
+            .bind(&child_grant_id)
+            .bind(owner_agent_id)
+            .bind(child_task_id)
+            .bind(child_turn_id)
+            .bind(child_attempt)
+            .bind(&allowed_tools_json)
+            .bind(&path_scopes_json)
+            .bind(&option_constraints_json)
+            .bind(max_calls)
+            .bind(max_files_scanned)
+            .bind(max_bytes_read)
+            .bind(child_expires_at)
+            .bind(&parent_id)
+            .bind(catalog_hash())
+            .bind(now)
+            .bind(now)
+            .execute(&mut **transaction)
+            .await
+            .map_err(|_| RuntimeError::new("storage_error", "child approval grant creation failed"))?;
+            sqlx::query("INSERT INTO approval_grant_audit(id,grant_id,task_id,event,calls,files_scanned,bytes_read,reason,created_at_ms) VALUES(?,?,?,'used',?,?,?, ?,?)")
+            .bind(Uuid::new_v4().to_string())
+            .bind(&parent_id)
+            .bind(parent_task_id)
+            .bind(max_calls)
+            .bind(max_files_scanned)
+            .bind(max_bytes_read)
+            .bind(format!("reserved for inherited child grant {child_grant_id}"))
+            .bind(now)
+            .execute(&mut **transaction)
+            .await
+            .map_err(|_| RuntimeError::new("storage_error", "parent approval grant reservation audit failed"))?;
+            sqlx::query("INSERT INTO approval_grant_audit(id,grant_id,task_id,event,path_count,reason,created_at_ms) VALUES(?,?,?,'created',?,?,?)")
+            .bind(Uuid::new_v4().to_string())
+            .bind(&child_grant_id)
+            .bind(child_task_id)
+            .bind(i64::try_from(requested_scopes.len()).unwrap_or(i64::MAX))
+            .bind(format!("inherited from parent grant {parent_id}"))
+            .bind(now)
+            .execute(&mut **transaction)
+            .await
+            .map_err(|_| RuntimeError::new("storage_error", "child approval grant audit failed"))?;
+            return Ok(child_grant_id);
+        }
+        Err(RuntimeError::new(
+            "approval_grant_inheritance_denied",
+            "requested child approval grant is not a bounded intersection of an active parent grant",
+        ))
+    }
+
     async fn wait_for_approval(
         &self,
         context: &OperationContext,
@@ -385,6 +608,7 @@ impl RuntimeHost {
         approval_id: &str,
     ) -> RuntimeResult<()> {
         let deadline = Instant::now() + APPROVAL_TIMEOUT;
+
         loop {
             let row = sqlx::query(
                 "SELECT state,decision_json FROM approvals WHERE id=? AND task_id=? LIMIT 1",
@@ -468,10 +692,59 @@ impl RuntimeHost {
 }
 
 fn operation_digest(tool: &str, arguments: &Value) -> String {
+    let canonical_arguments = canonical_json(arguments);
     format!(
         "sha256:{:x}",
-        Sha256::digest(format!("{tool}\n{arguments}").as_bytes())
+        Sha256::digest(format!("{tool}\n{canonical_arguments}").as_bytes())
     )
+}
+
+fn canonical_json(value: &Value) -> String {
+    match value {
+        Value::Null => "null".to_owned(),
+        Value::Bool(value) => value.to_string(),
+        Value::Number(value) => value.to_string(),
+        Value::String(value) => serde_json::to_string(value).expect("JSON string serialization"),
+        Value::Array(values) => format!(
+            "[{}]",
+            values
+                .iter()
+                .map(canonical_json)
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        Value::Object(values) => {
+            let mut entries = values.iter().collect::<Vec<_>>();
+            entries.sort_by(|left, right| left.0.cmp(right.0));
+            format!(
+                "{{{}}}",
+                entries
+                    .into_iter()
+                    .map(|(key, value)| format!(
+                        "{}:{}",
+                        serde_json::to_string(key).expect("JSON object key serialization"),
+                        canonical_json(value)
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            )
+        }
+    }
+}
+
+fn option_constraints_match(arguments: &Value, raw_constraints: &str) -> bool {
+    let Ok(Value::Object(constraints)) = serde_json::from_str::<Value>(raw_constraints) else {
+        return false;
+    };
+    constraints
+        .iter()
+        .all(|(key, expected)| match key.as_str() {
+            "includeIgnored" | "includeHidden" => {
+                let actual = arguments.get(key).cloned().unwrap_or(Value::Bool(false));
+                actual == *expected
+            }
+            _ => false,
+        })
 }
 
 fn approval_summary(tool: &str, risk: ToolRiskClass, arguments: &Value) -> Value {
@@ -516,28 +789,35 @@ fn content_bytes_estimate(arguments: &Value) -> usize {
         })
 }
 
+fn nonnegative_i64(value: &Value) -> Option<i64> {
+    value
+        .as_u64()
+        .map(|value| i64::try_from(value).unwrap_or(i64::MAX))
+        .or_else(|| value.as_i64().map(|value| value.max(0)))
+}
+
 fn requested_charge(tool: &str, arguments: &Value) -> GrantCharge {
     let budget = arguments.get("budget").unwrap_or(&Value::Null);
     let files = budget
         .get("maxFiles")
         .or_else(|| budget.get("maxFilesScanned"))
-        .and_then(Value::as_i64)
+        .or_else(|| budget.get("maxEntriesScanned"))
+        .and_then(nonnegative_i64)
+        .or_else(|| arguments.get("maxItems").and_then(nonnegative_i64))
         .unwrap_or(if matches!(tool, "fs_search" | "fs_find") {
             10_000
         } else {
             1
-        })
-        .clamp(0, SAFE_READ_MAX_FILES);
+        });
     let bytes_read = budget
         .get("maxBytesRead")
-        .and_then(Value::as_i64)
-        .or_else(|| arguments.get("maxBytes").and_then(Value::as_i64))
+        .and_then(nonnegative_i64)
+        .or_else(|| arguments.get("maxBytes").and_then(nonnegative_i64))
         .unwrap_or(if matches!(tool, "fs_search" | "fs_find") {
             64 * 1024 * 1024
         } else {
             1024 * 1024
-        })
-        .clamp(0, SAFE_READ_MAX_BYTES);
+        });
     GrantCharge { files, bytes_read }
 }
 
@@ -740,5 +1020,79 @@ mod tests {
         assert!(tool_capabilities("fs_search").risk_class.is_safe_read());
         assert!(!tool_capabilities("fs_delete").risk_class.is_safe_read());
         assert!(!tool_capabilities("git_status").risk_class.is_safe_read());
+    }
+
+    #[test]
+    fn reusable_safe_read_grant_covers_read_family_only() {
+        let tools = TOOL_NAMES
+            .iter()
+            .filter(|name| {
+                let capabilities = tool_capabilities(name);
+                capabilities.approval_required && capabilities.risk_class.is_safe_read()
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        assert!(tools.iter().any(|name| name == "fs_stat"));
+        assert!(tools.iter().any(|name| name == "fs_read_text"));
+        assert!(tools.iter().any(|name| name == "fs_search"));
+        assert!(!tools.iter().any(|name| name == "fs_write_text"));
+        assert!(!tools.iter().any(|name| name == "git_status"));
+    }
+
+    #[test]
+    fn requested_charge_never_clips_explicit_budget_to_grant_cap() {
+        let arguments = json!({
+            "budget": {
+                "maxFilesScanned": SAFE_READ_MAX_FILES + 1,
+                "maxBytesRead": SAFE_READ_MAX_BYTES + 1
+            }
+        });
+        let charge = requested_charge("fs_search", &arguments);
+        assert_eq!(charge.files, SAFE_READ_MAX_FILES + 1);
+        assert_eq!(charge.bytes_read, SAFE_READ_MAX_BYTES + 1);
+
+        let batch = requested_charge("fs_batch_read", &json!({"maxItems": 500}));
+        assert_eq!(batch.files, 500);
+    }
+
+    #[test]
+    fn operation_digest_is_canonical_for_object_key_order() {
+        let first = serde_json::from_str::<Value>(
+            r#"{"path":"src","budget":{"maxBytesRead":4096,"timeoutMs":10}}"#,
+        )
+        .expect("first JSON");
+        let second = serde_json::from_str::<Value>(
+            r#"{"budget":{"timeoutMs":10,"maxBytesRead":4096},"path":"src"}"#,
+        )
+        .expect("second JSON");
+        assert_eq!(
+            operation_digest("fs_read_text", &first),
+            operation_digest("fs_read_text", &second)
+        );
+        assert_ne!(
+            operation_digest("fs_read_text", &first),
+            operation_digest(
+                "fs_read_text",
+                &json!({"path":"other","budget":{"maxBytesRead":4096,"timeoutMs":10}})
+            )
+        );
+    }
+
+    #[test]
+    fn option_constraints_fail_closed_and_match_safe_defaults() {
+        let constraints = r#"{"includeIgnored":false,"includeHidden":false}"#;
+        assert!(option_constraints_match(&json!({}), constraints));
+        assert!(option_constraints_match(
+            &json!({"includeIgnored":false,"includeHidden":false}),
+            constraints
+        ));
+        assert!(!option_constraints_match(
+            &json!({"includeIgnored":true}),
+            constraints
+        ));
+        assert!(!option_constraints_match(
+            &json!({}),
+            r#"{"futureConstraint":false}"#
+        ));
     }
 }
