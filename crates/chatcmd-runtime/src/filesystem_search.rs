@@ -16,7 +16,7 @@ use crate::{
     TruncationReason,
 };
 use globset::GlobSet;
-use ignore::{DirEntry, Walk};
+use ignore::Walk;
 use regex::Regex;
 use std::{
     collections::{HashMap, VecDeque},
@@ -24,7 +24,7 @@ use std::{
     io::{BufRead, BufReader},
     path::PathBuf,
     sync::Mutex,
-    time::{Duration, Instant},
+    time::{Duration, Instant, UNIX_EPOCH},
 };
 use uuid::Uuid;
 
@@ -61,10 +61,27 @@ pub(super) struct SearchState {
     pub(super) root_version: String,
     pub(super) owner: String,
     pub(super) request_fingerprint: String,
-    pub(super) walker: Walk,
-    pub(super) pending_entry: Option<DirEntry>,
+    pub(super) source: SearchSource,
+    pub(super) pending_entry: Option<SearchCandidate>,
+    pub(super) index_generation: Option<u64>,
+    pub(super) index_freshness: crate::IndexFreshness,
+    pub(super) stale_entries_detected: u64,
     current_file: Option<FileScanState>,
     pub(super) expires_at: Instant,
+}
+
+pub(super) enum SearchSource {
+    Direct(Box<Walk>),
+    Indexed {
+        entries: Vec<super::repository_index::IndexedPathCandidate>,
+        position: usize,
+    },
+}
+
+#[derive(Clone)]
+pub(super) struct SearchCandidate {
+    pub(super) path: PathBuf,
+    pub(super) indexed: Option<super::repository_index::IndexedPathCandidate>,
 }
 
 struct FileScanState {
@@ -131,6 +148,7 @@ impl WorkspaceService {
         );
         let owner = owner_key(context);
         let store = self.search_states.clone();
+        let service = self.clone();
         let state_id = state_id.map(str::to_owned);
         let expected_root_version = expected_root_version.map(str::to_owned);
 
@@ -143,6 +161,7 @@ impl WorkspaceService {
                 RuntimeError::new("search_state_poisoned", "search state lock is poisoned")
             })?;
             cleanup_expired(&mut states);
+            let continuing = state_id.is_some();
             let (id, mut state) = if let Some(id) = state_id {
                 let state = states.remove(&id).ok_or_else(|| {
                     RuntimeError::new(
@@ -158,18 +177,54 @@ impl WorkspaceService {
                     &fingerprint,
                     expected_root_version.as_deref(),
                 )?;
+                if let Some(expected_generation) = state.index_generation {
+                    let status = service.index_status(&root)?;
+                    if !status.available
+                        || status.freshness != crate::IndexFreshness::Fresh
+                        || status.generation != expected_generation
+                    {
+                        return Err(RuntimeError::new(
+                            "cursor_stale",
+                            "repository index generation changed after cursor issuance; restart search",
+                        ));
+                    }
+                }
                 (id, state)
             } else {
-                let walker = configured_walker(
-                    &root,
-                    &TraversalOptions {
-                        include_hidden: true,
-                        include_ignored: request.include_ignored,
-                        exclude: request.exclude.clone(),
-                        ..TraversalOptions::default()
-                    },
-                )?
-                .build();
+                let indexed = if !request.include_ignored && request.exclude.is_empty() {
+                    service.fresh_index_candidates_where(&root, |path, entry_type| {
+                        entry_type == "file"
+                            && include_matches(&root, path, compiled.includes.as_ref())
+                    })?
+                } else {
+                    None
+                };
+                let (source, index_generation, index_freshness) = if let Some(indexed) = indexed {
+                    (
+                        SearchSource::Indexed {
+                            entries: indexed.entries,
+                            position: 0,
+                        },
+                        Some(indexed.generation),
+                        indexed.freshness,
+                    )
+                } else {
+                    let walker = configured_walker(
+                        &root,
+                        &TraversalOptions {
+                            include_hidden: true,
+                            include_ignored: request.include_ignored,
+                            exclude: request.exclude.clone(),
+                            ..TraversalOptions::default()
+                        },
+                    )?
+                    .build();
+                    (
+                        SearchSource::Direct(Box::new(walker)),
+                        None,
+                        crate::IndexFreshness::Unknown,
+                    )
+                };
                 (
                     Uuid::new_v4().to_string(),
                     SearchState {
@@ -177,8 +232,11 @@ impl WorkspaceService {
                         root_version: version.clone(),
                         owner,
                         request_fingerprint: fingerprint,
-                        walker,
+                        source,
                         pending_entry: None,
+                        index_generation,
+                        index_freshness,
+                        stale_entries_detected: 0,
                         current_file: None,
                         expires_at: Instant::now() + SEARCH_STATE_TTL,
                     },
@@ -186,7 +244,33 @@ impl WorkspaceService {
             };
             drop(states);
 
-            let page = scan_page(&mut state, &request, &compiled, &tracker, &progress)?;
+            let page = match scan_page(&mut state, &request, &compiled, &tracker, &progress) {
+                Ok(page) => page,
+                Err(error) if error.code == "index_stale_detected" => {
+                    service.mark_index_stale(&root);
+                    if continuing {
+                        return Err(RuntimeError::new(
+                            "cursor_stale",
+                            "repository index changed after cursor issuance; restart search",
+                        ));
+                    }
+                    let walker = configured_walker(
+                        &root,
+                        &TraversalOptions {
+                            include_hidden: true,
+                            include_ignored: request.include_ignored,
+                            exclude: request.exclude.clone(),
+                            ..TraversalOptions::default()
+                        },
+                    )?
+                    .build();
+                    state.source = SearchSource::Direct(Box::new(walker));
+                    state.pending_entry = None;
+                    state.index_freshness = crate::IndexFreshness::Stale;
+                    scan_page(&mut state, &request, &compiled, &tracker, &progress)?
+                }
+                Err(error) => return Err(error),
+            };
             if page.has_more {
                 state.expires_at = Instant::now() + SEARCH_STATE_TTL;
                 let mut states = store.states.lock().map_err(|_| {
@@ -205,6 +289,31 @@ impl WorkspaceService {
         .await
         .map_err(super::join_error)?
     }
+}
+
+fn indexed_candidate_matches_live(
+    candidate: &super::repository_index::IndexedPathCandidate,
+) -> RuntimeResult<bool> {
+    let metadata = match std::fs::symlink_metadata(&candidate.path) {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(super::io_error(error)),
+    };
+    let modified_at_ns = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |value| value.as_nanos());
+    let entry_type = if metadata.file_type().is_symlink() {
+        "symlink"
+    } else if metadata.is_dir() {
+        "directory"
+    } else {
+        "file"
+    };
+    Ok(metadata.len() == candidate.size
+        && modified_at_ns == candidate.modified_at_ns
+        && entry_type == candidate.entry_type)
 }
 
 fn scan_page(
@@ -281,10 +390,19 @@ fn scan_page(
             let Some(entry) = next_file_entry(state, &mut warnings)? else {
                 break;
             };
-            if !include_matches(&state.root, &entry, compiled.includes.as_ref()) {
+            if let Some(indexed) = entry.indexed.as_ref()
+                && !indexed_candidate_matches_live(indexed)?
+            {
+                state.stale_entries_detected = state.stale_entries_detected.saturating_add(1);
+                return Err(RuntimeError::new(
+                    "index_stale_detected",
+                    "repository index changed during search; retry with direct traversal",
+                ));
+            }
+            if !include_matches(&state.root, &entry.path, compiled.includes.as_ref()) {
                 continue;
             }
-            let metadata = match entry.metadata() {
+            let metadata = match std::fs::symlink_metadata(&entry.path) {
                 Ok(value) => value,
                 Err(error) => {
                     errors_skipped += 1;
@@ -300,12 +418,12 @@ fn scan_page(
                 files_skipped_by_size += 1;
                 continue;
             }
-            match open_text_file(entry.path()) {
+            match open_text_file(&entry.path) {
                 Ok(Some(file)) => {
                     files_scanned += 1;
                     tracker.record_files(1);
                     state.current_file = Some(FileScanState {
-                        path: entry.path().to_path_buf(),
+                        path: entry.path.clone(),
                         reader: BufReader::with_capacity(64 * 1024, file),
                         line_number: 0,
                         byte_offset: 0,
@@ -500,6 +618,10 @@ fn scan_page(
             files_skipped_by_size,
             binary_files_skipped,
             errors_skipped,
+            index_used: matches!(state.source, SearchSource::Indexed { .. }),
+            index_generation: state.index_generation,
+            index_freshness: state.index_freshness,
+            stale_entries_detected: state.stale_entries_detected,
         },
         has_more,
         files_scanned,

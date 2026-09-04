@@ -1,7 +1,6 @@
 use super::search::{CompiledSearch, PendingMatch};
 use crate::{FsSearchMatch, FsSearchRequest, RuntimeError, RuntimeResult, SearchMode};
 use globset::{Glob, GlobSet, GlobSetBuilder};
-use ignore::DirEntry;
 use regex::RegexBuilder;
 use std::{
     collections::VecDeque,
@@ -59,14 +58,11 @@ pub(super) fn compile_search(request: &FsSearchRequest) -> RuntimeResult<Compile
     Ok(CompiledSearch { regex, includes })
 }
 
-pub(super) fn include_matches(root: &Path, entry: &DirEntry, includes: Option<&GlobSet>) -> bool {
+pub(super) fn include_matches(root: &Path, path: &Path, includes: Option<&GlobSet>) -> bool {
     let Some(includes) = includes else {
         return true;
     };
-    let relative = entry
-        .path()
-        .strip_prefix(root)
-        .unwrap_or_else(|_| entry.path());
+    let relative = path.strip_prefix(root).unwrap_or(path);
     includes.is_match(relative)
 }
 

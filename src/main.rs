@@ -226,6 +226,11 @@ async fn run_server(ready: Option<std::sync::mpsc::Sender<()>>) -> Result<()> {
         skills.clone(),
         event_tx.clone(),
     ));
+    runtime
+        .restore_repository_indexes()
+        .await
+        .context("restore persisted repository indexes")?;
+    runtime.start_repository_index_reconcile();
     let activity_registry = runtime.activity_registry();
     let plan_prompt_registry = runtime.plan_prompt_registry();
     let telemetry_registry = runtime.telemetry_registry();

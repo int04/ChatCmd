@@ -265,6 +265,8 @@ pub(super) async fn write_text(
     };
     let after = capture_snapshot(&path);
     host.record_committed_change(context, &path, None, kind, before, after, None, None);
+    host.mark_repository_index_stale_for_path(workspace, &path)
+        .await?;
     value(result)
 }
 
@@ -324,6 +326,8 @@ pub(super) async fn write_raw(
     };
     let after = capture_snapshot(&path);
     host.record_committed_change(context, &path, None, kind, before, after, None, None);
+    host.mark_repository_index_stale_for_path(workspace, &path)
+        .await?;
     value(result)
 }
 
@@ -354,6 +358,8 @@ pub(super) async fn replace_text(
         None,
         None,
     );
+    host.mark_repository_index_stale_for_path(workspace, &input.path)
+        .await?;
     value(entry)
 }
 
@@ -421,6 +427,8 @@ pub(super) async fn apply_edits(
             Some((result.additions, result.deletions)),
             result.diff_artifact_ref.clone(),
         );
+        host.mark_repository_index_stale_for_path(workspace, &path)
+            .await?;
     }
     value(result)
 }
@@ -463,6 +471,8 @@ pub(super) async fn delete(
             None,
             deleted.detail_artifact_ref.clone(),
         );
+        host.mark_repository_index_stale_for_path(workspace, &input.path)
+            .await?;
     }
     serde_json::to_value(deleted)
         .map_err(|error| RuntimeError::new("serialization_failed", error.to_string()))
@@ -489,13 +499,17 @@ pub(super) async fn restore_quarantine(
         host.record_committed_change(
             context,
             &input.destination,
-            Some(input.quarantine_path),
+            Some(input.quarantine_path.clone()),
             FileChangeKind::Moved,
             before,
             capture_snapshot(&input.destination),
             None,
             result.detail_artifact_ref.clone(),
         );
+        host.mark_repository_index_stale_for_path(workspace, &input.quarantine_path)
+            .await?;
+        host.mark_repository_index_stale_for_path(workspace, &input.destination)
+            .await?;
     }
     serde_json::to_value(result)
         .map_err(|error| RuntimeError::new("serialization_failed", error.to_string()))

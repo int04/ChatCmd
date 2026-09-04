@@ -651,6 +651,8 @@ pub struct FsBatchStatResult {
     pub usage: FsBatchUsage,
     pub index_used: bool,
     pub index_generation: Option<u64>,
+    pub index_freshness: IndexFreshness,
+    pub stale_entries_detected: u64,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -892,6 +894,10 @@ pub struct FsSearchPageData {
     pub files_skipped_by_size: u64,
     pub binary_files_skipped: u64,
     pub errors_skipped: u64,
+    pub index_used: bool,
+    pub index_generation: Option<u64>,
+    pub index_freshness: IndexFreshness,
+    pub stale_entries_detected: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -987,6 +993,10 @@ pub struct FsFindItem {
 #[serde(rename_all = "camelCase")]
 pub struct FsFindPageData {
     pub items: Vec<FsFindItem>,
+    pub index_used: bool,
+    pub index_generation: Option<u64>,
+    pub index_freshness: IndexFreshness,
+    pub stale_entries_detected: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1163,6 +1173,27 @@ pub struct WorkspaceIndexStatus {
     pub indexed_bytes: u64,
     pub schema_version: u32,
     pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositoryIndexEntrySnapshot {
+    pub relative_path_bytes: Vec<u8>,
+    pub display_path: String,
+    pub entry_type: String,
+    pub size_bytes: u64,
+    pub modified_at_ns: u128,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RepositoryIndexSnapshot {
+    pub root: PathBuf,
+    pub generation: u64,
+    pub freshness: IndexFreshness,
+    pub indexed_bytes: u64,
+    pub schema_version: u32,
+    pub entries: Vec<RepositoryIndexEntrySnapshot>,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]

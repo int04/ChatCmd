@@ -3,6 +3,9 @@ mod catalog;
 mod mapping;
 mod records;
 mod settings;
+mod workspace_index;
+
+pub use workspace_index::{PersistedWorkspaceIndex, PersistedWorkspaceIndexEntry};
 
 use mapping::*;
 

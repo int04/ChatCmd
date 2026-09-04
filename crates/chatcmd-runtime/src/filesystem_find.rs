@@ -5,7 +5,7 @@ use crate::{
     TraversalOptions, TruncationReason,
 };
 use globset::{GlobBuilder, GlobMatcher};
-use ignore::{DirEntry, Walk};
+use ignore::Walk;
 use regex::{Regex, RegexBuilder};
 use std::{
     collections::HashMap,
@@ -40,9 +40,28 @@ struct FindState {
     root_version: String,
     owner: String,
     request_fingerprint: String,
-    walker: Walk,
-    pending: Option<DirEntry>,
+    source: FindSource,
+    pending: Option<FindCandidate>,
+    index_generation: Option<u64>,
+    index_freshness: crate::IndexFreshness,
+    stale_entries_detected: u64,
     expires_at: Instant,
+}
+
+enum FindSource {
+    Direct(Box<Walk>),
+    Indexed {
+        entries: Vec<super::repository_index::IndexedPathCandidate>,
+        position: usize,
+    },
+}
+
+struct FindCandidate {
+    path: PathBuf,
+    entry_type: &'static str,
+    depth: usize,
+    indexed: Option<super::repository_index::IndexedPathCandidate>,
+    metadata_call: bool,
 }
 
 enum CompiledPattern {
@@ -93,6 +112,7 @@ impl WorkspaceService {
         );
         let owner = owner_key(context);
         let store = self.find_states.clone();
+        let service = self.clone();
         let state_id = state_id.map(str::to_owned);
         let expected_root_version = expected_root_version.map(str::to_owned);
 
@@ -105,6 +125,7 @@ impl WorkspaceService {
                 RuntimeError::new("find_state_poisoned", "find state lock is poisoned")
             })?;
             cleanup_expired(&mut states);
+            let continuing = state_id.is_some();
 
             let (id, mut state) = if let Some(id) = state_id {
                 let state = states.remove(&id).ok_or_else(|| {
@@ -121,19 +142,61 @@ impl WorkspaceService {
                     &fingerprint,
                     expected_root_version.as_deref(),
                 )?;
+                if let Some(expected_generation) = state.index_generation {
+                    let status = service.index_status(&root)?;
+                    if !status.available
+                        || status.freshness != crate::IndexFreshness::Fresh
+                        || status.generation != expected_generation
+                    {
+                        return Err(RuntimeError::new(
+                            "cursor_stale",
+                            "repository index generation changed after cursor issuance; restart find",
+                        ));
+                    }
+                }
                 (id, state)
             } else {
-                let walker = configured_walker(
-                    &root,
-                    &TraversalOptions {
-                        include_hidden: request.include_hidden,
-                        include_ignored: request.include_ignored,
-                        exclude: request.exclude.clone(),
-                        max_depth: request.max_depth,
-                        ..TraversalOptions::default()
-                    },
-                )?
-                .build();
+                let indexed = if !request.include_ignored && request.exclude.is_empty() {
+                    service.fresh_index_candidates_where(&root, |path, entry_type| {
+                        let depth = path
+                            .strip_prefix(&root)
+                            .map_or(usize::MAX, |relative| relative.components().count());
+                        depth <= request.max_depth
+                            && (request.include_hidden || !path_has_hidden_component(&root, path))
+                            && entry_type_matches(entry_type, &request.entry_types)
+                            && extension_matches(path, &request.extensions)
+                            && pattern_matches(&root, path, &matcher, request.case_sensitive)
+                    })?
+                } else {
+                    None
+                };
+                let (source, index_generation, index_freshness) = if let Some(indexed) = indexed {
+                    (
+                        FindSource::Indexed {
+                            entries: indexed.entries,
+                            position: 0,
+                        },
+                        Some(indexed.generation),
+                        indexed.freshness,
+                    )
+                } else {
+                    let walker = configured_walker(
+                        &root,
+                        &TraversalOptions {
+                            include_hidden: request.include_hidden,
+                            include_ignored: request.include_ignored,
+                            exclude: request.exclude.clone(),
+                            max_depth: request.max_depth,
+                            ..TraversalOptions::default()
+                        },
+                    )?
+                    .build();
+                    (
+                        FindSource::Direct(Box::new(walker)),
+                        None,
+                        crate::IndexFreshness::Unknown,
+                    )
+                };
                 (
                     Uuid::new_v4().to_string(),
                     FindState {
@@ -141,15 +204,45 @@ impl WorkspaceService {
                         root_version: version.clone(),
                         owner,
                         request_fingerprint: fingerprint,
-                        walker,
+                        source,
                         pending: None,
+                        index_generation,
+                        index_freshness,
+                        stale_entries_detected: 0,
                         expires_at: Instant::now() + FIND_STATE_TTL,
                     },
                 )
             };
             drop(states);
 
-            let page = scan_page(&mut state, &request, &matcher, &tracker)?;
+            let page = match scan_page(&mut state, &request, &matcher, &tracker) {
+                Ok(page) => page,
+                Err(error) if error.code == "index_stale_detected" => {
+                    service.mark_index_stale(&root);
+                    if continuing {
+                        return Err(RuntimeError::new(
+                            "cursor_stale",
+                            "repository index changed after cursor issuance; restart find",
+                        ));
+                    }
+                    let walker = configured_walker(
+                        &root,
+                        &TraversalOptions {
+                            include_hidden: request.include_hidden,
+                            include_ignored: request.include_ignored,
+                            exclude: request.exclude.clone(),
+                            max_depth: request.max_depth,
+                            ..TraversalOptions::default()
+                        },
+                    )?
+                    .build();
+                    state.source = FindSource::Direct(Box::new(walker));
+                    state.pending = None;
+                    state.index_freshness = crate::IndexFreshness::Stale;
+                    scan_page(&mut state, &request, &matcher, &tracker)?
+                }
+                Err(error) => return Err(error),
+            };
             if page.has_more {
                 state.expires_at = Instant::now() + FIND_STATE_TTL;
                 let mut states = store.states.lock().map_err(|_| {
@@ -210,35 +303,44 @@ fn scan_page(
         };
         tracker.record_entries(1);
         entries_scanned = entries_scanned.saturating_add(1);
-        if entry.depth() == 0 && entry.path() == state.root && state.root.is_dir() {
+        if entry.depth == 0 && entry.path == state.root && state.root.is_dir() {
             continue;
         }
-        if !entry_type_matches(&entry, &request.entry_types) {
+        if entry.depth > request.max_depth {
             continue;
         }
-        if !extension_matches(&entry, &request.extensions) {
+        if let Some(indexed) = entry.indexed.as_ref()
+            && !indexed_candidate_matches_live(indexed)?
+        {
+            state.stale_entries_detected = state.stale_entries_detected.saturating_add(1);
+            return Err(RuntimeError::new(
+                "index_stale_detected",
+                "repository index changed during find; retry with direct traversal",
+            ));
+        }
+        if !request.include_hidden && path_has_hidden_component(&state.root, &entry.path) {
             continue;
         }
-        if !pattern_matches(&state.root, &entry, matcher, request.case_sensitive) {
+        if !entry_type_matches(entry.entry_type, &request.entry_types) {
             continue;
         }
-        let Some(kind) = entry.file_type() else {
-            if metadata_calls >= max_metadata {
+        if !extension_matches(&entry.path, &request.extensions) {
+            continue;
+        }
+        if !pattern_matches(&state.root, &entry.path, matcher, request.case_sensitive) {
+            continue;
+        }
+        if entry.metadata_call {
+            metadata_calls = metadata_calls.saturating_add(1);
+            if metadata_calls > max_metadata {
                 state.pending = Some(entry);
                 truncation_reason = Some(TruncationReason::MetadataBudget);
                 break;
             }
-            metadata_calls = metadata_calls.saturating_add(1);
-            let metadata = fs::symlink_metadata(entry.path()).map_err(super::io_error)?;
-            items.push(FsFindItem {
-                path: entry.path().to_string_lossy().into_owned(),
-                entry_type: metadata_kind(&metadata).to_owned(),
-            });
-            continue;
-        };
+        }
         items.push(FsFindItem {
-            path: entry.path().to_string_lossy().into_owned(),
-            entry_type: file_type_kind(kind).to_owned(),
+            path: entry.path.to_string_lossy().into_owned(),
+            entry_type: entry.entry_type.to_owned(),
         });
     }
 
@@ -251,7 +353,13 @@ fn scan_page(
     }
 
     Ok(FsFindScanPage {
-        data: FsFindPageData { items },
+        data: FsFindPageData {
+            items,
+            index_used: matches!(state.source, FindSource::Indexed { .. }),
+            index_generation: state.index_generation,
+            index_freshness: state.index_freshness,
+            stale_entries_detected: state.stale_entries_detected,
+        },
         has_more,
         entries_scanned,
         metadata_calls,
@@ -264,15 +372,55 @@ fn scan_page(
 fn next_entry(
     state: &mut FindState,
     warnings: &mut Vec<ToolWarning>,
-) -> RuntimeResult<Option<DirEntry>> {
+) -> RuntimeResult<Option<FindCandidate>> {
     if let Some(entry) = state.pending.take() {
         return Ok(Some(entry));
     }
     loop {
-        match state.walker.next() {
-            Some(Ok(entry)) => return Ok(Some(entry)),
-            Some(Err(error)) => push_warning(warnings, "filesystem_walk_error", error.to_string()),
-            None => return Ok(None),
+        match &mut state.source {
+            FindSource::Direct(walker) => match walker.next() {
+                Some(Ok(entry)) => {
+                    let Some(kind) = entry.file_type() else {
+                        let metadata =
+                            fs::symlink_metadata(entry.path()).map_err(super::io_error)?;
+                        return Ok(Some(FindCandidate {
+                            path: entry.path().to_path_buf(),
+                            entry_type: metadata_kind(&metadata),
+                            depth: entry.depth(),
+                            indexed: None,
+                            metadata_call: true,
+                        }));
+                    };
+                    return Ok(Some(FindCandidate {
+                        path: entry.path().to_path_buf(),
+                        entry_type: file_type_kind(kind),
+                        depth: entry.depth(),
+                        indexed: None,
+                        metadata_call: false,
+                    }));
+                }
+                Some(Err(error)) => {
+                    push_warning(warnings, "filesystem_walk_error", error.to_string());
+                }
+                None => return Ok(None),
+            },
+            FindSource::Indexed { entries, position } => {
+                let Some(entry) = entries.get(*position).cloned() else {
+                    return Ok(None);
+                };
+                *position = position.saturating_add(1);
+                let depth = entry
+                    .path
+                    .strip_prefix(&state.root)
+                    .map_or(usize::MAX, |relative| relative.components().count());
+                return Ok(Some(FindCandidate {
+                    path: entry.path.clone(),
+                    entry_type: entry.entry_type,
+                    depth,
+                    indexed: Some(entry),
+                    metadata_call: false,
+                }));
+            }
         }
     }
 }
@@ -302,18 +450,18 @@ fn compile_pattern(request: &FsFindRequest) -> RuntimeResult<CompiledPattern> {
 
 fn pattern_matches(
     root: &Path,
-    entry: &DirEntry,
+    path: &Path,
     matcher: &CompiledPattern,
     case_sensitive: bool,
 ) -> bool {
-    let relative = entry
-        .path()
-        .strip_prefix(root)
-        .unwrap_or_else(|_| entry.path());
+    let relative = path.strip_prefix(root).unwrap_or(path);
     let relative_text = relative.to_string_lossy().replace('\\', "/");
     match matcher {
         CompiledPattern::Literal(needle) => {
-            let name = entry.file_name().to_string_lossy();
+            let name = path.file_name().map_or_else(
+                || std::borrow::Cow::Borrowed(""),
+                |value| value.to_string_lossy(),
+            );
             if case_sensitive {
                 name.contains(needle)
             } else {
@@ -325,24 +473,20 @@ fn pattern_matches(
     }
 }
 
-fn entry_type_matches(entry: &DirEntry, wanted: &[FindEntryType]) -> bool {
-    if wanted.is_empty() {
-        return true;
-    }
-    entry.file_type().is_some_and(|kind| {
-        wanted.iter().any(|entry_type| match entry_type {
-            FindEntryType::File => kind.is_file(),
-            FindEntryType::Directory => kind.is_dir(),
-            FindEntryType::Symlink => kind.is_symlink(),
+fn entry_type_matches(entry_type: &str, wanted: &[FindEntryType]) -> bool {
+    wanted.is_empty()
+        || wanted.iter().any(|wanted| match wanted {
+            FindEntryType::File => entry_type == "file",
+            FindEntryType::Directory => entry_type == "directory",
+            FindEntryType::Symlink => entry_type == "symlink",
         })
-    })
 }
 
-fn extension_matches(entry: &DirEntry, extensions: &[String]) -> bool {
+fn extension_matches(path: &Path, extensions: &[String]) -> bool {
     if extensions.is_empty() {
         return true;
     }
-    let Some(extension) = entry.path().extension().and_then(|value| value.to_str()) else {
+    let Some(extension) = path.extension().and_then(|value| value.to_str()) else {
         return false;
     };
     extensions.iter().any(|candidate| {
@@ -350,6 +494,36 @@ fn extension_matches(entry: &DirEntry, extensions: &[String]) -> bool {
             .trim_start_matches('.')
             .eq_ignore_ascii_case(extension)
     })
+}
+
+fn path_has_hidden_component(root: &Path, path: &Path) -> bool {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(value) => Some(value.to_string_lossy()),
+            _ => None,
+        })
+        .any(|value| value.starts_with('.') && value != "." && value != "..")
+}
+
+fn indexed_candidate_matches_live(
+    candidate: &super::repository_index::IndexedPathCandidate,
+) -> RuntimeResult<bool> {
+    let metadata = match fs::symlink_metadata(&candidate.path) {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(super::io_error(error)),
+    };
+    let modified_at_ns = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |value| value.as_nanos());
+    let entry_type = metadata_kind(&metadata);
+    Ok(metadata.len() == candidate.size
+        && modified_at_ns == candidate.modified_at_ns
+        && entry_type == candidate.entry_type)
 }
 
 fn validate_state(

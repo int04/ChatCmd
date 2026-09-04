@@ -232,11 +232,96 @@ cargo test --workspace
 - Benchmark cold/warm/incremental/DB size.
 - Phase nào hoàn thành, phase nào chủ động để sau.
 
-## CẦN KIỂM TRA LẠI — Nội dung cần kiểm tra hoặc hoàn thiện sau
+## Kết quả hoàn thiện Phase A — 2026-09-04
 
-- Lần chạy `cargo fmt --check` đầu tiên thất bại vì các tệp mới chưa được định dạng; đã chạy `cargo fmt --all` và kiểm tra lại thành công.
-- `cargo test --workspace` có một lỗi ngoài phạm vi Plan 20: `shell_reader_retires_exited_session_without_wait` trả `session_not_found` tại `crates/chatcmd-runtime/tests/direct_runtime.rs:414`; cần kiểm tra điều kiện tranh chấp hoặc tính không ổn định trong vòng đời phát lại thiết bị đầu cuối.
-- `cargo clippy -p chatcmd-runtime -p chatcmd-mcp --all-targets -- -D warnings` thất bại vì 6 cảnh báo kiểm tra tĩnh đã tồn tại từ trước: `collapsible_if`, hai `too_many_arguments`, `redundant_guards`, `manual_clamp` và `items_after_test_module` trong các tệp lúc chạy hiện hữu; không có lỗi trỏ vào tệp mới của Plan 20.
-- Chỉ mục lúc chạy hiện đã hoàn thành việc duyệt siêu dữ liệu trong bộ nhớ, quản lý thế hệ/trạng thái, hủy tác vụ, giới hạn cứng và đánh dấu dữ liệu cũ cho các thao tác gốc. Chưa nạp/xuất bản ảnh chụp qua lược đồ SQLite 17, chưa có giao dịch theo lô, hạn ngạch theo kích thước cơ sở dữ liệu hoặc dọn dẹp vòng đời thư mục gốc.
-- Chưa bật `fs_find_v2` có chỉ mục/lọc ứng viên cho tìm kiếm vì cập nhật trình theo dõi, ngữ nghĩa tràn, đối soát sau khi khởi động lại và xác minh trực tiếp dữ liệu cũ chưa hoàn chỉnh; trình duyệt trực tiếp có giới hạn vẫn là phương án dự phòng bảo đảm tính đúng đắn.
-- Chưa có phép đo hiệu năng bắt buộc cho 100k/1m đường dẫn, thay đổi gia tăng 1/100/10.000 mục, kích thước cơ sở dữ liệu/bộ nhớ/CPU p50/p95 và so sánh lô với N lời gọi. Chủ động để chỉ mục văn bản Giai đoạn B và chỉ mục ký hiệu Giai đoạn C thực hiện sau.
+### Architecture
+
+- Repository index là path/metadata index theo từng workspace root, lưu in-memory và snapshot bền vững bằng SQLite.
+- Mỗi root có monotonic generation, schema version và freshness `fresh|stale|unknown`; persisted snapshot sau restart luôn được restore ở trạng thái stale cho tới reconcile.
+- Unix snapshot giữ raw relative path bytes song song display path; Phase A không lưu source content.
+- Hard caps: tối đa 1.000.000 entries và khoảng 512 MiB metadata payload cho snapshot persistence.
+
+### Consistency / lifecycle
+
+- Direct filesystem luôn là source of truth; index chỉ là accelerator.
+- Native mutations và watcher events cập nhật/tombstone metadata bị ảnh hưởng theo hướng bounded rồi đánh generation stale.
+- Directory delete/rename không quét toàn subtree trong callback; chỉ tombstone exact entry O(1), sau đó direct fallback + periodic reconcile loại descendants.
+- Path đã bị delete/rename trên macOS được normalize bằng canonical ancestor còn tồn tại để vẫn map đúng canonical workspace root.
+- Watcher object được giữ sống trong runtime host; watcher errors/creation failures mark root stale và persist stale state.
+- `start_repository_index_reconcile()` có atomic one-shot guard, tránh spawn duplicate watcher/reconcile khi gọi nhiều lần.
+- Periodic reconcile chạy khoảng 60 giây; per-root rebuild mutex serialize rebuild cùng root.
+- Corrupt/incompatible/unavailable persisted index không chặn basic filesystem tools; fallback direct vẫn hoạt động.
+- Index reconcile task hiện dựa vào Tokio runtime teardown khi app shutdown; chưa có shutdown token riêng cho repository index. Đây là lifecycle limitation đã document trong ADR, không làm sai correctness/fallback Phase A.
+
+### Find / search
+
+- `fs_find_v2` dùng fresh metadata index cho candidate enumeration khi request tương thích; `includeIgnored=true` hoặc custom exclude fallback direct để giữ parity.
+- `fs_search_v2` dùng fresh metadata index chỉ để chọn candidate file; content match vẫn đọc live bằng streaming search.
+- Indexed candidate được live-verify size, mtime và entry type trước khi return/read.
+- Stale/missing candidate mark root stale; first page retry direct, continuation trả typed `cursor_stale`.
+- Continuation giờ bind thêm current index generation/freshness: rebuild hoặc generation change giữa hai page trả `cursor_stale` thay vì silently tiếp tục snapshot cũ.
+- Ignore/privacy parity và deleted candidate fallback có regression tests.
+
+### Batch tools
+
+- `fs_batch_stat`: hard cap 500 items, giữ input order/per-item error, aggregate metadata/hash byte budget, common wall-clock deadline, cancellation, live exact stat và index diagnostics.
+- Mixed-root batch không publish generation mơ hồ (`indexUsed=false`, generation `None`, freshness `Unknown`).
+- `fs_batch_read`: hard cap 50 items, bounded concurrency, streaming `fs_read_text_v2`, aggregate read-byte budget, common deadline kể cả semaphore wait, cancellation, ordered results và hard aggregate output cap.
+
+### Storage / recovery
+
+- SQLite snapshot replacement là một transaction; root cleanup, schema mismatch và corrupt-row recovery đều có test.
+- Quota dùng entry count + metadata estimate + `PRAGMA page_count`/`page_size` growth accounting trước commit; replacement vượt quota rollback và snapshot cũ vẫn load được.
+- Sau successful replacement chạy best-effort `PRAGMA wal_checkpoint(PASSIVE)`; không `VACUUM` mỗi rebuild.
+- Quota là logical SQLite growth bound; transient WAL/filesystem overhead có thể khác estimate và được ghi rõ trong ADR.
+
+### Tests Phase A
+
+Target `crates/chatcmd-runtime/tests/repository_index_batch.rs` hiện có 16 tests xanh, bao phủ generation/stale, indexed find/search/stat, parity/direct fallback, aggregate budgets/cancellation, mixed roots, schema mismatch/restart stale, concurrent rebuild serialization, privacy/ignore, deleted candidate, same-size mtime drift, find/search stale cursor và bounded directory rename tombstone.
+
+Storage workspace-index tests bao phủ transactional round-trip/root cleanup, corrupt row recovery và quota reject giữ nguyên snapshot cũ. Non-UTF8 raw filename test chạy trên Unix filesystem hỗ trợ; macOS conditionally skip vì APFS/API có thể reject byte-invalid filename.
+
+### Benchmark
+
+100k synthetic workload đã đo:
+
+- fixture build: ~9,306 ms
+- cold rebuild: ~679 ms
+- indexed warm find p50/p95: ~163 / 172 ms
+- direct late-match p50/p95: ~311 / 313 ms
+- incremental 1 / 100 / 10,000 changes: ~0.5 / 10.7 / 1,155 ms
+- peak RSS: ~59.8 MB
+- SQLite 100k write: ~6,201 ms
+- SQLite load p50/p95: ~907 / 951 ms
+- SQLite DB/WAL: ~60.3 / 61.4 MB
+
+1,000,000-path benchmark đã chạy thật và PASS:
+
+- fixture build: ~150,505 ms
+- cold rebuild: ~67,320 ms
+- indexed warm find p50/p95: ~1,662 / 1,669 ms
+- direct late-match p50/p95: ~297 / 304 ms
+- incremental 1 / 100 / 10,000 changes: ~2.565 / 39.113 / 1,977.936 ms
+- batch 500: ~236.190 ms
+- sequential 500: ~57.854 ms
+- peak RSS: ~752,975,872 bytes
+- total benchmark runtime: ~700.23 s
+
+Quan trọng: ở workload 1m này, indexed warm find **chậm hơn direct synthetic late-match**. Không claim index luôn nhanh hơn direct. Đây là observed performance finding của Phase A; correctness/lifecycle/fallback vẫn đạt acceptance và không mở rộng Phase B/C chỉ để làm đẹp benchmark.
+
+### Validation cuối
+
+Đã chạy tuần tự trên working tree hiện tại:
+
+- `cargo fmt --check` — PASS
+- `cargo check --workspace` — PASS
+- `cargo test --workspace` — PASS
+- `cargo clippy -p chatcmd-runtime -p chatcmd-storage -p chatcmd-mcp --all-targets -- -D warnings` — PASS
+
+Sau các fix cuối về directory rename/path normalization, target Plan 20 được chạy lại và PASS 16/16. Full workspace validation cuối cũng PASS toàn bộ với exit status 0.
+
+### Phases
+
+- Phase A path/metadata index + batch tools: **complete**.
+- Phase B text/trigram index: deferred.
+- Phase C symbol index: deferred.

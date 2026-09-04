@@ -1,6 +1,5 @@
-use super::search::SearchState;
+use super::search::{SearchCandidate, SearchSource, SearchState};
 use crate::{OperationContext, RuntimeError, RuntimeResult, ToolWarning};
-use ignore::DirEntry;
 use std::{
     collections::HashMap,
     fs,
@@ -13,22 +12,38 @@ const MAX_WARNINGS: usize = 20;
 pub(super) fn next_file_entry(
     state: &mut SearchState,
     warnings: &mut Vec<ToolWarning>,
-) -> RuntimeResult<Option<DirEntry>> {
+) -> RuntimeResult<Option<SearchCandidate>> {
+    if let Some(entry) = state.pending_entry.take() {
+        return Ok(Some(entry));
+    }
     loop {
-        let entry = if let Some(entry) = state.pending_entry.take() {
-            entry
-        } else {
-            match state.walker.next() {
-                Some(Ok(entry)) => entry,
+        match &mut state.source {
+            SearchSource::Direct(walker) => match walker.next() {
+                Some(Ok(entry)) => {
+                    if entry.file_type().is_some_and(|kind| kind.is_file()) {
+                        return Ok(Some(SearchCandidate {
+                            path: entry.path().to_path_buf(),
+                            indexed: None,
+                        }));
+                    }
+                }
                 Some(Err(error)) => {
                     push_warning(warnings, "filesystem_walk_error", error.to_string());
-                    continue;
                 }
                 None => return Ok(None),
+            },
+            SearchSource::Indexed { entries, position } => {
+                while let Some(entry) = entries.get(*position).cloned() {
+                    *position = position.saturating_add(1);
+                    if entry.entry_type == "file" {
+                        return Ok(Some(SearchCandidate {
+                            path: entry.path.clone(),
+                            indexed: Some(entry),
+                        }));
+                    }
+                }
+                return Ok(None);
             }
-        };
-        if entry.file_type().is_some_and(|kind| kind.is_file()) {
-            return Ok(Some(entry));
         }
     }
 }

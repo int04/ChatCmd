@@ -501,7 +501,10 @@ impl RuntimeHost {
             }
             "workspace_index_rebuild" => {
                 let input: PathInput = parse(arguments)?;
-                value(workspace.rebuild_index(&context, &input.path).await?)
+                let status = workspace.rebuild_index(&context, &input.path).await?;
+                self.persist_repository_index(workspace, &input.path)
+                    .await?;
+                value(status)
             }
             "fs_create_directory" => {
                 let input: PathInput = parse(arguments)?;
@@ -518,6 +521,8 @@ impl RuntimeHost {
                         None,
                         None,
                     );
+                    self.mark_repository_index_stale_for_path(&workspace, &input.path)
+                        .await?;
                 }
                 value(entry)
             }
@@ -560,6 +565,8 @@ impl RuntimeHost {
                         None,
                         result.detail_artifact_ref.clone(),
                     );
+                    self.mark_repository_index_stale_for_path(&workspace, &destination)
+                        .await?;
                 }
                 value(result)
             }
@@ -591,13 +598,17 @@ impl RuntimeHost {
                     self.record_committed_change(
                         &context,
                         &destination,
-                        Some(source),
+                        Some(source.clone()),
                         FileChangeKind::Moved,
                         before,
                         capture_snapshot(&destination),
                         None,
                         result.detail_artifact_ref.clone(),
                     );
+                    self.mark_repository_index_stale_for_path(&workspace, &source)
+                        .await?;
+                    self.mark_repository_index_stale_for_path(&workspace, &destination)
+                        .await?;
                 }
                 value(result)
             }
