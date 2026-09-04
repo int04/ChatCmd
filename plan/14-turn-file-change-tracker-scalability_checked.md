@@ -196,3 +196,30 @@ Chạy frontend typecheck/test/build nếu sửa timeline/diff UI.
 - File/UI/schema đã đổi.
 - Event-storm/large-file benchmark.
 - Test và các giới hạn platform watcher còn lại.
+
+## Công việc chưa hoàn thiện sau rà soát 2026-09-04
+
+### Đã xác minh và hoàn thiện trong lần rà soát này
+
+- Sửa môi trường test frontend để `localStorage` luôn dùng implementation xác định trong jsdom, tránh lỗi `getItem/clear is not a function` từ Node runtime hiện tại.
+- Cập nhật `src/test/App.test.tsx` theo API mã hóa và shape endpoint hiện tại thay vì mock `fetch` quá rộng; toàn bộ frontend test hiện đạt `54/54`, riêng `App.test.tsx` đạt `12/12`.
+- Khôi phục việc hiển thị one-time Plugin connection link ngay sau khi tạo agent bằng cách đưa kết quả `createAgent` vào `SecretModal`.
+- Test lõi của `TurnFileChangeTracker` đạt `6/6`, bao gồm event storm 100.000 event vẫn bounded và fixture sparse 1 GiB giữ snapshot/read path bounded theo contract hiện tại.
+- `npm run build` đạt; `cargo fmt -- --check` và `cargo check --workspace` đạt.
+
+### Chưa thể hoàn tất trong môi trường hiện tại
+
+- Benchmark watcher bắt buộc trên cả Windows/macOS/Linux với workspace 100.000 file và shell tạo 100.000 event chưa thể chứng minh đủ ba nền tảng từ máy macOS hiện tại. Unit/load test đã xác minh queue bounded và drop accounting nhưng không thay thế được số đo CPU/RAM/backend event loss của từng OS watcher.
+- Phép đo OS-level cho sparse file 1 GiB để chứng minh tổng bytes snapshot đọc dưới ngưỡng trên Windows/macOS/Linux mới chỉ kiểm tra được contract/unit fixture trong môi trường hiện tại; không thể xác nhận Windows/Linux khi không có các môi trường đó.
+- Reconcile đầy đủ khi watcher backend tự làm mất event vẫn phụ thuộc workspace index của Plan 20; Plan 20 chưa hoàn tất nên Plan 14 chưa thể tự chứng minh full-manifest reconciliation.
+- Lazy fetch/render riêng diff artifact vẫn phụ thuộc contract/API persistence artifact hoàn chỉnh; phần này không thể khép kín chỉ trong Plan 14.
+- Exact internal temp-path registry/operation-ID xuyên crate cho atomic writer chưa có contract hoàn chỉnh; tracker hiện vẫn phải dùng coalescing/debounce fallback cho staging path.
+
+### Kết quả validation và giới hạn ngoài Plan 14
+
+- `npm test -- --run`: đạt `15/15` test files, `54/54` tests.
+- `npm run build`: đạt.
+- `cargo fmt -- --check`: đạt.
+- `cargo check --workspace`: đạt.
+- `cargo test --workspace`: các test Plan 14 đều đạt, nhưng toàn workspace chưa ổn định do test ngoài Plan 14. Một lần `process_kill_before_commit_keeps_old_target_complete` thất bại vì kỳ vọng một orphan temp nhưng nhận 0; chạy riêng test này sau đó đạt. Lần chạy full tiếp theo thất bại ở `simultaneous_expected_version_writers_have_one_commit_winner` vì có 2 writer cùng commit thay vì 1.
+- `npm run lint` hiện còn 8 errors và 8 warnings ở các file ngoài phạm vi Plan 14, chủ yếu cấu hình Node globals và React hook lint; đây không phải validation tối thiểu của Plan 14 và chưa được sửa chéo phạm vi.

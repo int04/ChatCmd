@@ -17,7 +17,19 @@ const WS_HANDSHAKE_KEY_B = new Uint8Array([
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-afterEach(() => { cleanup(); vi.useRealTimers(); });
+const storageState = new Map<string, string>();
+const testStorage: Storage = {
+  get length() { return storageState.size; },
+  clear() { storageState.clear(); },
+  getItem(key: string) { return storageState.get(String(key)) ?? null; },
+  key(index: number) { return Array.from(storageState.keys())[index] ?? null; },
+  removeItem(key: string) { storageState.delete(String(key)); },
+  setItem(key: string, value: string) { storageState.set(String(key), String(value)); },
+};
+Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: testStorage });
+Object.defineProperty(window, 'localStorage', { configurable: true, value: testStorage });
+
+afterEach(() => { cleanup(); storageState.clear(); vi.useRealTimers(); });
 Object.defineProperty(window, 'matchMedia', { writable: true, value: vi.fn().mockImplementation(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() })) });
 Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: vi.fn().mockResolvedValue(undefined) } });
 

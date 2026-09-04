@@ -43,6 +43,7 @@ export function AgentsPage() {
       if (editor === 'new') {
         const created = await api.createAgent(input);
         if (created.agent) updateList(created.agent);
+        setSecret(created);
       } else if (editor) {
         updateList(await api.updateAgent(editor.id, input));
       }
