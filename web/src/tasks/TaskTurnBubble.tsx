@@ -50,14 +50,15 @@ export function TaskTurnBubble({ turn, taskId, subagents = [], agentLabel = 'Cod
   const headingId = `turn-${turn.id}`;
   const [stopTarget, setStopTarget] = useState<ToolActivity | null>(null);
   const [changeTarget, setChangeTarget] = useState<ToolActivity | null>(null);
-  const [thinkingOpen, setThinkingOpen] = useState(() => !response);
-  const hasThinkingContent = subagents.length > 0 || activities.length > 0 || blocks.some((block) => block.type === 'progress') || isThinking || status === 'failed' || status === 'incomplete' || (status === 'completed' && autoFinalized && !response);
+  const hasResponse = Boolean(response);
+  const [thinkingOpen, setThinkingOpen] = useState(() => !hasResponse);
+  const hasThinkingContent = subagents.length > 0 || activities.length > 0 || blocks.some((block) => block.type === 'progress') || isThinking || status === 'failed' || status === 'incomplete' || (status === 'completed' && autoFinalized && !hasResponse);
   const fileChanges = response ? responseFileChanges(response.event) : [];
   const fileChangeTrackingIncomplete = response ? responseFileChangeTrackingIncomplete(response.event) : false;
 
   useEffect(() => {
-    setThinkingOpen(!response);
-  }, [Boolean(response)]);
+    setThinkingOpen(!hasResponse);
+  }, [hasResponse]);
 
   return <div className="turn-item">
     {userMessage && <article className="turn-user-message">

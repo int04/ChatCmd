@@ -23,6 +23,8 @@ export function ChatGptMessageQueuePanel({
   onAutoSend: (content: string) => Promise<boolean>;
 }) {
   const queue = useLoad(() => api.chatGptQueue(taskId), [taskId]);
+  const queueData = queue.data;
+  const refreshQueue = queue.refresh;
   const [draft, setDraft] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingContent, setEditingContent] = useState('');
@@ -39,8 +41,8 @@ export function ChatGptMessageQueuePanel({
   }, [openMode]);
 
   useEffect(() => {
-    if (canAutoSend) void queue.refresh();
-  }, [canAutoSend, queue.refresh]);
+    if (canAutoSend) void refreshQueue();
+  }, [canAutoSend, refreshQueue]);
 
   useRealtime((event) => {
     if (event.taskId !== taskId || !event.type.startsWith('chatgpt.queue.')) return;
@@ -54,12 +56,12 @@ export function ChatGptMessageQueuePanel({
         setEditingContent('');
       }
     }
-    void queue.refresh();
+    void refreshQueue();
   });
 
   useEffect(() => {
     if (!canAutoSend || autoSendingId || busyId || editingId) return;
-    const next = queue.data?.[0];
+    const next = queueData?.[0];
     if (!next || next.mode !== 'queued') return;
     setAutoSendingId(next.id);
     void (async () => {
@@ -70,10 +72,10 @@ export function ChatGptMessageQueuePanel({
         setError(errorText(reason));
       } finally {
         setAutoSendingId(null);
-        await queue.refresh();
+        await refreshQueue();
       }
     })();
-  }, [autoSendingId, busyId, canAutoSend, editingId, onAutoSend, queue.data, queue.refresh, taskId]);
+  }, [autoSendingId, busyId, canAutoSend, editingId, onAutoSend, queueData, refreshQueue, taskId]);
 
   const create = async () => {
     const content = draft.trim();

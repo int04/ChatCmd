@@ -180,9 +180,25 @@ Chạy frontend test/build nếu sửa UI.
 
 ## Kiểm tra còn lại sau triển khai
 
-Plan 18 đã qua `cargo fmt --check`, `cargo check --workspace`, `cargo test --workspace`, bản build frontend dùng cho production và test giao diện riêng cho trạng thái timeout/retry/reason. Cần kiểm tra lại các điểm sau trước khi bỏ hậu tố `_check`:
+Lượt rà soát ngày 2026-09-04 đã chạy lại toàn bộ validation và xử lý các blocker có thể khắc phục trong môi trường hiện tại:
 
-- Toàn bộ bộ test frontend `npm test -- --run` hiện có 7 lỗi trong `src/test/App.test.tsx` (các ca về định tuyến, trạng thái runtime và URL MCP của agent); test mới `src/tasks/subagentStatus.test.ts` vẫn đạt khi chạy riêng. Các lỗi của toàn bộ bộ test không nằm trên luồng code sub-agent mới, nhưng cần ổn định dữ liệu dựng sẵn và bước dọn dẹp của bộ test.
-- `npm run lint` hiện gặp các lỗi có sẵn tại `web/scripts/obfuscate-build.mjs` (`process`/`console`) và `web/src/realtime.ts` (`React ref during render`), cùng các cảnh báo hook ngoài phạm vi Plan 18.
-- Cần chạy smoke test thủ công để kiểm tra việc đóng process/terminal thật của hệ điều hành khi watchdog timeout. Test tự động hiện chỉ xác nhận cancellation registry và trạng thái database/session, chưa khởi chạy worker process thật để kiểm tra thao tác kill.
-- Cần kiểm tra tình huống suspend/resume hoặc đồng hồ hệ thống nhảy thời gian trên máy thật. Deadline đã persist dùng đồng hồ hệ thống và phép toán bão hòa; chưa có harness ở cấp hệ điều hành để mô phỏng sleep/resume từ đầu đến cuối.
+- `cargo fmt --check`, `cargo check --workspace`, `cargo test --workspace`: đạt; các test lease expiry, heartbeat, hard runtime, CAS completion-vs-timeout và restart reconcile đều đạt.
+- `npm test -- --run`: đạt 15/15 test files, 54/54 tests, gồm `src/test/App.test.tsx` và `src/tasks/subagentStatus.test.ts`.
+- `npm run build`: đạt.
+- `npm run lint`: đạt sau khi sửa cấu hình Node globals cho script build, cập nhật realtime listener ref ngoài render và ổn định dependency của các React hooks liên quan.
+
+## Hoàn tất kiểm tra bổ sung 2026-09-04
+
+Hai gap cuối đã được xử lý bằng integration harness an toàn, không cần suspend hoặc đổi đồng hồ hệ thống thật của máy phát triển:
+
+- **Watchdog timeout đóng process/PTY thật:** `cleanup_timed_out_subagent` giờ tìm toàn bộ terminal đang `starting/running` của child và force-close qua `ShellRuntime::close(..., force=true)` trước khi đánh dấu DB `interrupted`. Test `watchdog_timeout_force_closes_real_child_pty_process` tạo PTY/process thật (`/bin/sh -c "sleep 60"`), làm lease hết hạn, chạy watchdog và xác nhận PID không còn tồn tại đồng thời `terminal_sessions.status='interrupted'`.
+- **Suspend/resume / system-clock jump semantics:** watchdog được tách thêm `expire_stale_subagents_at(..., now)` để test deterministic persisted wall-clock deadline mà không đổi clock OS. Test `persisted_deadlines_handle_backward_and_forward_clock_jumps` xác nhận clock lùi không timeout lease sớm và clock tiến/resume vượt persisted lease/hard deadline sẽ timeout đúng.
+
+Validation cuối:
+
+- `cargo fmt --check`: đạt.
+- `cargo check --workspace`: đạt.
+- `cargo test --workspace`: đạt, bao gồm hai integration test mới và toàn bộ test Plan 18 hiện có.
+- Frontend không thay đổi thêm trong lượt này; validation frontend đầy đủ (`npm test -- --run`, `npm run build`, `npm run lint`) đã đạt ở lượt rà soát ngay trước đó.
+
+Plan 18 hiện không còn mục chưa hoàn thiện đã biết và đủ điều kiện `_Checkdone`.

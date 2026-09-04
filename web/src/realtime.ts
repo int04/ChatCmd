@@ -245,7 +245,9 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 export function useRealtime(onEvent: RealtimeListener) {
   const realtime = useContext(RealtimeContext);
   const listenerRef = useRef(onEvent);
-  listenerRef.current = onEvent;
+  useEffect(() => {
+    listenerRef.current = onEvent;
+  }, [onEvent]);
   useEffect(() => realtime?.subscribe((event) => listenerRef.current(event)), [realtime]);
   if (!realtime) throw new Error('useRealtime must be used within RealtimeProvider');
   return realtime.state;

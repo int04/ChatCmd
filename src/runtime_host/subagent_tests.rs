@@ -1,4 +1,4 @@
-use chatcmd_runtime::OperationContext;
+use chatcmd_runtime::{OperationContext, ShellCreateRequest};
 use serde_json::Value;
 use sqlx::Row as _;
 use tempfile::TempDir;
@@ -292,6 +292,97 @@ async fn expired_running_lease_times_out_and_unblocks_parent() {
         .await
         .expect("timed out child must not block parent");
     assert_eq!(host.active_subagent_count().await.expect("active count"), 0);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn watchdog_timeout_force_closes_real_child_pty_process() {
+    let (host, context, registration, subagent_id, directory) = fallback_fixture().await;
+    let child_task_id = claim_registered(&host, &context, &registration, &subagent_id).await;
+    let mut child_context =
+        OperationContext::new("subagent-child-shell", &context.agent_id, "shell_create");
+    child_context.task_id = Some(child_task_id.clone());
+    child_context.turn_id = Some("turn-subagent-child-shell".to_owned());
+    let shell = host
+        .shell
+        .create(
+            &child_context,
+            ShellCreateRequest {
+                request_id: child_context.request_id.clone(),
+                working_directory: Some(directory.path().to_path_buf()),
+                executable: Some(std::path::PathBuf::from("/bin/sh")),
+                arguments: vec!["-c".to_owned(), "sleep 60".to_owned()],
+                environment: std::collections::BTreeMap::new(),
+                columns: Some(80),
+                rows: Some(24),
+            },
+        )
+        .await
+        .expect("create real child shell");
+    host.persist_shell_session(&child_context, &shell)
+        .await
+        .expect("persist child shell");
+    let process_id = shell.process_id.expect("child shell pid");
+
+    sqlx::query("UPDATE subagent_runs SET lease_expires_at_ms=? WHERE id=?")
+        .bind(now_ms().saturating_sub(1))
+        .bind(&subagent_id)
+        .execute(host.repository.pool())
+        .await
+        .expect("expire lease");
+    assert_eq!(
+        host.expire_stale_subagents(Some((PARENT_TASK_ID, PARENT_TURN_ID)))
+            .await
+            .expect("watchdog"),
+        1
+    );
+    let terminal_status: String =
+        sqlx::query_scalar("SELECT status FROM terminal_sessions WHERE id=?")
+            .bind(&shell.session_id)
+            .fetch_one(host.repository.pool())
+            .await
+            .expect("read terminal status");
+    assert_eq!(terminal_status, "interrupted");
+    let alive = std::process::Command::new("kill")
+        .args(["-0", &process_id.to_string()])
+        .status()
+        .is_ok_and(|status| status.success());
+    assert!(!alive, "watchdog must terminate the child PTY process");
+}
+
+#[tokio::test]
+async fn persisted_deadlines_handle_backward_and_forward_clock_jumps() {
+    let (host, context, registration, subagent_id, _directory) = fallback_fixture().await;
+    let _child_task_id = claim_registered(&host, &context, &registration, &subagent_id).await;
+    let base = now_ms();
+    sqlx::query("UPDATE subagent_runs SET started_at_ms=?,max_runtime_ms=5000,lease_expires_at_ms=? WHERE id=?")
+        .bind(base)
+        .bind(base.saturating_add(3_000))
+        .bind(&subagent_id)
+        .execute(host.repository.pool())
+        .await
+        .expect("set deterministic deadlines");
+
+    assert_eq!(
+        host.expire_stale_subagents_at(
+            Some((PARENT_TASK_ID, PARENT_TURN_ID)),
+            base.saturating_sub(60_000),
+        )
+        .await
+        .expect("backward jump"),
+        0,
+        "backward wall-clock jumps must not expire a live lease early"
+    );
+    assert_eq!(
+        host.expire_stale_subagents_at(
+            Some((PARENT_TASK_ID, PARENT_TURN_ID)),
+            base.saturating_add(60_000),
+        )
+        .await
+        .expect("forward jump"),
+        1,
+        "forward jump/resume past persisted deadlines must expire the run"
+    );
 }
 
 #[tokio::test]

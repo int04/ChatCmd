@@ -106,11 +106,12 @@ function TaskTerminalModal({ terminal, onClose }: { terminal: Session; onClose: 
     if (!hostRef.current) return;
     const xterm = new Terminal({ convertEol: false, cursorBlink: true, cursorStyle: 'block', fontFamily: 'SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace', fontSize: 13, lineHeight: 1.35, scrollback: 10_000, allowTransparency: true, theme: { background: '#101116', foreground: '#f2f2f4', cursor: '#f2f2f4', cursorAccent: '#101116', black: '#1c1d22', red: '#ff5f57', green: '#28c840', yellow: '#febc2e', blue: '#4c8dff', magenta: '#c678dd', cyan: '#56b6c2', white: '#e6e6e6', brightBlack: '#686b73', brightRed: '#ff7b73', brightGreen: '#62d973', brightYellow: '#ffd36a', brightBlue: '#78a9ff', brightMagenta: '#d99bed', brightCyan: '#7dd8e3', brightWhite: '#ffffff', selectionBackground: '#3c5074aa' } });
     const fit = new FitAddon(); xterm.loadAddon(fit); xterm.open(hostRef.current); fit.fit(); xterm.focus(); terminalRef.current = xterm; setReady(true);
+    const pending = pendingRef.current;
     const flushInput = () => { inputTimerRef.current = undefined; const data = inputBufferRef.current; inputBufferRef.current = ''; if (!data) return; inputQueueRef.current = inputQueueRef.current.then(() => api.writeTerminalInput(sessionId, data)).then(() => undefined).catch((error) => setProblem(error instanceof Error ? error.message : tr('Terminal input failed'))); };
     const dataDisposable = xterm.onData((data) => { inputBufferRef.current += data; if (inputTimerRef.current === undefined) inputTimerRef.current = window.setTimeout(flushInput, 4); });
     const resize = () => { fit.fit(); resizeQueueRef.current = resizeQueueRef.current.then(() => api.resizeTerminal(sessionId, xterm.cols, xterm.rows)).then(() => undefined).catch(() => undefined); };
     resize(); window.addEventListener('resize', resize); const observer = new ResizeObserver(resize); observer.observe(hostRef.current);
-    return () => { observer.disconnect(); window.removeEventListener('resize', resize); dataDisposable.dispose(); if (inputTimerRef.current !== undefined) window.clearTimeout(inputTimerRef.current); inputBufferRef.current = ''; snapshotReadyRef.current = false; pendingRef.current.clear(); setReady(false); xterm.dispose(); terminalRef.current = null; };
+    return () => { observer.disconnect(); window.removeEventListener('resize', resize); dataDisposable.dispose(); if (inputTimerRef.current !== undefined) window.clearTimeout(inputTimerRef.current); inputBufferRef.current = ''; snapshotReadyRef.current = false; pending.clear(); setReady(false); xterm.dispose(); terminalRef.current = null; };
   }, [sessionId]);
 
   useEffect(() => {

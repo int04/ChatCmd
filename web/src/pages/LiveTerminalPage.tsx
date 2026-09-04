@@ -115,10 +115,11 @@ export function LiveTerminalPage() {
     return () => { cancelled = true; window.clearTimeout(timer); };
   }, [sessionId, terminalReady]);
 
+  const refreshMetadata = metadata.refresh;
   useEffect(() => {
-    const timer = window.setInterval(() => void metadata.refresh(), 2000);
+    const timer = window.setInterval(() => void refreshMetadata(), 2000);
     return () => window.clearInterval(timer);
-  }, [metadata.refresh]);
+  }, [refreshMetadata]);
 
   useEffect(() => {
     if (terminalRef.current) terminalRef.current.options.disableStdin = !metadata.data || Boolean(metadata.data.busy);
