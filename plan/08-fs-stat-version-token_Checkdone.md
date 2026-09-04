@@ -160,11 +160,19 @@ cargo test --workspace
 - Test và validation result.
 - Điểm tích hợp sẵn cho plan 09/11/12.
 
-## Kiểm tra bổ sung cần thực hiện
+## Kiểm tra bổ sung — đã hoàn tất trên macOS
 
-Phần triển khai và toàn bộ kiểm thử workspace đã chạy thành công trên Windows, bao gồm kiểm thử nhận diện file bằng volume serial + file index. Không thể chạy các kiểm thử riêng cho Unix/macOS trên host Windows hiện tại. Cần chạy lại trên ít nhất một host Unix/macOS để xác nhận fingerprint `device + inode`, metadata thời điểm thay đổi của Unix và permission mode hoạt động đúng:
+Đã chạy lại trên macOS và xác nhận phần Unix/macOS hoạt động đúng, bao gồm fingerprint `device + inode`; test `unix_identity_uses_device_and_inode` pass. Toàn bộ validation tối thiểu của plan cũng pass trên host macOS.
 
-```bash
-cargo test -p chatcmd-runtime filesystem::file_version
-cargo test --workspace
+Kết quả kiểm tra:
+
+```text
+cargo test -p chatcmd-runtime filesystem::file_version  -> 8 passed, 0 failed
+cargo fmt --check                                      -> pass
+cargo check --workspace                                -> pass
+cargo test -p chatcmd-runtime                          -> pass
+cargo test -p chatcmd-mcp                              -> pass
+cargo test --workspace                                 -> pass
 ```
+
+Lưu ý: workspace có warning có sẵn `unused import: process::Command` trong `crates/chatcmd-runtime/tests/search_perf.rs`; warning này không thuộc phạm vi Plan 08 và không làm validation thất bại.
