@@ -31,8 +31,10 @@ pub(super) fn write_reader<R: Read>(
     require_utf8: bool,
 ) -> RuntimeResult<CommitOutcome> {
     let mut reader = BufReader::with_capacity(WRITE_BUFFER_BYTES, reader);
-    let mut temporary =
-        tempfile::NamedTempFile::new_in(&target.canonical_parent).map_err(io_error)?;
+    let mut temporary = tempfile::Builder::new()
+        .prefix(".chatcmd-atomic-write-")
+        .tempfile_in(&target.canonical_parent)
+        .map_err(io_error)?;
     let mut bytes_written = 0_u64;
     let mut utf8_tail = Vec::with_capacity(4);
     {
@@ -84,6 +86,7 @@ pub(super) fn write_reader<R: Read>(
         temporary.as_file().sync_all().map_err(io_error)?;
     }
 
+    debug_test_pause_before_commit()?;
     target.revalidate_parent()?;
     let target_path = target.path();
     if let Some(expected) = options.expected_version.as_deref() {
@@ -136,6 +139,23 @@ pub(super) fn write_reader<R: Read>(
         durability_achieved,
         warnings,
     })
+}
+
+#[cfg(debug_assertions)]
+fn debug_test_pause_before_commit() -> RuntimeResult<()> {
+    if std::env::var_os("CHATCMD_ATOMIC_WRITE_TEST_PAUSE_BEFORE_COMMIT").is_none() {
+        return Ok(());
+    }
+    println!("CHATCMD_ATOMIC_WRITE_READY_BEFORE_COMMIT");
+    std::io::stdout().flush().map_err(io_error)?;
+    let mut byte = [0_u8; 1];
+    std::io::stdin().read_exact(&mut byte).map_err(io_error)?;
+    Ok(())
+}
+
+#[cfg(not(debug_assertions))]
+fn debug_test_pause_before_commit() -> RuntimeResult<()> {
+    Ok(())
 }
 
 fn validate_utf8_chunk(tail: &mut Vec<u8>, chunk: &[u8]) -> RuntimeResult<()> {

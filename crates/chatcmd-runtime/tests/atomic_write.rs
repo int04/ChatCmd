@@ -1,3 +1,6 @@
+#[path = "support/process_helper.rs"]
+mod process_helper;
+
 use chatcmd_runtime::{
     ApprovalDecision, AtomicWriteOptions, BoxFuture, ExecutionPolicy, FsStatBudget, FsStatRequest,
     OperationContext, PolicyDecision, PolicyEngine, RuntimeResult, VersionStrength,
@@ -5,6 +8,7 @@ use chatcmd_runtime::{
 };
 #[cfg(unix)]
 use chatcmd_runtime::{DurabilityMode, MetadataPolicy};
+use process_helper::{kill_at_marker, spawn_test_helper};
 use std::{collections::BTreeMap, sync::Arc};
 
 struct Approve;
@@ -170,4 +174,115 @@ async fn overwrite_preserves_posix_mode_and_full_durability() {
             & 0o777,
         0o751
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn create_race_has_exactly_one_no_clobber_winner() {
+    use std::sync::{Arc, Barrier};
+
+    let directory = tempfile::tempdir().expect("temp directory");
+    let path = directory.path().join("create-race.txt");
+    let workspace = Arc::new(service(directory.path()));
+    let barrier = Arc::new(Barrier::new(3));
+    let mut tasks = Vec::new();
+
+    for contender in ["writer-a", "writer-b"] {
+        let workspace = workspace.clone();
+        let path = path.clone();
+        let barrier = barrier.clone();
+        tasks.push(tokio::task::spawn_blocking(move || {
+            barrier.wait();
+            tokio::runtime::Handle::current().block_on(workspace.write_text_atomic(
+                &OperationContext::new(contender, contender, "fs_write_text"),
+                &path,
+                contender,
+                AtomicWriteOptions::default(),
+            ))
+        }));
+    }
+
+    barrier.wait();
+    let first = tasks.remove(0).await.expect("first writer task");
+    let second = tasks.remove(0).await.expect("second writer task");
+    assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
+    let loser = if first.is_err() { first } else { second };
+    assert!(matches!(
+        loser.expect_err("one loser").code.as_str(),
+        "writeConflict" | "already_exists"
+    ));
+    let content = std::fs::read_to_string(path).expect("read winner");
+    assert!(matches!(content.as_str(), "writer-a" | "writer-b"));
+}
+
+#[tokio::test]
+async fn text_write_keeps_bom_and_line_endings_byte_exact() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let workspace = service(directory.path());
+    let path = directory.path().join("text-policy.txt");
+    let context = OperationContext::new("text-policy", "agent", "fs_write_text");
+    let content = "\u{feff}first\r\nsecond\r\n";
+
+    workspace
+        .write_text_atomic(&context, &path, content, AtomicWriteOptions::default())
+        .await
+        .expect("write exact text");
+
+    assert_eq!(
+        std::fs::read(&path).expect("read bytes"),
+        content.as_bytes()
+    );
+}
+
+#[test]
+fn subprocess_atomic_write_helper() {
+    let Some(root) = std::env::var_os("CHATCMD_CRASH_HELPER_ROOT") else {
+        return;
+    };
+    let root = std::path::PathBuf::from(root);
+    let path = root.join("target.txt");
+    let workspace = service(&root);
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    runtime
+        .block_on(workspace.write_text_atomic(
+            &OperationContext::new("crash-helper", "agent", "fs_write_text"),
+            &path,
+            "new-complete",
+            AtomicWriteOptions {
+                overwrite: true,
+                durability: chatcmd_runtime::DurabilityMode::Full,
+                ..AtomicWriteOptions::default()
+            },
+        ))
+        .expect("atomic write helper");
+}
+
+#[test]
+fn process_kill_before_commit_keeps_old_target_complete() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let target = directory.path().join("target.txt");
+    std::fs::write(&target, b"old-complete").expect("seed crash target");
+    let child = spawn_test_helper("subprocess_atomic_write_helper", directory.path());
+    let status = kill_at_marker(child, "CHATCMD_ATOMIC_WRITE_READY_BEFORE_COMMIT");
+
+    assert!(!status.success());
+    assert_eq!(
+        std::fs::read(&target).expect("read target"),
+        b"old-complete"
+    );
+    let orphan_temps: Vec<_> = std::fs::read_dir(directory.path())
+        .expect("list directory")
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".chatcmd-atomic-write-")
+        })
+        .collect();
+    assert_eq!(
+        orphan_temps.len(),
+        1,
+        "crash should leave one identifiable orphan temp"
+    );
+    std::fs::remove_file(orphan_temps[0].path()).expect("cleanup orphan fixture");
 }

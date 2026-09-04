@@ -7,6 +7,7 @@ use std::{
 
 pub fn spawn_test_helper(test_name: &str, root: &Path) -> Child {
     Command::new(std::env::current_exe().expect("current test executable"))
+        .env("CHATCMD_ATOMIC_WRITE_TEST_PAUSE_BEFORE_COMMIT", "1")
         .args(["--exact", test_name, "--nocapture"])
         .env(OsStr::new("CHATCMD_CRASH_HELPER_ROOT"), root)
         .stdin(Stdio::piped())

@@ -218,3 +218,31 @@ Chạy platform-specific tests trên macOS hiện tại và bảo đảm Windows
 - Metadata `preserve` hiện bảo toàn POSIX mode hoặc quyền chỉ đọc của Windows do `std::fs::Permissions` hỗ trợ; ACL, xattr, owner, resource fork và các thuộc tính Windows khác chưa được bảo toàn hoặc cảnh báo riêng.
 - Chưa triển khai chính sách metadata `explicit`, `lineEndingPolicy`, `bomPolicy`, journal và dọn dữ liệu mồ côi khi khởi động. Temp phát sinh khi lỗi/hủy trong cùng process đã được RAII dọn dẹp và có kiểm thử.
 - Chưa có kiểm thử điều kiện tranh chấp giữa hai writer cùng tạo file, hoán đổi symlink/thay thế thư mục cha tại thời điểm commit, cấu hình sai cross-device, ghi đè file chỉ đọc trên Windows và BOM/CRLF/LF cho write facade mới.
+
+## Kết quả rà soát bổ sung 2026-09-04
+
+Đã kiểm tra lại implementation hiện tại và bổ sung các phần có thể hoàn tất trực tiếp trên môi trường macOS này:
+
+- Atomic writer dùng chung vẫn commit bằng tempfile cùng thư mục, overwrite không xóa target trước; create dùng no-clobber và expectedVersion được revalidate trước commit.
+- Temp atomic writer nay có prefix riêng `.chatcmd-atomic-write-` để crash residue có thể được nhận diện tách biệt với tempfile của ứng dụng khác.
+- Đã bổ sung crash harness cấp process chạy chính `write_text_atomic`: child bị kill sau khi temp đã ghi/sync nhưng trước commit; target cũ vẫn nguyên vẹn, không xuất hiện partial target.
+- Đã bổ sung test hai writer đồng thời create cùng một path: đúng một writer thắng, writer còn lại nhận conflict/already-exists.
+- Đã bổ sung test `fs_write_text` giữ nguyên byte BOM + CRLF; writer không tự normalize newline/BOM của nội dung caller cung cấp.
+- macOS POSIX mode + durability `full` tiếp tục pass; `cargo check --workspace --target x86_64-apple-darwin` cũng pass.
+- Validation pass: `cargo fmt --check`, `cargo check --workspace`, `cargo test -p chatcmd-runtime`, `cargo test --workspace`.
+- Benchmark blob -> atomic writer đã chạy thực tế và pass:
+  - 10 MiB: 7.89 MiB/s, peak RSS 12.94 MiB, RSS growth 6.27 MiB.
+  - 100 MiB: 7.99 MiB/s, peak RSS 13.08 MiB, RSS growth 0.14 MiB.
+  - 1024 MiB: 7.87 MiB/s, peak RSS 14.97 MiB, RSS growth 1.89 MiB.
+
+## Công việc chưa hoàn thiện sau rà soát
+
+Các mục dưới đây vẫn chưa thể xác nhận/hoàn tất đầy đủ trong lượt này, vì cần backend/platform hoặc thiết kế bổ sung vượt khỏi guarantee hiện có; không được coi là đã xong:
+
+- **Startup orphan cleanup an toàn:** crash harness chứng minh process kill để lại một tempfile `.chatcmd-atomic-write-*`. Prefix đã giúp nhận diện residue, nhưng chưa có journal/owner identity/lock/age protocol đủ an toàn để startup quét và xóa mà không có nguy cơ xóa temp của một process ChatCMD khác đang hoạt động. Cần thiết kế ownership/journal rồi mới bật cleanup tự động.
+- **Metadata nâng cao:** `preserve` mới bảo toàn `std::fs::Permissions` (POSIX mode hoặc readonly tương ứng). ACL, xattr, owner, macOS resource fork và các Windows attributes khác chưa được copy/cảnh báo typed; `metadataPolicy=explicit` cũng chưa có contract field để caller truyền subset metadata.
+- **Text policy đầy đủ:** write facade giữ nguyên chính xác bytes caller gửi, nhưng chưa có `lineEndingPolicy=preserve|...` và `bomPolicy=preserve|add|remove` cho overwrite. `fs_apply_edits` đã có preserveLineEndings/preserveBom riêng, không đồng nghĩa write facade đã có policy này.
+- **Fault injection theo từng phase:** đã có process crash thật trước commit và fault tests ở edit engine, nhưng atomic writer chưa có injection riêng cho short-write/disk-full/sync/rename/directory-sync/Windows sharing violation ở từng phase.
+- **Network/non-atomic filesystem:** chưa có môi trường network filesystem để xác minh và chưa có filesystem capability detection; `requireAtomic` hiện dựa trên same-directory atomic primitive của backend chứ chưa downgrade/fail theo loại filesystem cụ thể.
+- **Linux/Windows validation:** máy hiện chỉ cài `aarch64-apple-darwin` và `x86_64-apple-darwin`; vì vậy chưa chạy Linux/Windows compile/test, Windows readonly/sharing-violation test hay Linux-specific behavior trong lượt này.
+- **Benchmark theo từng durability mode:** benchmark 10/100/1024 MiB đã xác nhận streaming/RSS với default `data`; chưa chạy ma trận `none`/`data`/`full` để so riêng sync cost cho từng mode.
