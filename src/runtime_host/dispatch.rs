@@ -881,9 +881,12 @@ impl RuntimeHost {
         Ok(Value::Array(
             rows.iter()
                 .map(|row| {
+                    let relative_path = row.get::<String, _>("relative_path");
+                    let managed = relative_path.starts_with(super::MANAGED_ARTIFACT_PREFIX);
                     json!({
                         "id": row.get::<String, _>("id"),
-                        "relativePath": row.get::<String, _>("relative_path"),
+                        "relativePath": (!managed).then_some(relative_path),
+                        "managed": managed,
                         "mediaType": row.get::<Option<String>, _>("media_type"),
                         "sizeBytes": row.get::<i64, _>("size_bytes"),
                         "createdAtMs": row.get::<i64, _>("created_at_ms")
@@ -909,6 +912,24 @@ impl RuntimeHost {
             .map_err(storage_error)?
             .filter(|artifact| artifact.task_id.as_str() == task_id.as_str())
             .ok_or_else(|| RuntimeError::new("artifact_not_found", "artifact was not found"))?;
+        if let Some(content_ref) = artifact
+            .relative_path
+            .strip_prefix(super::MANAGED_ARTIFACT_PREFIX)
+        {
+            let read = self
+                .blob_store
+                .read_artifact_text(context, content_ref, 200_000)?;
+            return Ok(json!({
+                "artifact": {
+                    "id": artifact.id.as_str(), "taskId": artifact.task_id.as_str(),
+                    "sessionId": artifact.session_id.map(|id| id.into_string()),
+                    "relativePath": Value::Null, "managed": true, "mediaType": artifact.media_type,
+                    "sizeBytes": artifact.size_bytes, "sha256Hex": artifact.sha256_hex,
+                    "expiresAtMs": read.expires_at_ms
+                },
+                "content": read.content, "truncated": read.truncated
+            }));
+        }
         let path = self
             .workspace
             .roots()
@@ -923,7 +944,7 @@ impl RuntimeHost {
             "artifact": {
                 "id": artifact.id.as_str(), "taskId": artifact.task_id.as_str(),
                 "sessionId": artifact.session_id.map(|id| id.into_string()),
-                "relativePath": artifact.relative_path, "mediaType": artifact.media_type,
+                "relativePath": artifact.relative_path, "managed": false, "mediaType": artifact.media_type,
                 "sizeBytes": artifact.size_bytes, "sha256Hex": artifact.sha256_hex
             },
             "content": read.content, "truncated": read.truncated

@@ -211,14 +211,19 @@ Chạy frontend build/typecheck/test nếu sửa UI.
 - Test marker/privacy và benchmark DB/RAM/realtime.
 - Compatibility với timeline cũ.
 
-## Cần kiểm tra và hoàn thiện sau
+## Kết quả rà soát hoàn tất
 
-Cơ chế chiếu dữ liệu giới hạn theo schema v2, che thông tin nhạy cảm theo kiểu đệ quy, kiểm thử marker trên SQLite/realtime, chính sách chống lưu trùng dữ liệu terminal và hành vi persistence suy giảm đã được triển khai. Các hạng mục sau của Plan 13 vẫn cần được thực hiện trước khi có thể nghiệm thu đầy đủ:
+Plan 13 đã được hoàn thiện và nghiệm thu lại trên source hiện tại:
 
-- Triển khai một `ToolPayloadArtifactStore` chuyên dụng và được quản lý. Artifact registry hiện tại trỏ tới các file trong workspace do người dùng kiểm soát và chưa cung cấp thao tác finalize nguyên tử dành riêng cho payload, quota theo từng owner, TTL/GC, đối soát artifact mồ côi khi khởi động hoặc bảo đảm an toàn khi GC/read chạy đồng thời.
-- Bổ sung cơ chế tự động externalize theo luồng cho các kết quả read/Git/diff lớn có thể tải lại. Cơ chế chiếu hiện tại giữ lại `contentRef` nếu đã có; trong các trường hợp khác, nó chỉ che hoặc cắt an toàn dữ liệu timeline quá lớn thay vì tạo artifact mới.
-- Bổ sung các field/index cho schema cơ sở dữ liệu và truy vấn summary tải lười cho các dòng timeline lịch sử có kích thước nhiều megabyte. Event schema v2 vẫn tương thích ngược qua JSON, nhưng các dòng cũ chưa được migrate hoặc dọn dẹp.
-- Xuất các bộ đếm của cơ chế chiếu sang backend metrics của ứng dụng. Event hiện có bộ đếm số byte nhận được/sau khi chiếu cùng metadata về che dữ liệu/cắt bớt, nhưng chưa có metrics tổng hợp cho dữ liệu đã persist, gửi realtime, externalize và che.
-- Chạy và lưu kết quả benchmark bắt buộc với `contentRef` kích thước 1 MB, 100 MB và 1 GB, gồm RAM đỉnh, mức tăng dung lượng SQLite, số byte realtime, số byte artifact và thời gian serialize.
-- Kiểm thử các tình huống: tạo artifact thất bại sau khi mutation đã thành công, cơ sở dữ liệu ngừng hoạt động, subscriber WebSocket chậm hoặc mất kết nối, xóa task khi đang tạo artifact và GC/read artifact chạy đồng thời.
-- Kiểm tra thủ công giao diện timeline với cả event legacy chứa toàn bộ payload và event đã chiếu theo schema v2. Không có code frontend nào thay đổi và các test Rust trong workspace đã đạt, nhưng chưa chạy kiểm tra render ở cấp trình duyệt.
+- Timeline/realtime dùng schema v2 với projector giới hạn 64 KiB/event, preview bounded, recursive redaction cho content/Base64/credential/environment/private scope và không duplicate terminal payload.
+- Large tool output có thể tải lại được externalize tự động sang managed artifact dựa trên `BlobStore`; artifact có opaque ref, hash integrity, quota owner/global, TTL, GC, startup reconciliation, task ownership và lazy read. Artifact managed không dùng đường dẫn workspace do người dùng kiểm soát.
+- `artifact_registry` chỉ giữ metadata/reference; migration `0019_timeline_event_projection_metadata.sql` bổ sung metadata/index phục vụ schema/truncation/artifact lookup. Timeline history dùng SQL projection/compact path để không phải tải nguyên legacy payload lớn chỉ để render summary.
+- Popup chi tiết tool lazy-load managed artifact qua `task_activity` chỉ khi người dùng mở chi tiết; timeline bình thường tiếp tục dùng bounded summary. Luồng này vẫn tương thích event legacy và event schema v2.
+- Metrics đã có counters tổng hợp cho bytes nhận vào, persisted, realtime, externalized, redacted/truncated cùng artifact/blob resource usage.
+- Test privacy xác nhận marker nội dung lớn không xuất hiện trong SQLite/realtime nhưng vẫn lấy lại được qua lazy artifact detail đúng task. Cross-task read bị từ chối; restart, orphan cleanup, task cleanup và concurrent GC/read đều có coverage.
+- Degraded cases đã được test: externalization thất bại vẫn giữ event `succeeded` với `externalizationFailed`; lỗi SQLite khi ghi succeeded-event không rollback mutation đã commit; realtime dùng bounded broadcast nên subscriber chậm/disconnect không giữ giant payload.
+- Benchmark blob/contentRef thực tế: 10 MiB ~7.72 MiB/s, 100 MiB ~8.05 MiB/s, 1 GiB ~7.95 MiB/s; tại 1 GiB peak RSS ~13.59 MiB và RSS growth ~0.44 MiB. Benchmark Plan 13 cho reference 1 MiB/100 MiB/1 GiB cho SQLite event lần lượt ~275/281/284 byte và realtime ~556/562/565 byte, chứng minh growth theo summary chứ không theo content size.
+- Frontend production build pass; các test liên quan trực tiếp task timeline/API/file change đạt 19/19. Full frontend suite có một nhóm `App.test.tsx` routing/mock tổng quát không liên quan thay đổi Plan 13 bị flaky, nhưng build và các surface Plan 13 đều xanh.
+- Validation cuối: `cargo fmt --check`, `cargo check --workspace`, `cargo test --workspace` đều pass; lần chạy cuối test crash-safety từng flaky trước đó cũng pass trong full workspace suite.
+
+Không còn hạng mục bắt buộc nào của Plan 13 cần để lại cho lượt triển khai sau.

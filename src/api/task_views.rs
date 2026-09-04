@@ -178,7 +178,7 @@ pub(super) async fn task(
     .await
 }
 
-pub(super) async fn task_activity(
+pub(crate) async fn task_activity(
     State(state): State<Arc<AppState>>,
     Path((id, activity_id)): Path<(String, String)>,
 ) -> Result<Json<Value>, Problem> {
@@ -193,6 +193,7 @@ pub(super) async fn task_activity(
         return Err(not_found());
     }
     let mut detail = serde_json::Map::new();
+    let mut external_artifact_ref: Option<String> = None;
     for row in rows {
         let kind = row.get::<String, _>("kind");
         let payload = serde_json::from_str::<Value>(&row.get::<String, _>("payload_json"))
@@ -208,6 +209,12 @@ pub(super) async fn task_activity(
         if kind == "tool_result" {
             if let Some(value) = payload.get("output") {
                 detail.insert("output".to_owned(), value.clone());
+            }
+            if payload.get("payloadExternalized").and_then(Value::as_bool) == Some(true) {
+                external_artifact_ref = payload
+                    .get("artifactRef")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned);
             }
         }
         for key in [
@@ -231,6 +238,45 @@ pub(super) async fn task_activity(
                 detail.insert("error".to_owned(), value.clone());
             } else if !detail.contains_key("errorDetails") {
                 detail.insert("errorDetails".to_owned(), value.clone());
+            }
+        }
+    }
+    if let Some(artifact_id) = external_artifact_ref.as_deref() {
+        let row = sqlx::query(
+            "SELECT artifact_registry.relative_path,tasks.agent_id FROM artifact_registry JOIN tasks ON tasks.id=artifact_registry.task_id WHERE artifact_registry.id=? AND artifact_registry.task_id=? LIMIT 1",
+        )
+        .bind(artifact_id)
+        .bind(&id)
+        .fetch_optional(state.repository.pool())
+        .await
+        .map_err(db_problem)?;
+        if let Some(row) = row {
+            let relative_path = row.get::<String, _>("relative_path");
+            if let Some(content_ref) =
+                relative_path.strip_prefix(crate::runtime_host::MANAGED_ARTIFACT_PREFIX)
+            {
+                let agent_id = row.get::<String, _>("agent_id");
+                let mut context = chatcmd_runtime::OperationContext::new(
+                    format!("local-artifact-{activity_id}"),
+                    agent_id,
+                    "task_artifact_read",
+                );
+                context.task_id = Some(id.clone());
+                if let Ok(read) =
+                    state
+                        .blob_store
+                        .read_artifact_text(&context, content_ref, 2 * 1024 * 1024)
+                {
+                    if let Ok(output) = serde_json::from_str::<Value>(&read.content) {
+                        detail.insert("output".to_owned(), output);
+                    }
+                    detail.insert("payloadExternalized".to_owned(), Value::Bool(true));
+                    detail.insert(
+                        "artifactRef".to_owned(),
+                        Value::String(artifact_id.to_owned()),
+                    );
+                    detail.insert("artifactTruncated".to_owned(), Value::Bool(read.truncated));
+                }
             }
         }
     }
@@ -450,7 +496,7 @@ async fn fetch_timeline_rows(
         return Ok(Vec::new());
     }
     let mut query = QueryBuilder::<Sqlite>::new(
-        "SELECT event_id,turn_id,session_id,kind,payload_json,created_at_ms FROM timeline_events WHERE task_id=",
+        "SELECT event_id,turn_id,session_id,kind,CASE WHEN payload_size_bytes>131072 AND kind IN ('tool_call','tool_result') THEN json_object('activityId',json_extract(payload_json,'$.activityId'),'tool',json_extract(payload_json,'$.tool'),'status',json_extract(payload_json,'$.status'),'schemaVersion',schema_version,'legacyPayloadOmitted',1,'originalPayloadBytes',payload_size_bytes,'artifactRef',artifact_id) ELSE payload_json END AS payload_json,created_at_ms FROM timeline_events WHERE task_id=",
     );
     query.push_bind(task_id).push(" AND turn_id IN (");
     let mut separated = query.separated(",");

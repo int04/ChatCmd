@@ -42,6 +42,7 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, broadcast};
 
 use crate::websocket::AppEvent;
+pub(crate) const MANAGED_ARTIFACT_PREFIX: &str = "managed:v1:";
 pub(crate) use activity_control::{ActivityRegistry, StopActivityResult};
 pub(crate) use plan_prompt::{
     PlanPromptRegistry, PlanPromptResolution, PlanPromptResolveError, PlanPromptView,

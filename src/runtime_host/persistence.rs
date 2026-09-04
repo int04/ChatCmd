@@ -1,7 +1,7 @@
 use chatcmd_core::{
-    ActorKind, EventId, EventKind, SessionId, TaskId, TaskStatus, TaskStore as _,
-    TerminalEventChunk, TerminalEventStore as _, TerminalSession, TerminalSessionStatus,
-    TimelineEvent, TurnId,
+    ActorKind, Artifact, ArtifactId, ArtifactStore as _, EventId, EventKind, SessionId, TaskId,
+    TaskStatus, TaskStore as _, TerminalEventChunk, TerminalEventStore as _, TerminalSession,
+    TerminalSessionStatus, TimelineEvent, TurnId,
 };
 use chatcmd_runtime::{
     OperationContext, RuntimeError, RuntimeResult, ToolPhase, ToolStatus, ToolUsage,
@@ -180,6 +180,11 @@ impl RuntimeHost {
             &format!("{}\0{status}", context.request_id),
         );
         let limits = EventLimits::default();
+        let mut received_bytes = 0_u64;
+        let mut redactions = 0_u64;
+        let mut truncated = false;
+        let mut externalized_bytes = 0_u64;
+        let mut externalization_failed = false;
         let mut payload = json!({
             "activityId": context.request_id,
             "tool": tool,
@@ -188,20 +193,50 @@ impl RuntimeHost {
         });
         if let Some(value) = input {
             let projection = project(tool, value, limits);
+            received_bytes = received_bytes
+                .saturating_add(u64::try_from(projection.received_bytes).unwrap_or(u64::MAX));
+            redactions = redactions
+                .saturating_add(u64::try_from(projection.redactions.len()).unwrap_or(u64::MAX));
+            truncated |= projection.truncated;
             add_projection_metadata(&mut payload, "input", &projection);
             payload["input"] = projection.public_summary;
         }
         if let Some(value) = output {
             let projection = project(tool, value, limits);
+            received_bytes = received_bytes
+                .saturating_add(u64::try_from(projection.received_bytes).unwrap_or(u64::MAX));
+            redactions = redactions
+                .saturating_add(u64::try_from(projection.redactions.len()).unwrap_or(u64::MAX));
+            truncated |= projection.truncated;
             add_projection_metadata(&mut payload, "output", &projection);
+            if should_externalize_tool_output(tool, &projection) {
+                match self
+                    .externalize_tool_output(context, value, projection.received_bytes)
+                    .await
+                {
+                    Ok(Some((artifact_id, size_bytes))) => {
+                        externalized_bytes = externalized_bytes.saturating_add(size_bytes);
+                        payload["payloadExternalized"] = Value::Bool(true);
+                        payload["artifactRef"] = Value::String(artifact_id);
+                        payload["artifactSizeBytes"] = json!(size_bytes);
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        externalization_failed = true;
+                        payload["externalizationFailed"] = Value::Bool(true);
+                        payload["externalizationErrorCode"] = Value::String(error.code);
+                    }
+                }
+            }
             payload["output"] = projection.public_summary;
         }
         if let Some(value) = error {
             payload["errorCode"] = Value::String(value.code.clone());
-            let (message, truncated) = bounded_error_message(&value.message, limits);
+            let (message, error_truncated) = bounded_error_message(&value.message, limits);
             payload["errorMessage"] = Value::String(message);
-            if truncated {
+            if error_truncated {
                 payload["errorTruncated"] = Value::Bool(true);
+                truncated = true;
             }
         }
         let event_kind = if status == "started" || status == "pending_approval" {
@@ -212,6 +247,8 @@ impl RuntimeHost {
         let task_value = task_id.as_str().to_owned();
         let turn_value = turn_id.as_str().to_owned();
         let session_value = session_id.as_str().to_owned();
+        let payload_json = payload.to_string();
+        let payload_bytes = u64::try_from(payload_json.len()).unwrap_or(u64::MAX);
         let event = TimelineEvent {
             id: EventId::new(key.clone()).map_err(|error| invalid("eventId", error))?,
             task_id,
@@ -220,7 +257,7 @@ impl RuntimeHost {
             actor: ActorKind::Tool,
             kind: event_kind,
             idempotency_key: key.clone(),
-            payload_json: payload.to_string(),
+            payload_json,
             metadata_json: None,
             created_at_ms: now_ms(),
         };
@@ -228,6 +265,15 @@ impl RuntimeHost {
             .append_timeline_events(&[event])
             .await
             .map_err(storage_error)?;
+        self.telemetry.record_event_projection(
+            received_bytes,
+            payload_bytes,
+            payload_bytes,
+            externalized_bytes,
+            redactions,
+            truncated,
+            externalization_failed,
+        );
         self.publish_event(
             key,
             event_kind.as_str(),
@@ -237,6 +283,45 @@ impl RuntimeHost {
             payload,
         );
         Ok(())
+    }
+
+    async fn externalize_tool_output(
+        &self,
+        context: &OperationContext,
+        value: &Value,
+        received_bytes: usize,
+    ) -> RuntimeResult<Option<(String, u64)>> {
+        if received_bytes < 128 * 1024 {
+            return Ok(None);
+        }
+        let managed = self
+            .blob_store
+            .store_artifact_json(context, value, 24 * 60 * 60)?;
+        self.telemetry.set_blob_bytes(self.blob_store.usage_bytes());
+        let managed_size_bytes = managed.size_bytes;
+        let artifact_id = ArtifactId::new(format!("artifact-{}", Uuid::new_v4()))
+            .map_err(|error| invalid("artifactId", error))?;
+        let size_bytes = i64::try_from(managed_size_bytes).map_err(|_| {
+            RuntimeError::new("artifactTooLarge", "artifact size cannot be represented")
+        })?;
+        let timestamp = now_ms();
+        let artifact = Artifact {
+            id: artifact_id.clone(),
+            task_id: required_task_id(context)?,
+            // artifact_registry.session_id references terminal_sessions, not MCP sessions.
+            session_id: None,
+            relative_path: format!("{}{}", super::MANAGED_ARTIFACT_PREFIX, managed.content_ref),
+            media_type: Some("application/vnd.chatcmd.tool-output+json".to_owned()),
+            size_bytes,
+            sha256_hex: Some(managed.sha256),
+            created_at_ms: timestamp,
+            updated_at_ms: timestamp,
+        };
+        self.repository
+            .register_artifact(&artifact)
+            .await
+            .map_err(storage_error)?;
+        Ok(Some((artifact_id.into_string(), managed_size_bytes)))
     }
 
     pub(super) async fn persist_shell_session(
@@ -580,6 +665,17 @@ fn tool_result_has_artifact(value: &Value) -> bool {
     ["contentRef", "content_ref", "artifactRef", "artifact_ref"]
         .into_iter()
         .any(|key| value.get(key).is_some_and(|value| !value.is_null()))
+}
+
+fn should_externalize_tool_output(
+    tool: &str,
+    projection: &super::tool_event_projection::ToolEventProjection,
+) -> bool {
+    projection.received_bytes >= 128 * 1024
+        && matches!(
+            tool,
+            "fs_read_text" | "fs_read_text_v2" | "git_diff" | "git_show"
+        )
 }
 
 fn is_cancel_code(code: &str) -> bool {

@@ -3,6 +3,7 @@
 use crate::{OperationContext, RuntimeError, RuntimeResult};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashMap},
@@ -86,6 +87,25 @@ pub struct BlobStatus {
     pub next_offset: u64,
     pub expected_size_bytes: Option<u64>,
     pub sha256: Option<String>,
+    pub expires_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedArtifactRef {
+    pub content_ref: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+    pub expires_at_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedArtifactRead {
+    pub content: String,
+    pub truncated: bool,
+    pub size_bytes: u64,
+    pub sha256: String,
     pub expires_at_ms: u64,
 }
 
@@ -199,6 +219,156 @@ impl BlobStore {
 
     pub fn temporary() -> RuntimeResult<Self> {
         Self::new(std::env::temp_dir().join("chatcmd-blobs-v1"))
+    }
+
+    /// Stores an immutable, owner-scoped JSON artifact without Base64 expansion or an
+    /// additional in-memory serialized copy. The payload is serialized directly to a
+    /// temporary file, hashed, quota-checked, and atomically published before metadata
+    /// becomes visible.
+    pub fn store_artifact_json(
+        &self,
+        context: &OperationContext,
+        value: &Value,
+        ttl_seconds: u64,
+    ) -> RuntimeResult<ManagedArtifactRef> {
+        let mut counter = JsonByteCounter::default();
+        serde_json::to_writer(&mut counter, value)
+            .map_err(|error| RuntimeError::new("artifactSerializationFailed", error.to_string()))?;
+        let size_bytes = u64::try_from(counter.bytes)
+            .map_err(|_| quota_error("artifact size cannot be represented"))?;
+        if size_bytes > MAX_BLOB_BYTES {
+            return Err(quota_error("artifact exceeds the maximum size"));
+        }
+
+        let ttl_seconds = ttl_seconds.clamp(1, MAX_TTL_SECONDS);
+        let upload_id = Uuid::new_v4().to_string();
+        let content_ref = format!("blob:v1:{}", Uuid::new_v4());
+        let target = self.root.join(format!("{upload_id}.blob"));
+        let temporary = self
+            .root
+            .join(format!("{upload_id}.blob.tmp-{}", Uuid::new_v4()));
+        let mut file = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&temporary)
+            .map_err(io_error)?;
+        if let Err(error) = serde_json::to_writer(&mut file, value)
+            .map_err(|error| RuntimeError::new("artifactSerializationFailed", error.to_string()))
+            .and_then(|_| file.flush().map_err(io_error))
+            .and_then(|_| file.sync_all().map_err(io_error))
+        {
+            let _ = fs::remove_file(&temporary);
+            return Err(error);
+        }
+        let sha256 = match sha256_file(&temporary) {
+            Ok(value) => value,
+            Err(error) => {
+                let _ = fs::remove_file(&temporary);
+                return Err(error);
+            }
+        };
+        let expires_at_ms = now_ms().saturating_add(ttl_seconds.saturating_mul(1000));
+        let owner = owner(context);
+        let entry = BlobEntry {
+            upload_id: upload_id.clone(),
+            content_ref: content_ref.clone(),
+            owner: owner.clone(),
+            purpose: "artifact".to_owned(),
+            content_type: Some("application/json".to_owned()),
+            expected_size: Some(size_bytes),
+            expected_sha256: Some(sha256.clone()),
+            chunk_size: DEFAULT_CHUNK_BYTES,
+            expires_at_ms,
+            path: target.clone(),
+            received: size_bytes,
+            chunks: BTreeMap::new(),
+            sha256: Some(sha256.clone()),
+            state: BlobState::Sealed,
+        };
+
+        let mut entries = lock(&self.entries)?;
+        purge_expired(&self.root, &mut entries);
+        let (owner_bytes, owner_uploads, global_bytes) = usage(&entries, &owner);
+        if owner_uploads >= MAX_OWNER_UPLOADS
+            || owner_bytes.saturating_add(size_bytes) > MAX_OWNER_BYTES
+            || global_bytes.saturating_add(size_bytes) > MAX_GLOBAL_BYTES
+        {
+            let _ = fs::remove_file(&temporary);
+            return Err(quota_error("artifact quota exceeded"));
+        }
+        if let Err(error) = fs::rename(&temporary, &target).map_err(io_error) {
+            let _ = fs::remove_file(&temporary);
+            return Err(error);
+        }
+        if let Err(error) = persist_entry(&self.root, &entry) {
+            let _ = fs::remove_file(&target);
+            return Err(error);
+        }
+        entries.insert(upload_id, entry);
+        Ok(ManagedArtifactRef {
+            content_ref,
+            size_bytes,
+            sha256,
+            expires_at_ms,
+        })
+    }
+
+    /// Lazily reads an immutable managed artifact. Artifact ownership is task-scoped so a
+    /// later turn of the same agent/task can inspect a timeline reference; ordinary upload
+    /// leases remain strictly turn-scoped.
+    pub fn read_artifact_text(
+        &self,
+        context: &OperationContext,
+        content_ref: &str,
+        max_bytes: usize,
+    ) -> RuntimeResult<ManagedArtifactRead> {
+        let (path, size_bytes, sha256, expires_at_ms) = {
+            let mut entries = lock(&self.entries)?;
+            let entry = entries
+                .values_mut()
+                .find(|entry| entry.content_ref == content_ref)
+                .ok_or_else(|| RuntimeError::new("artifact_not_found", "artifact was not found"))?;
+            check_artifact_owner_and_expiry(entry, context)?;
+            if entry.purpose != "artifact" || entry.state != BlobState::Sealed {
+                return Err(RuntimeError::new(
+                    "artifact_not_found",
+                    "artifact is not available for lazy reading",
+                ));
+            }
+            (
+                entry.path.clone(),
+                entry.received,
+                entry.sha256.clone().unwrap_or_default(),
+                entry.expires_at_ms,
+            )
+        };
+        let file = File::open(path).map_err(io_error)?;
+        let take_limit = u64::try_from(max_bytes)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
+        let mut reader = BufReader::with_capacity(64 * 1024, file).take(take_limit);
+        let mut bytes = Vec::with_capacity(max_bytes.min(256 * 1024));
+        reader.read_to_end(&mut bytes).map_err(io_error)?;
+        let truncated = bytes.len() > max_bytes;
+        if truncated {
+            bytes.truncate(max_bytes);
+            while std::str::from_utf8(&bytes).is_err() && !bytes.is_empty() {
+                bytes.pop();
+            }
+        }
+        let content = String::from_utf8(bytes).map_err(|_| {
+            RuntimeError::new(
+                "artifactCorrupt",
+                "managed JSON artifact is not valid UTF-8",
+            )
+        })?;
+        Ok(ManagedArtifactRead {
+            content,
+            truncated,
+            size_bytes,
+            sha256,
+            expires_at_ms,
+        })
     }
 
     pub fn begin(
@@ -547,6 +717,26 @@ fn check_owner_and_expiry(entry: &mut BlobEntry, context: &OperationContext) -> 
     Ok(())
 }
 
+fn check_artifact_owner_and_expiry(
+    entry: &mut BlobEntry,
+    context: &OperationContext,
+) -> RuntimeResult<()> {
+    let same_agent = entry.owner.agent_id == context.agent_id;
+    let same_task = entry.owner.task_id.as_deref() == context.task_id.as_deref();
+    if !same_agent || !same_task || context.task_id.is_none() {
+        return Err(RuntimeError::new(
+            "artifactAccessDenied",
+            "artifact belongs to a different agent or task",
+        ));
+    }
+    if entry.expires_at_ms <= now_ms() {
+        entry.state = BlobState::Aborted;
+        let _ = fs::remove_file(&entry.path);
+        return Err(RuntimeError::new("artifactExpired", "artifact has expired"));
+    }
+    Ok(())
+}
+
 fn usage(entries: &HashMap<String, BlobEntry>, owner: &BlobOwner) -> (u64, usize, u64) {
     let active = entries.values().filter(|entry| {
         matches!(
@@ -619,7 +809,7 @@ fn recover_entries(root: &Path) -> RuntimeResult<HashMap<String, BlobEntry>> {
         let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
             continue;
         };
-        if name.contains(".meta.tmp-") {
+        if name.contains(".meta.tmp-") || name.contains(".blob.tmp-") {
             let _ = fs::remove_file(path);
             continue;
         }
@@ -742,6 +932,22 @@ fn status(entry: &BlobEntry) -> BlobStatus {
         expected_size_bytes: entry.expected_size,
         sha256: entry.sha256.clone(),
         expires_at_ms: entry.expires_at_ms,
+    }
+}
+
+#[derive(Default)]
+struct JsonByteCounter {
+    bytes: usize,
+}
+
+impl Write for JsonByteCounter {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.bytes = self.bytes.saturating_add(buffer.len());
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
@@ -1185,5 +1391,69 @@ mod tests {
         store
             .lease(&ctx, &begin.content_ref, "fsWriteRaw")
             .expect("re-lease after crash");
+    }
+
+    #[test]
+    fn managed_artifact_is_task_scoped_lazy_readable_and_restart_safe() {
+        let directory = tempdir().expect("tempdir");
+        let root = directory.path().to_path_buf();
+        let mut writer = context("agent");
+        writer.turn_id = Some("turn-one".into());
+        let marker = "MANAGED-ARTIFACT-MARKER";
+        let artifact = {
+            let store = BlobStore::new(root.clone()).expect("store");
+            store
+                .store_artifact_json(&writer, &serde_json::json!({"content": marker}), 60)
+                .expect("store artifact")
+        };
+
+        let store = BlobStore::new(root.clone()).expect("recovered store");
+        let mut later_turn = context("agent");
+        later_turn.turn_id = Some("turn-two".into());
+        let read = store
+            .read_artifact_text(&later_turn, &artifact.content_ref, 64 * 1024)
+            .expect("same task later turn can read");
+        assert!(read.content.contains(marker));
+        assert!(!read.truncated);
+        assert_eq!(read.sha256, artifact.sha256);
+
+        let mut other_task = later_turn.clone();
+        other_task.task_id = Some("other-task".into());
+        let denied = store
+            .read_artifact_text(&other_task, &artifact.content_ref, 64 * 1024)
+            .expect_err("different task denied");
+        assert_eq!(denied.code, "artifactAccessDenied");
+
+        std::fs::write(root.join("orphan.blob.tmp-test"), b"partial").expect("orphan temp");
+        drop(store);
+        BlobStore::new(root.clone()).expect("restart cleans orphan");
+        assert!(!root.join("orphan.blob.tmp-test").exists());
+    }
+
+    #[test]
+    fn managed_artifact_cleanup_and_gc_are_safe_around_reads() {
+        let directory = tempdir().expect("tempdir");
+        let store = BlobStore::new(directory.path().to_path_buf()).expect("store");
+        let ctx = context("agent");
+        let artifact = store
+            .store_artifact_json(&ctx, &serde_json::json!({"value":"x".repeat(4096)}), 60)
+            .expect("store artifact");
+        let reader_store = store.clone();
+        let reader_ctx = ctx.clone();
+        let content_ref = artifact.content_ref.clone();
+        let reader = std::thread::spawn(move || {
+            reader_store.read_artifact_text(&reader_ctx, &content_ref, 8192)
+        });
+        store.gc().expect("concurrent gc");
+        let read = reader
+            .join()
+            .expect("reader thread")
+            .expect("artifact read");
+        assert!(!read.truncated);
+        assert_eq!(store.cleanup_task("task").expect("task cleanup"), 1);
+        let missing = store
+            .read_artifact_text(&ctx, &artifact.content_ref, 8192)
+            .expect_err("deleted task artifact unavailable");
+        assert_eq!(missing.code, "artifact_not_found");
     }
 }

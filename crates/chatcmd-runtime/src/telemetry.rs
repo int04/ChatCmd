@@ -151,6 +151,18 @@ pub struct ProgressMetrics {
 
 #[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct EventProjectionMetrics {
+    pub received_bytes: u64,
+    pub persisted_bytes: u64,
+    pub realtime_bytes: u64,
+    pub externalized_bytes: u64,
+    pub redactions: u64,
+    pub truncated_events: u64,
+    pub externalization_failures: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct SubagentLeaseMetrics {
     pub heartbeat: u64,
     pub hard_deadline: u64,
@@ -166,6 +178,7 @@ pub struct TelemetrySnapshot {
     pub active_operations_omitted: usize,
     pub metrics: Vec<ToolMetricView>,
     pub progress_events: ProgressMetrics,
+    pub event_projection: EventProjectionMetrics,
     pub artifact_bytes: u64,
     pub blob_bytes: u64,
     pub operation_journal_active: u64,
@@ -189,6 +202,7 @@ struct RegistryState {
     completed_ids: HashSet<String>,
     completed_order: VecDeque<String>,
     progress: ProgressMetrics,
+    event_projection: EventProjectionMetrics,
     artifact_bytes: u64,
     blob_bytes: u64,
     operation_journal_active: u64,
@@ -237,6 +251,7 @@ impl ToolTelemetryRegistry {
                 completed_ids: HashSet::new(),
                 completed_order: VecDeque::new(),
                 progress: ProgressMetrics::default(),
+                event_projection: EventProjectionMetrics::default(),
                 artifact_bytes: 0,
                 blob_bytes: 0,
                 operation_journal_active: 0,
@@ -314,6 +329,7 @@ impl ToolTelemetryRegistry {
                 active_operations_omitted: 0,
                 metrics: Vec::new(),
                 progress_events: ProgressMetrics::default(),
+                event_projection: EventProjectionMetrics::default(),
                 artifact_bytes: 0,
                 blob_bytes: 0,
                 operation_journal_active: 0,
@@ -347,6 +363,7 @@ impl ToolTelemetryRegistry {
             active_operations_omitted: active_total.saturating_sub(self.active_snapshot_limit),
             metrics,
             progress_events: state.progress.clone(),
+            event_projection: state.event_projection.clone(),
             artifact_bytes: state.artifact_bytes,
             blob_bytes: state.blob_bytes,
             operation_journal_active: state.operation_journal_active,
@@ -361,6 +378,31 @@ impl ToolTelemetryRegistry {
             state.progress.emitted = state.progress.emitted.saturating_add(emitted);
             state.progress.coalesced = state.progress.coalesced.saturating_add(coalesced);
             state.progress.dropped = state.progress.dropped.saturating_add(dropped);
+        }
+    }
+
+    pub fn record_event_projection(
+        &self,
+        received_bytes: u64,
+        persisted_bytes: u64,
+        realtime_bytes: u64,
+        externalized_bytes: u64,
+        redactions: u64,
+        truncated: bool,
+        externalization_failed: bool,
+    ) {
+        if let Ok(mut state) = self.inner.lock() {
+            let metric = &mut state.event_projection;
+            metric.received_bytes = metric.received_bytes.saturating_add(received_bytes);
+            metric.persisted_bytes = metric.persisted_bytes.saturating_add(persisted_bytes);
+            metric.realtime_bytes = metric.realtime_bytes.saturating_add(realtime_bytes);
+            metric.externalized_bytes =
+                metric.externalized_bytes.saturating_add(externalized_bytes);
+            metric.redactions = metric.redactions.saturating_add(redactions);
+            metric.truncated_events = metric.truncated_events.saturating_add(u64::from(truncated));
+            metric.externalization_failures = metric
+                .externalization_failures
+                .saturating_add(u64::from(externalization_failed));
         }
     }
 
@@ -960,6 +1002,8 @@ mod tests {
         let registry = ToolTelemetryRegistry::default();
         registry.set_blob_bytes(10);
         registry.set_persisted_resource_usage(20, 3);
+        registry.record_event_projection(1_000, 100, 100, 900, 4, true, false);
+        registry.record_event_projection(2_000, 120, 120, 0, 2, false, true);
         registry.record_subagent_lease_expired(SubagentLeaseExpiryReason::Heartbeat);
         registry.record_subagent_lease_expired(SubagentLeaseExpiryReason::HardDeadline);
         registry.record_subagent_lease_expired(SubagentLeaseExpiryReason::WorkerRestart);
@@ -967,6 +1011,13 @@ mod tests {
         assert_eq!(snapshot.blob_bytes, 10);
         assert_eq!(snapshot.artifact_bytes, 20);
         assert_eq!(snapshot.operation_journal_active, 3);
+        assert_eq!(snapshot.event_projection.received_bytes, 3_000);
+        assert_eq!(snapshot.event_projection.persisted_bytes, 220);
+        assert_eq!(snapshot.event_projection.realtime_bytes, 220);
+        assert_eq!(snapshot.event_projection.externalized_bytes, 900);
+        assert_eq!(snapshot.event_projection.redactions, 6);
+        assert_eq!(snapshot.event_projection.truncated_events, 1);
+        assert_eq!(snapshot.event_projection.externalization_failures, 1);
         assert_eq!(snapshot.subagent_lease_expired.heartbeat, 1);
         assert_eq!(snapshot.subagent_lease_expired.hard_deadline, 1);
         assert_eq!(snapshot.subagent_lease_expired.worker_restart, 1);

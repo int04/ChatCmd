@@ -19,7 +19,7 @@ mod subagents;
 mod system;
 mod task_controls;
 mod task_delete;
-mod task_views;
+pub(crate) mod task_views;
 mod tunnels;
 mod workspaces;
 
