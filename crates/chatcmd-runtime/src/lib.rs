@@ -3,6 +3,7 @@
 mod blob_store;
 mod budget;
 mod filesystem;
+mod git_parser;
 mod git_service;
 mod policy;
 mod process_runner;

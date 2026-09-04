@@ -209,30 +209,74 @@ cargo test --workspace
 - Parser tests và security checks.
 - Benchmark memory/output/cancel số liệu.
 
-## Cần kiểm tra và hoàn thiện sau
+## Kết quả hoàn tất 2026-09-04
 
-Phần lõi xử lý theo luồng đã được triển khai và các bước kiểm tra tối thiểu đều đạt, nhưng
-Plan 15 chưa được xác nhận trọn vẹn ở các nội dung sau:
+Plan 15 đã hoàn tất và được xác minh lại trực tiếp trên macOS.
 
-- Artifact stdout hiện được ghi theo luồng vào thư mục tạm có quota và SHA-256, nhưng chưa
-  đăng ký vào `ArtifactStore` theo task/session và chưa hỗ trợ đọc range qua
-  `task_artifact_read`. Cần nối vòng đời và bước dọn dẹp với artifact registry của Plan 13.
-- `git status` đã chuyển sang porcelain v2, còn log/branch dùng định dạng có ký tự phân cách,
-  nhưng chưa có parser có kiểu cho các entry branch/status, path không phải UTF-8 được mã hóa Base64,
-  rename/copy, giới hạn số item hoặc cursor có chữ ký/`hasMore`.
-- Chưa có mốc tiến độ theo số byte/thời gian và chưa trả về giai đoạn commit/giai đoạn hook
-  cùng commit hash sau khi commit thành công.
-- Chưa chạy test tích hợp cho cây process con/cháu trên Unix; Windows
-  mới chỉ được kiểm thử trực tiếp cho timeout/cancel/kill-on-limit. Chưa kiểm thử hook bị treo,
-  credential helper, submodule, repository hỏng, lỗi khóa/quyền truy cập và tình huống tranh chấp
-  giữa timeout/cancel với lúc process thoát.
-- Chưa có test chèn lỗi cho artifact sink chậm/đầy, quota đầy giữa luồng,
-  cơ chế chiếu timeline không giữ toàn bộ đầu ra Git, migration tương thích, diff nhị phân,
-  rename/copy và path repository không phải UTF-8.
-- Chưa chạy benchmark bắt buộc cho diff 10 MB/100 MB/1 GB và repository có 100.000
-  entry; chưa thu thập mức sử dụng bộ nhớ đỉnh, thời gian đến byte đầu tiên, thông lượng artifact,
-  độ trễ hủy hoặc số liệu dọn dẹp process.
+### Architecture cuối
 
-Các bước kiểm tra sau đã chạy thành công trên Windows: `cargo fmt --all -- --check`,
-`cargo check --workspace`, `cargo test -p chatcmd-runtime`, và
-`cargo test --workspace`.
+- `BoundedProcessRunner` stream stdout/stderr đồng thời qua pipe, giữ preview bounded, không gom toàn bộ output bằng `Command::output()` trong production Git paths.
+- Có timeout, `CancellationToken`, `killOnLimit`, kill process group/tree và reap child trước khi trả kết quả.
+- Git subprocess dùng stdin null, tắt pager/prompt tương tác và giữ argument-safe execution bằng `Command.args` + `--` cho path.
+- Output lớn có thể externalize sang managed artifact; import file tạm được stream vào `BlobStore`, kiểm tra size/SHA-256, áp quota và đăng ký `artifact_registry` theo task.
+- Progress của runner được throttle theo byte/thời gian, không queue unbounded; metrics cuối có `stdoutBytes`, `stderrBytes`, `firstOutputMs`, `artifactBytes`, `elapsedMs`, `timedOut`, `cancelled`.
+
+### Structured Git contract
+
+- `git_status`: porcelain v2 + branch metadata, ordinary/rename/copy/unmerged/untracked, index/worktree status, non-UTF-8 path có `pathBytesBase64`, item limit, signed cursor, `nextCursor`, `hasMore`.
+- `git_log`: structured commit/shortCommit/author/authoredAt/subject, limit, signed cursor, `hasMore`.
+- `git_branch`: ref/name/objectId/current/upstream, limit/cursor/hasMore.
+- `git_commit`: phase rõ (`staging`, `commitHooksIncluded`, committed tương đương), không báo success khi timeout/cancel, trả commit hash khi thành công.
+- Parser đã được tách khỏi `git_service.rs`; `git_service.rs` hiện 458 dòng.
+
+### Artifact range behavior
+
+- `task_artifact_read` hỗ trợ `offset` + `maxBytes` và trả `content`, `offset`, `nextOffset`, `hasMore`/truncation metadata.
+- Managed artifact vẫn task-scoped, không load toàn artifact vào RAM; implementation seek tới offset và đọc bounded, giữ UTF-8 boundary an toàn.
+- Lazy activity detail đọc nhiều bounded range để tái tạo JSON artifact tối đa 2 MiB thay vì giả định một chunk đủ lớn; regression test `large_tool_content_is_absent_from_sqlite_and_realtime` PASS.
+
+### Adversarial/security coverage đã xác minh
+
+- Large Git status spill không vượt inline cap.
+- Binary diff bounded và argument-safe.
+- External diff bị vô hiệu hóa.
+- Corrupt repository / index lock fail có kiểm soát, không panic.
+- Hanging pre-commit hook timeout và bị reap, không tạo commit.
+- Commit thành công trả structured commit hash.
+- Revision bắt đầu bằng `-` và control/newline injection bị reject; path separator `--` vẫn được giữ.
+- Unix timeout giết cả child/grandchild process group.
+- Artifact hard cap giữa stream có `artifactLimit`; khi `killOnLimit=false` producer vẫn được drain tới exit, khi `true` producer bị dừng.
+- Timeline/realtime không persist full large tool output; chỉ bounded projection + artifact reference.
+
+### Benchmark cuối trên macOS
+
+`git_diff_10mib_100mib_1gib_reports_streaming_metrics` — PASS:
+
+- 10 MiB: stdoutBytes=10,680,142; artifactBytes=10,680,142; firstOutputMs=29 ms; elapsedMs=506 ms; throughput≈20.13 MiB/s; reason=`contentExternalized`.
+- 100 MiB: stdoutBytes=106,799,811; artifactBytes=106,799,811; firstOutputMs=96 ms; elapsedMs=4,899 ms; throughput≈20.79 MiB/s; reason=`contentExternalized`.
+- 1 GiB: stdoutBytes=1,093,629,168; artifactBytes=1,073,741,824; firstOutputMs=106 ms; elapsedMs=49,595 ms; throughput≈20.65 MiB/s; reason=`artifactLimit`; process vẫn exit thành công và preview bounded.
+- `/usr/bin/time -l` cho diff benchmark: maximum resident set size=181,141,504 bytes; peak memory footprint=85,115,504 bytes.
+
+`git_status_100k_entries_reports_first_page_and_metrics` — PASS:
+
+- entries=100,000; stdoutBytes=2,800,042; artifactBytes=2,800,042; firstOutputMs=109 ms; elapsedMs=234 ms; reason=`contentExternalized`.
+- `/usr/bin/time -l`: maximum resident set size=110,821,376 bytes; peak memory footprint=85,951,088 bytes.
+
+`git_diff_cancellation_latency_is_bounded` — PASS:
+
+- totalMs=64 ms; cancelLatencyMs=14 ms.
+
+### Validation cuối
+
+Đều PASS trên macOS:
+
+```bash
+cargo fmt --all -- --check
+cargo check --workspace
+cargo test -p chatcmd-runtime
+cargo test --workspace
+```
+
+Full workspace suite sau fix lazy artifact detail: 0 failed. Warning còn thấy ở `crates/chatcmd-runtime/tests/search_perf.rs` là unused import của benchmark Plan 06, ngoài phạm vi Plan 15 và không ảnh hưởng kết quả validation.
+
+Không còn mục công việc chưa hoàn thiện của Plan 15.

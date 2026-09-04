@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, HashMap},
     fs::{self, File, OpenOptions},
-    io::{BufReader, Read, Write},
+    io::{BufReader, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -107,6 +107,8 @@ pub struct ManagedArtifactRead {
     pub size_bytes: u64,
     pub sha256: String,
     pub expires_at_ms: u64,
+    pub offset: u64,
+    pub next_offset: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -313,15 +315,106 @@ impl BlobStore {
         })
     }
 
-    /// Lazily reads an immutable managed artifact. Artifact ownership is task-scoped so a
-    /// later turn of the same agent/task can inspect a timeline reference; ordinary upload
-    /// leases remain strictly turn-scoped.
+    /// Imports an existing file into immutable, owner-scoped artifact storage without
+    /// loading the whole file into memory. The source remains untouched so callers can
+    /// delete temporary producer output only after this method succeeds.
+    pub fn store_artifact_file(
+        &self,
+        context: &OperationContext,
+        source: &Path,
+        content_type: Option<String>,
+        ttl_seconds: u64,
+    ) -> RuntimeResult<ManagedArtifactRef> {
+        let size_bytes = fs::metadata(source).map_err(io_error)?.len();
+        if size_bytes > MAX_BLOB_BYTES {
+            return Err(quota_error("artifact exceeds the maximum size"));
+        }
+        let sha256 = sha256_file(source)?;
+        let ttl_seconds = ttl_seconds.clamp(1, MAX_TTL_SECONDS);
+        let upload_id = Uuid::new_v4().to_string();
+        let content_ref = format!("blob:v1:{}", Uuid::new_v4());
+        let target = self.root.join(format!("{upload_id}.blob"));
+        let temporary = self
+            .root
+            .join(format!("{upload_id}.blob.tmp-{}", Uuid::new_v4()));
+        let owner = owner(context);
+        let expires_at_ms = now_ms().saturating_add(ttl_seconds.saturating_mul(1000));
+        let entry = BlobEntry {
+            upload_id: upload_id.clone(),
+            content_ref: content_ref.clone(),
+            owner: owner.clone(),
+            purpose: "artifact".to_owned(),
+            content_type,
+            expected_size: Some(size_bytes),
+            expected_sha256: Some(sha256.clone()),
+            chunk_size: DEFAULT_CHUNK_BYTES,
+            expires_at_ms,
+            path: target.clone(),
+            received: size_bytes,
+            chunks: BTreeMap::new(),
+            sha256: Some(sha256.clone()),
+            state: BlobState::Sealed,
+        };
+
+        let mut entries = lock(&self.entries)?;
+        purge_expired(&self.root, &mut entries);
+        let (owner_bytes, owner_uploads, global_bytes) = usage(&entries, &owner);
+        if owner_uploads >= MAX_OWNER_UPLOADS
+            || owner_bytes.saturating_add(size_bytes) > MAX_OWNER_BYTES
+            || global_bytes.saturating_add(size_bytes) > MAX_GLOBAL_BYTES
+        {
+            return Err(quota_error("artifact quota exceeded"));
+        }
+        if let Err(error) = fs::copy(source, &temporary).map_err(io_error) {
+            let _ = fs::remove_file(&temporary);
+            return Err(error);
+        }
+        if fs::metadata(&temporary).map_err(io_error)?.len() != size_bytes
+            || sha256_file(&temporary)? != sha256
+        {
+            let _ = fs::remove_file(&temporary);
+            return Err(RuntimeError::new(
+                "artifactIntegrityMismatch",
+                "artifact source changed while being imported",
+            ));
+        }
+        if let Err(error) = fs::rename(&temporary, &target).map_err(io_error) {
+            let _ = fs::remove_file(&temporary);
+            return Err(error);
+        }
+        if let Err(error) = persist_entry(&self.root, &entry) {
+            let _ = fs::remove_file(&target);
+            return Err(error);
+        }
+        entries.insert(upload_id, entry);
+        Ok(ManagedArtifactRef {
+            content_ref,
+            size_bytes,
+            sha256,
+            expires_at_ms,
+        })
+    }
+
+    /// Lazily reads an immutable managed artifact from the beginning.
     pub fn read_artifact_text(
         &self,
         context: &OperationContext,
         content_ref: &str,
         max_bytes: usize,
     ) -> RuntimeResult<ManagedArtifactRead> {
+        self.read_artifact_text_range(context, content_ref, 0, max_bytes)
+    }
+
+    /// Reads one bounded byte range from a managed artifact. The next offset is explicit so
+    /// callers can page through very large Git output without reloading earlier bytes.
+    pub fn read_artifact_text_range(
+        &self,
+        context: &OperationContext,
+        content_ref: &str,
+        offset: u64,
+        max_bytes: usize,
+    ) -> RuntimeResult<ManagedArtifactRead> {
+        let max_bytes = max_bytes.clamp(1, MAX_INLINE_BYTES);
         let (path, size_bytes, sha256, expires_at_ms) = {
             let mut entries = lock(&self.entries)?;
             let entry = entries
@@ -342,25 +435,33 @@ impl BlobStore {
                 entry.expires_at_ms,
             )
         };
-        let file = File::open(path).map_err(io_error)?;
+        if offset > size_bytes {
+            return Err(RuntimeError::new(
+                "artifact_range_invalid",
+                "artifact offset exceeds artifact size",
+            ));
+        }
+        let mut file = File::open(path).map_err(io_error)?;
+        file.seek(SeekFrom::Start(offset)).map_err(io_error)?;
         let take_limit = u64::try_from(max_bytes)
             .unwrap_or(u64::MAX)
-            .saturating_add(1);
+            .saturating_add(4);
         let mut reader = BufReader::with_capacity(64 * 1024, file).take(take_limit);
         let mut bytes = Vec::with_capacity(max_bytes.min(256 * 1024));
         reader.read_to_end(&mut bytes).map_err(io_error)?;
-        let truncated = bytes.len() > max_bytes;
-        if truncated {
+        let available = size_bytes.saturating_sub(offset);
+        let truncated = available > u64::try_from(max_bytes).unwrap_or(u64::MAX);
+        if bytes.len() > max_bytes {
             bytes.truncate(max_bytes);
-            while std::str::from_utf8(&bytes).is_err() && !bytes.is_empty() {
-                bytes.pop();
-            }
         }
+        while std::str::from_utf8(&bytes).is_err() && !bytes.is_empty() {
+            bytes.pop();
+        }
+        let consumed = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+        let next = offset.saturating_add(consumed);
+        let next_offset = (next < size_bytes).then_some(next);
         let content = String::from_utf8(bytes).map_err(|_| {
-            RuntimeError::new(
-                "artifactCorrupt",
-                "managed JSON artifact is not valid UTF-8",
-            )
+            RuntimeError::new("artifactCorrupt", "managed artifact is not valid UTF-8")
         })?;
         Ok(ManagedArtifactRead {
             content,
@@ -368,6 +469,8 @@ impl BlobStore {
             size_bytes,
             sha256,
             expires_at_ms,
+            offset,
+            next_offset,
         })
     }
 
@@ -1428,6 +1531,43 @@ mod tests {
         drop(store);
         BlobStore::new(root.clone()).expect("restart cleans orphan");
         assert!(!root.join("orphan.blob.tmp-test").exists());
+    }
+
+    #[test]
+    fn managed_artifact_file_import_is_streamed_registered_and_source_preserved() {
+        let directory = tempdir().expect("tempdir");
+        let store = BlobStore::new(directory.path().join("blobs")).expect("store");
+        let ctx = context("agent");
+        let source = directory.path().join("git-output.txt");
+        let payload = "git-output-line\n".repeat(32 * 1024);
+        std::fs::write(&source, payload.as_bytes()).expect("write source");
+
+        let artifact = store
+            .store_artifact_file(
+                &ctx,
+                &source,
+                Some("text/plain; charset=utf-8".to_owned()),
+                60,
+            )
+            .expect("import artifact file");
+        assert!(source.exists(), "producer owns source cleanup");
+        assert_eq!(artifact.size_bytes, payload.len() as u64);
+        let first = store
+            .read_artifact_text_range(&ctx, &artifact.content_ref, 0, 128 * 1024)
+            .expect("read first imported artifact page");
+        assert!(first.truncated);
+        assert_eq!(first.offset, 0);
+        let second_offset = first.next_offset.expect("continuation offset");
+        let second = store
+            .read_artifact_text_range(&ctx, &artifact.content_ref, second_offset, 128 * 1024)
+            .expect("read second imported artifact page");
+        assert_eq!(second.offset, second_offset);
+        assert_eq!(first.sha256, artifact.sha256);
+        assert_eq!(second.sha256, artifact.sha256);
+        assert_eq!(
+            format!("{}{}", first.content, second.content),
+            payload[..256 * 1024]
+        );
     }
 
     #[test]

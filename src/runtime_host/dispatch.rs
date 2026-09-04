@@ -8,8 +8,8 @@ use chatcmd_core::{
 };
 use chatcmd_mcp::RuntimeApi as _;
 use chatcmd_runtime::{
-    FsConflictPolicy, FsTransferRequest, OperationContext, RuntimeError, RuntimeResult,
-    ShellCreateRequest, ShellWriteRequest,
+    CommandOutput, FsConflictPolicy, FsTransferRequest, OperationContext, RuntimeError,
+    RuntimeResult, ShellCreateRequest, ShellWriteRequest,
 };
 use serde_json::{Value, json};
 
@@ -609,16 +609,16 @@ impl RuntimeHost {
             "git_status" => {
                 let input: GitCwdInput = parse(arguments)?;
                 let cwd = self.resolve_git_cwd(&context, input.cwd).await?;
-                value(
-                    git.status_with_options(&cwd, &input.options, context.cancellation.clone())
-                        .await?,
-                )
+                let output = git
+                    .status_with_options(&cwd, &input.options, context.cancellation.clone())
+                    .await?;
+                value(self.register_git_artifact(&context, output).await?)
             }
             "git_diff" => {
                 let input: GitDiff = parse(arguments)?;
                 let cwd = self.resolve_git_cwd(&context, input.cwd).await?;
-                value(
-                    git.diff_with_options(
+                let output = git
+                    .diff_with_options(
                         &cwd,
                         input.staged,
                         input.stat,
@@ -626,50 +626,50 @@ impl RuntimeHost {
                         &input.options,
                         context.cancellation.clone(),
                     )
-                    .await?,
-                )
+                    .await?;
+                value(self.register_git_artifact(&context, output).await?)
             }
             "git_log" => {
                 let input: GitLog = parse(arguments)?;
                 let cwd = self.resolve_git_cwd(&context, input.cwd).await?;
-                value(
-                    git.log_with_options(
+                let output = git
+                    .log_with_options(
                         &cwd,
                         input.count,
                         input.path.as_deref(),
                         &input.options,
                         context.cancellation.clone(),
                     )
-                    .await?,
-                )
+                    .await?;
+                value(self.register_git_artifact(&context, output).await?)
             }
             "git_branch" => {
                 let input: GitCwdInput = parse(arguments)?;
                 let cwd = self.resolve_git_cwd(&context, input.cwd).await?;
-                value(
-                    git.branch_with_options(&cwd, &input.options, context.cancellation.clone())
-                        .await?,
-                )
+                let output = git
+                    .branch_with_options(&cwd, &input.options, context.cancellation.clone())
+                    .await?;
+                value(self.register_git_artifact(&context, output).await?)
             }
             "git_show" => {
                 let input: GitShow = parse(arguments)?;
                 let cwd = self.resolve_git_cwd(&context, input.cwd).await?;
-                value(
-                    git.show_with_options(
+                let output = git
+                    .show_with_options(
                         &cwd,
                         &input.revision,
                         input.path.as_deref(),
                         &input.options,
                         context.cancellation.clone(),
                     )
-                    .await?,
-                )
+                    .await?;
+                value(self.register_git_artifact(&context, output).await?)
             }
             "git_commit" => {
                 let input: GitCommit = parse(arguments)?;
                 let cwd = self.resolve_git_cwd(&context, input.cwd).await?;
-                value(
-                    git.commit_with_options(
+                let output = git
+                    .commit_with_options(
                         &cwd,
                         &input.message,
                         input.all,
@@ -677,8 +677,8 @@ impl RuntimeHost {
                         &input.options,
                         context.cancellation.clone(),
                     )
-                    .await?,
-                )
+                    .await?;
+                value(self.register_git_artifact(&context, output).await?)
             }
             "process_list" => value(self.process.list().await?),
             "process_inspect" => {
@@ -776,6 +776,48 @@ impl RuntimeHost {
             "agent_turn_complete" => self.complete_agent_turn(&context, arguments).await,
             _ => Err(RuntimeError::new("tool_not_found", "unknown MCP tool")),
         }
+    }
+
+    async fn register_git_artifact(
+        &self,
+        context: &OperationContext,
+        mut output: CommandOutput,
+    ) -> RuntimeResult<CommandOutput> {
+        let Some(path) = output.artifact_ref.clone() else {
+            return Ok(output);
+        };
+        let source = std::path::PathBuf::from(&path);
+        let managed = self.blob_store.store_artifact_file(
+            context,
+            &source,
+            Some("text/plain; charset=utf-8".to_owned()),
+            24 * 60 * 60,
+        )?;
+        let artifact_id = ArtifactId::new(format!("artifact-{}", uuid::Uuid::new_v4()))
+            .map_err(|error| invalid("artifactId", error))?;
+        let timestamp = now_ms();
+        let artifact = Artifact {
+            id: artifact_id.clone(),
+            task_id: context_task_id(context)?,
+            session_id: None,
+            relative_path: format!("{}{}", super::MANAGED_ARTIFACT_PREFIX, managed.content_ref),
+            media_type: Some("text/plain; charset=utf-8".to_owned()),
+            size_bytes: i64::try_from(managed.size_bytes).map_err(|_| {
+                RuntimeError::new("artifactTooLarge", "artifact size cannot be represented")
+            })?,
+            sha256_hex: Some(managed.sha256.clone()),
+            created_at_ms: timestamp,
+            updated_at_ms: timestamp,
+        };
+        self.repository
+            .register_artifact(&artifact)
+            .await
+            .map_err(storage_error)?;
+        let _ = tokio::fs::remove_file(&source).await;
+        self.telemetry.set_blob_bytes(self.blob_store.usage_bytes());
+        output.artifact_ref = Some(artifact_id.into_string());
+        output.artifact_sha256 = Some(managed.sha256);
+        Ok(output)
     }
 
     async fn create_artifact(
@@ -916,9 +958,12 @@ impl RuntimeHost {
             .relative_path
             .strip_prefix(super::MANAGED_ARTIFACT_PREFIX)
         {
-            let read = self
-                .blob_store
-                .read_artifact_text(context, content_ref, 200_000)?;
+            let read = self.blob_store.read_artifact_text_range(
+                context,
+                content_ref,
+                input.offset,
+                input.max_bytes.clamp(1, 256 * 1024),
+            )?;
             return Ok(json!({
                 "artifact": {
                     "id": artifact.id.as_str(), "taskId": artifact.task_id.as_str(),
@@ -927,7 +972,11 @@ impl RuntimeHost {
                     "sizeBytes": artifact.size_bytes, "sha256Hex": artifact.sha256_hex,
                     "expiresAtMs": read.expires_at_ms
                 },
-                "content": read.content, "truncated": read.truncated
+                "content": read.content,
+                "truncated": read.truncated,
+                "offset": read.offset,
+                "nextOffset": read.next_offset,
+                "hasMore": read.next_offset.is_some()
             }));
         }
         let path = self

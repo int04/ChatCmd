@@ -33,7 +33,11 @@ input!(SkillInput {
 });
 input!(ProcessInput { process_id: u32 });
 input!(ArtifactInput {
-    artifact_id: String
+    artifact_id: String,
+    #[serde(default)]
+    offset: u64,
+    #[serde(default = "default_artifact_read_max")]
+    max_bytes: usize
 });
 input!(ArtifactCreateInput {
     content_ref: String,
@@ -356,6 +360,10 @@ pub(super) struct ReadInput {
 }
 
 const fn default_characters() -> usize {
+    200_000
+}
+
+const fn default_artifact_read_max() -> usize {
     200_000
 }
 

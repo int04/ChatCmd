@@ -65,6 +65,8 @@ impl BoundedProcessRunner {
             artifact.clone(),
             options.artifact_max_bytes.min(HARD_ARTIFACT_BYTES),
             limit_tx.clone(),
+            started,
+            "stdout",
         ));
         let stderr_task = tokio::spawn(drain_stream(
             stderr,
@@ -72,6 +74,8 @@ impl BoundedProcessRunner {
             None,
             0,
             limit_tx,
+            started,
+            "stderr",
         ));
 
         let runtime_ms = options
@@ -143,11 +147,17 @@ impl BoundedProcessRunner {
             truncation_reason,
             stdout_bytes: stdout.total_bytes,
             stderr_bytes: stderr.total_bytes,
+            artifact_bytes: stdout.artifact_bytes,
             artifact_ref,
             artifact_sha256,
+            first_output_ms: [stdout.first_output_ms, stderr.first_output_ms]
+                .into_iter()
+                .flatten()
+                .min(),
             elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
             timed_out,
             cancelled,
+            structured: None,
         })
     }
 }
@@ -158,6 +168,7 @@ struct DrainResult {
     artifact_bytes: u64,
     artifact_limit_reached: bool,
     sha256: String,
+    first_output_ms: Option<u64>,
 }
 
 async fn drain_stream(
@@ -166,6 +177,8 @@ async fn drain_stream(
     artifact_path: Option<PathBuf>,
     artifact_limit: u64,
     limit_tx: mpsc::Sender<()>,
+    started: Instant,
+    stream: &'static str,
 ) -> std::io::Result<DrainResult> {
     let mut preview = Vec::with_capacity(preview_limit.min(READ_CHUNK_BYTES));
     let mut buffer = vec![0_u8; READ_CHUNK_BYTES];
@@ -173,6 +186,9 @@ async fn drain_stream(
     let mut artifact_bytes = 0_u64;
     let mut artifact_limit_reached = false;
     let mut hasher = Sha256::new();
+    let mut first_output_ms = None;
+    let mut last_progress_bytes = 0_u64;
+    let mut last_progress_at = Instant::now();
     let mut artifact = match artifact_path {
         Some(path) => Some(File::create(path).await?),
         None => None,
@@ -183,7 +199,22 @@ async fn drain_stream(
         if count == 0 {
             break;
         }
+        first_output_ms.get_or_insert_with(|| {
+            u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+        });
         total_bytes = total_bytes.saturating_add(count as u64);
+        if total_bytes.saturating_sub(last_progress_bytes) >= 8 * 1024 * 1024
+            || last_progress_at.elapsed() >= Duration::from_secs(1)
+        {
+            tracing::debug!(
+                stream,
+                total_bytes,
+                artifact_bytes,
+                "bounded process output progress"
+            );
+            last_progress_bytes = total_bytes;
+            last_progress_at = Instant::now();
+        }
         let preview_remaining = preview_limit.saturating_sub(preview.len());
         preview.extend_from_slice(&buffer[..count.min(preview_remaining)]);
         if let Some(file) = artifact.as_mut() {
@@ -210,6 +241,7 @@ async fn drain_stream(
         artifact_bytes,
         artifact_limit_reached,
         sha256: format!("{:x}", hasher.finalize()),
+        first_output_ms,
     })
 }
 
@@ -347,6 +379,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn artifact_limit_caps_disk_bytes_while_draining_to_exit() {
+        let directory = TempDir::new().expect("temporary directory");
+        let runner = BoundedProcessRunner::new(directory.path().to_owned());
+        let options = GitRunOptions {
+            max_output_bytes: 1024,
+            max_stderr_bytes: 1024,
+            artifact_max_bytes: 4096,
+            ..GitRunOptions::default()
+        };
+        let output = runner
+            .run(
+                noisy_command(128 * 1024),
+                &options,
+                CancellationToken::new(),
+            )
+            .await
+            .expect("artifact limited output");
+        assert_eq!(output.exit_code, Some(0));
+        assert_eq!(output.artifact_bytes, 4096);
+        assert_eq!(output.truncation_reason.as_deref(), Some("artifactLimit"));
+        assert_eq!(output.stdout_bytes, 128 * 1024);
+        assert!(output.artifact_ref.is_some());
+    }
+
+    #[tokio::test]
     async fn cancellation_stops_and_reaps_process() {
         let directory = TempDir::new().expect("temporary directory");
         let runner = BoundedProcessRunner::new(directory.path().to_owned());
@@ -410,5 +467,41 @@ mod tests {
         assert!(output.truncated);
         assert_eq!(output.truncation_reason.as_deref(), Some("outputLimit"));
         assert!(output.elapsed_ms < 5_000);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn timeout_kills_spawned_grandchild_process_group() {
+        let directory = TempDir::new().expect("temporary directory");
+        let pid_file = directory.path().join("grandchild.pid");
+        let runner = BoundedProcessRunner::new(directory.path().join("artifacts"));
+        let mut command = Command::new("sh");
+        command.args([
+            "-c",
+            &format!("sleep 30 & echo $! > '{}'; wait", pid_file.display()),
+        ]);
+        let options = GitRunOptions {
+            timeout_ms: 250,
+            max_runtime_ms: 250,
+            ..GitRunOptions::default()
+        };
+        let output = runner
+            .run(command, &options, CancellationToken::new())
+            .await
+            .expect("timed out process tree");
+        assert!(output.timed_out);
+
+        let grandchild_pid: u32 = tokio::fs::read_to_string(&pid_file)
+            .await
+            .expect("grandchild pid file")
+            .trim()
+            .parse()
+            .expect("grandchild pid");
+        let status = Command::new("kill")
+            .args(["-0", &grandchild_pid.to_string()])
+            .status()
+            .await
+            .expect("probe grandchild");
+        assert!(!status.success(), "grandchild survived process-group kill");
     }
 }

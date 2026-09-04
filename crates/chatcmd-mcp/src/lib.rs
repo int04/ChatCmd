@@ -234,7 +234,11 @@ tool_args!(SkillArgs {
 });
 tool_args!(ProcessArgs { process_id: u32 });
 tool_args!(ArtifactArgs {
-    artifact_id: String
+    artifact_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    offset: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    max_bytes: Option<usize>
 });
 tool_args!(ArtifactCreateArgs {
     content_ref: String,
@@ -1107,7 +1111,7 @@ tool_methods!(
     (
         git_status,
         CwdArgs,
-        "Get Git working tree status. Optional cwd; legacy path is accepted as a cwd alias."
+        "Get bounded Git working tree status plus typed porcelain-v2 data. Optional cwd, limit and signed cursor; legacy path is accepted as a cwd alias. Structured entries include branch metadata, rename/copy data and Base64 bytes for non-UTF-8 paths when needed."
     ),
     (
         git_diff,
@@ -1117,12 +1121,12 @@ tool_methods!(
     (
         git_log,
         GitLogArgs,
-        "Get bounded Git history. Optional cwd, count, path."
+        "Get bounded Git history with machine-readable structured entries. Optional cwd, count, path, limit and signed cursor."
     ),
     (
         git_branch,
         CwdArgs,
-        "List Git branches. Optional cwd; legacy path is accepted as a cwd alias."
+        "List Git branches with structured ref/object/current/upstream entries. Optional cwd, limit and signed cursor; legacy path is accepted as a cwd alias."
     ),
     (
         git_show,
@@ -1183,7 +1187,7 @@ tool_methods!(
     (
         task_artifact_read,
         ArtifactArgs,
-        "Read a task artifact. Required field: artifactId."
+        "Read one bounded task-artifact range. Required artifactId; optional offset and maxBytes. Managed artifacts return nextOffset and hasMore for range continuation."
     ),
     (
         agent_user_message,

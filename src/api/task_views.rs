@@ -262,21 +262,48 @@ pub(crate) async fn task_activity(
                     "task_artifact_read",
                 );
                 context.task_id = Some(id.clone());
-                if let Ok(read) =
-                    state
-                        .blob_store
-                        .read_artifact_text(&context, content_ref, 2 * 1024 * 1024)
-                {
-                    if let Ok(output) = serde_json::from_str::<Value>(&read.content) {
-                        detail.insert("output".to_owned(), output);
+                let detail_limit = 2 * 1024 * 1024usize;
+                let mut artifact_content = String::new();
+                let mut offset = 0u64;
+                let mut artifact_truncated = false;
+                loop {
+                    let remaining = detail_limit.saturating_sub(artifact_content.len());
+                    if remaining == 0 {
+                        artifact_truncated = true;
+                        break;
                     }
-                    detail.insert("payloadExternalized".to_owned(), Value::Bool(true));
-                    detail.insert(
-                        "artifactRef".to_owned(),
-                        Value::String(artifact_id.to_owned()),
-                    );
-                    detail.insert("artifactTruncated".to_owned(), Value::Bool(read.truncated));
+                    let read = match state.blob_store.read_artifact_text_range(
+                        &context,
+                        content_ref,
+                        offset,
+                        remaining.min(256 * 1024),
+                    ) {
+                        Ok(read) => read,
+                        Err(_) => break,
+                    };
+                    artifact_content.push_str(&read.content);
+                    artifact_truncated = read.truncated;
+                    let Some(next_offset) = read.next_offset else {
+                        break;
+                    };
+                    if next_offset <= offset {
+                        artifact_truncated = true;
+                        break;
+                    }
+                    offset = next_offset;
                 }
+                if let Ok(output) = serde_json::from_str::<Value>(&artifact_content) {
+                    detail.insert("output".to_owned(), output);
+                }
+                detail.insert("payloadExternalized".to_owned(), Value::Bool(true));
+                detail.insert(
+                    "artifactRef".to_owned(),
+                    Value::String(artifact_id.to_owned()),
+                );
+                detail.insert(
+                    "artifactTruncated".to_owned(),
+                    Value::Bool(artifact_truncated),
+                );
             }
         }
     }
