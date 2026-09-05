@@ -79,6 +79,7 @@ async function acquireNewConversationTab(sourceTabId, newConversationUrl) {
   }
   if (!tab?.id) throw new Error('Không thể tự mở tab ChatGPT mới. Hãy kiểm tra quyền của extension rồi thử lại.');
   await waitForTab(tab.id);
+  await waitForChatGptReady(tab.id);
   return tab;
 }
 

@@ -166,6 +166,7 @@ async function startSubagentRequest(message) {
   const tab = await chrome.tabs.create({ url: target, active: false });
   if (!tab?.id) throw new Error('Không thể mở tab ChatGPT cho sub-agent.');
   await waitForTab(tab.id);
+  await waitForChatGptReady(tab.id);
   const requestId = `subagent:${message.subagentId}:${attempt}`;
   await chrome.storage.session.set({
     [requestKey(requestId)]: {

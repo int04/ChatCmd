@@ -255,6 +255,12 @@ test('content scripts load helpers before the request runner', () => {
   assert.deepEqual(entry.js, ['content-chatgpt-ui.js', 'content-chatgpt-dom.js', 'content-chatgpt-approval-ui.js', 'content-chatgpt.js']);
 });
 
+test('new project tabs wait for a stable ChatGPT composer before sending', () => {
+  assert.match(backgroundIoSource, /async function waitForChatGptReady/);
+  assert.match(backgroundTabsSource, /await waitForTab\(tab\.id\);\s*await waitForChatGptReady\(tab\.id\);\s*return tab;/);
+  assert.match(backgroundSource, /await waitForTab\(tab\.id\);\s*await waitForChatGptReady\(tab\.id\);\s*const requestId = `subagent:/);
+});
+
 test('all extension sources stay within the 500-line maintenance limit', () => {
   const lineCount = (value) => value.trimEnd().split(/\r?\n/).length;
   for (const [name, value] of Object.entries({

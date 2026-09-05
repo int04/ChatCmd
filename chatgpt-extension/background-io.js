@@ -90,6 +90,27 @@ async function waitForTab(tabId) {
   });
 }
 
+async function waitForChatGptReady(tabId) {
+  let stableChecks = 0;
+  let lastError;
+  for (let attempt = 0; attempt < 50; attempt++) {
+    try {
+      const response = await sendToChatGpt(tabId, { type: 'chatcmd-chatgpt-ready' }, { quiet: true });
+      if (response?.composerReady === true && response?.generating !== true) {
+        stableChecks += 1;
+        if (stableChecks >= 3) return;
+      } else {
+        stableChecks = 0;
+      }
+    } catch (error) {
+      lastError = error;
+      stableChecks = 0;
+    }
+    await delay(200);
+  }
+  throw lastError || new Error('Ô nhập ChatGPT chưa sẵn sàng sau khi mở trang dự án.');
+}
+
 async function postJson(baseUrl, path, body) {
   const response = await fetch(`${baseUrl}${path}`, {
     method: 'POST',
