@@ -1,4 +1,4 @@
-import { AlertTriangle, Bot, ChevronDown, ChevronUp, FolderOpen, LayoutDashboard, LoaderCircle, Plus, Power, Search, Settings, TerminalSquare, Trash2, Wrench } from 'lucide-react';
+import { AlertTriangle, Bot, ChevronDown, ChevronUp, FolderOpen, LayoutDashboard, LoaderCircle, PanelLeftClose, PanelLeftOpen, Plus, Power, Search, Settings, TerminalSquare, Trash2, Wrench } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type MouseEventHandler } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 
@@ -23,7 +23,7 @@ const menuItems = [
   { to: '/settings', label: 'Setting', icon: Settings },
 ];
 
-export function FunctionRail() {
+export function FunctionRail({ taskRailCollapsed, onTaskRailToggle }: { taskRailCollapsed: boolean; onTaskRailToggle: () => void }) {
   const navigate = useNavigate();
   const [confirmExit, setConfirmExit] = useState(false);
   const [exiting, setExiting] = useState(false);
@@ -42,6 +42,7 @@ export function FunctionRail() {
   return <>
     <nav className="function-rail" aria-label={tr('Application navigation')}>
       <Link className="function-rail-brand" to="/" aria-label="ChatCMD"><img src="/icons/logo-icon-master-1024.png" alt="" /></Link>
+      {taskRailCollapsed && <button className="function-rail-action task-rail-reopen" type="button" aria-label="Mở rails đoạn trò chuyện" title="Mở rails đoạn trò chuyện" onClick={onTaskRailToggle}><PanelLeftOpen /><span className="sr-only">Mở rails đoạn trò chuyện</span></button>}
       <div className="function-rail-items">
         {menuItems.map(({ to, end, label, icon: Icon }) => <NavLink to={to} end={end} key={to} aria-label={tr(label)} title={tr(label)}><Icon /><span className="sr-only">{tr(label)}</span></NavLink>)}
         <button className="function-rail-action function-rail-exit" type="button" aria-label="Dừng ứng dụng" title="Dừng ứng dụng" onClick={() => { setExitError(''); setConfirmExit(true); }}><Power /><span className="sr-only">Dừng ứng dụng</span></button>
@@ -51,7 +52,7 @@ export function FunctionRail() {
   </>;
 }
 
-export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function TaskRail({ open, onClose, onDesktopCollapse }: { open: boolean; onClose: () => void; onDesktopCollapse: () => void }) {
   const location = useLocation(); const navigate = useNavigate(); const taskId = activeTaskId(location.pathname);
   const [loadedTasks, setLoadedTasks] = useState<Task[]>([]); const [nextCursor, setNextCursor] = useState<string>(); const [loading, setLoading] = useState(true); const [loadingMore, setLoadingMore] = useState(false); const [error, setError] = useState(''); const [query, setQuery] = useState(''); const [contextMenu, setContextMenu] = useState<{ task: Task; x: number; y: number }>(); const [deleteTarget, setDeleteTarget] = useState<Task>(); const [deleting, setDeleting] = useState(false); const [deleteError, setDeleteError] = useState('');
   const [readFinalCounts, setReadFinalCounts] = useState<Record<string, number>>(readStoredFinalCounts);
@@ -188,6 +189,7 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
     <div className="panel-resize-handle task-rail-resize-handle" role="separator" aria-label={tr('Resize conversations')} aria-orientation="vertical" aria-valuemin={240} aria-valuemax={480} aria-valuenow={railResize.width} tabIndex={0} onPointerDown={railResize.onPointerDown} onKeyDown={railResize.onKeyDown} />
     <header className="task-rail-header">
       <div className="task-rail-toolbar">
+        <button className="task-rail-collapse" type="button" aria-label="Đóng rails đoạn trò chuyện" title="Đóng rails đoạn trò chuyện" onClick={onDesktopCollapse}><PanelLeftClose /></button>
         <label className="tasks-conversation-search"><Search /><span className="sr-only">{tr('Search conversations')}</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={tr('Search')} /></label>
         <Link className="task-rail-new-message" to="/tasks/new" aria-label={tr('New message')} title={tr('New message')}><Plus /></Link>
       </div>
