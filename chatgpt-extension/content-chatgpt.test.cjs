@@ -9,6 +9,7 @@ const source = readFileSync(join(extensionRoot, 'content-chatgpt.js'), 'utf8');
 const domSource = readFileSync(join(extensionRoot, 'content-chatgpt-dom.js'), 'utf8');
 const backgroundSource = readFileSync(join(extensionRoot, 'background.js'), 'utf8');
 const backgroundIoSource = readFileSync(join(extensionRoot, 'background-io.js'), 'utf8');
+const backgroundTabsSource = readFileSync(join(extensionRoot, 'background-tabs.js'), 'utf8');
 const uiHelperSource = readFileSync(join(extensionRoot, 'content-chatgpt-ui.js'), 'utf8');
 const manifest = JSON.parse(readFileSync(join(extensionRoot, 'manifest.json'), 'utf8'));
 const localUiSource = readFileSync(join(extensionRoot, '..', 'web', 'src', 'chatgpt', 'ChatGptConversation.tsx'), 'utf8');
@@ -190,8 +191,10 @@ test('backend final response completes without a browser ping or retry', async (
 });
 
 test('background exposes browser completion and the known status contract', async () => {
+  assert.match(backgroundSource, /importScripts\('background-io\.js', 'background-tabs\.js', 'approval-bridge\.js'\)/);
   assert.match(backgroundIoSource, /stage === 'browser-completed'/);
   assert.match(backgroundIoSource, /\/browser-completed/);
+  assert.match(backgroundTabsSource, /conversationReady: ready/);
   const context = { chrome: {} };
   vm.createContext(context);
   vm.runInContext(backgroundIoSource, context, { filename: 'background-io.js' });
@@ -256,6 +259,7 @@ test('all extension sources stay within the 500-line maintenance limit', () => {
   const lineCount = (value) => value.trimEnd().split(/\r?\n/).length;
   for (const [name, value] of Object.entries({
     'background.js': backgroundSource, 'background-io.js': backgroundIoSource,
+    'background-tabs.js': backgroundTabsSource,
     'content-chatgpt.js': source, 'content-chatgpt-dom.js': domSource,
     'content-chatgpt-ui.js': uiHelperSource,
   })) assert.ok(lineCount(value) <= 500, `${name} has ${lineCount(value)} lines`);
@@ -267,7 +271,12 @@ test('local UI keeps failed dispatches for explicit user control', () => {
 });
 
 test('local UI does not block sending on the polling-only conversationReady signal', () => {
-  assert.doesNotMatch(localUiSource, /if \(!status\.conversationReady\)/);
+  const newConversationSend = localUiSource.slice(
+    localUiSource.indexOf('const sendNewConversation'),
+    localUiSource.indexOf('const submit'),
+  );
+  assert.match(newConversationSend, /if \(!status\.ready\)/);
+  assert.doesNotMatch(newConversationSend, /conversationReady/);
   assert.doesNotMatch(localUiSource, /active \|\| chatGptReady !== true/);
   assert.doesNotMatch(localUiSource, /chatgpt-retry-warning/);
 });

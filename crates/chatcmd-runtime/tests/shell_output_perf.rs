@@ -1,3 +1,5 @@
+#![cfg(unix)]
+
 use chatcmd_runtime::{
     ApprovalDecision, BoxFuture, ExecutionPolicy, NullEventSink, OperationContext, PolicyContext,
     PolicyDecision, PolicyEngine, RuntimeConfig, RuntimeResult, ShellCreateRequest, ShellRuntime,

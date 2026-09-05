@@ -2,9 +2,9 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use chatcmd_core::{McpAgentStore as _, NewMcpAgent};
 use chatcmd_runtime::{
-    ApprovalDecision, BoxFuture, ExecutionPolicy, GitService, NullEventSink, OperationContext,
-    PolicyContext, PolicyDecision, PolicyEngine, ProcessService, RuntimeConfig, RuntimeResult,
-    ShellRuntime, SkillService, WorkspaceService,
+    ApprovalDecision, BoxFuture, CommandExecutionService, ExecutionPolicy, GitService,
+    NullEventSink, OperationContext, PolicyContext, PolicyDecision, PolicyEngine, ProcessService,
+    RuntimeConfig, RuntimeResult, ShellRuntime, SkillService, WorkspaceService,
 };
 use chatcmd_storage::SqliteRepository;
 use serde_json::json;
@@ -66,6 +66,12 @@ async fn git_status_uses_task_project_folder_when_cwd_is_omitted() {
     };
     let shell = ShellRuntime::new(config, policy.clone(), Arc::new(NullEventSink));
     let git = GitService::new(workspace.clone(), 10_000);
+    let command = CommandExecutionService::new(
+        workspace.clone(),
+        Arc::new(policy.clone()),
+        root.join(".test-command-artifacts"),
+        2,
+    );
     let process = ProcessService::new(policy);
     let skills = SkillService::new(None, Some(&root), 10_000);
     let (events, _) = broadcast::channel(16);
@@ -76,6 +82,7 @@ async fn git_status_uses_task_project_folder_when_cwd_is_omitted() {
         workspace,
         chatcmd_runtime::BlobStore::new(root.join(".test-blobs")).expect("blob store"),
         git,
+        command,
         process,
         skills,
         events,

@@ -1,12 +1,15 @@
 use crate::{
-    CommandOutput, CursorCodec, GitCommitData, GitOutputMode, GitRunOptions, GitStructuredOutput,
-    RuntimeError, RuntimeResult, WorkspaceService,
+    CommandOutput, CursorCodec, GitRunOptions, GitStructuredOutput, RuntimeError, RuntimeResult,
+    WorkspaceService,
     git_parser::{cursor_scope, parse_branches, parse_log, parse_status, structured_source},
     process_runner::BoundedProcessRunner,
 };
 use std::path::Path;
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
+
+mod commit;
+pub use commit::GitCommitPreview;
 
 #[derive(Clone)]
 pub struct GitService {
@@ -265,83 +268,54 @@ impl GitService {
         options: &GitRunOptions,
         cancellation: CancellationToken,
     ) -> RuntimeResult<CommandOutput> {
-        if message.trim().is_empty() {
-            return Err(RuntimeError::new(
-                "invalid_commit_message",
-                "commit message cannot be empty",
-            ));
-        }
-        if !paths.is_empty() {
-            let mut args = vec!["add".to_owned(), "--".to_owned()];
-            args.extend(paths.iter().cloned());
-            let mut staged = self
-                .run_owned(cwd, &args, options, cancellation.clone())
-                .await?;
-            if staged.exit_code != Some(0) || staged.timed_out || staged.cancelled {
-                staged.structured = Some(GitStructuredOutput::Commit(GitCommitData {
-                    phase: "stage".to_owned(),
-                    commit_hash: None,
-                    hooks_included: false,
-                }));
-                return Ok(staged);
-            }
-        } else if all {
-            let mut staged = self
-                .run(cwd, &["add", "--all"], options, cancellation.clone())
-                .await?;
-            if staged.exit_code != Some(0) || staged.timed_out || staged.cancelled {
-                staged.structured = Some(GitStructuredOutput::Commit(GitCommitData {
-                    phase: "stage".to_owned(),
-                    commit_hash: None,
-                    hooks_included: false,
-                }));
-                return Ok(staged);
-            }
-        }
-        let mut committed = self
-            .run(
-                cwd,
-                &["commit", "--message", message],
-                options,
-                cancellation.clone(),
-            )
+        let preview = self
+            .preview_commit_with_options(cwd, all, paths, options, cancellation.clone())
             .await?;
-        let commit_hash =
-            if committed.exit_code == Some(0) && !committed.timed_out && !committed.cancelled {
-                self.commit_hash(cwd, options, cancellation).await?
-            } else {
-                None
-            };
-        committed.structured = Some(GitStructuredOutput::Commit(GitCommitData {
-            phase: "commitHooksIncluded".to_owned(),
-            commit_hash,
-            hooks_included: true,
-        }));
-        Ok(committed)
+        self.commit_previewed_with_options(
+            cwd,
+            message,
+            all,
+            paths,
+            &preview,
+            options,
+            cancellation,
+        )
+        .await
     }
 
-    async fn commit_hash(
+    pub async fn preview_commit_with_options(
         &self,
         cwd: &Path,
+        all: bool,
+        paths: &[String],
         options: &GitRunOptions,
         cancellation: CancellationToken,
-    ) -> RuntimeResult<Option<String>> {
-        let mut bounded = options.clone();
-        bounded.output_mode = GitOutputMode::Inline;
-        bounded.max_output_bytes = bounded.max_output_bytes.clamp(64, 4096);
-        bounded.max_stderr_bytes = bounded.max_stderr_bytes.clamp(64, 4096);
-        bounded.cursor = None;
-        bounded.limit = 1;
-        let output = self
-            .run(cwd, &["rev-parse", "HEAD"], &bounded, cancellation)
-            .await?;
-        if output.exit_code == Some(0) && !output.timed_out && !output.cancelled {
-            let hash = output.stdout.trim();
-            if hash.len() == 40 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-                return Ok(Some(hash.to_owned()));
-            }
-        }
-        Ok(None)
+    ) -> RuntimeResult<GitCommitPreview> {
+        commit::preview(self, cwd, all, paths, options, cancellation).await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn commit_previewed_with_options(
+        &self,
+        cwd: &Path,
+        message: &str,
+        all: bool,
+        paths: &[String],
+        preview: &GitCommitPreview,
+        options: &GitRunOptions,
+        cancellation: CancellationToken,
+    ) -> RuntimeResult<CommandOutput> {
+        commit::execute(
+            self,
+            cwd,
+            message,
+            all,
+            paths,
+            preview,
+            options,
+            cancellation,
+        )
+        .await
     }
 
     async fn run(
@@ -374,6 +348,7 @@ impl GitService {
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GCM_INTERACTIVE", "Never")
             .env("GIT_PAGER", "cat")
+            .env("GIT_LITERAL_PATHSPECS", "1")
             .env("PAGER", "cat")
             .env("NO_COLOR", "1");
         self.runner.run(command, options, cancellation).await

@@ -32,4 +32,18 @@ describe('tool result envelope rendering', () => {
     expect(output).toContain('Nội dung đầy đủ: artifact-1');
     expect(output).not.toContain('opaque-secret-cursor');
   });
+
+  it('renders command identity and terminal facts without exposing argument values', () => {
+    const output = formatToolOutput('command_run', {
+      executionId: 'execution-1',
+      command: { executable: 'cargo', argumentCount: 3, argumentsSha256: 'sha256:test' },
+      cwd: 'D:/repo', terminalState: 'exited', exitCode: 7, elapsedMs: 42,
+      stdout: 'PASS text is not authoritative', stderr: 'failure details',
+    });
+
+    expect(output).toContain('Lệnh: cargo');
+    expect(output).toContain('Exit code: 7');
+    expect(output).toContain('Thư mục: D:/repo');
+    expect(output).not.toContain('sha256:test');
+  });
 });

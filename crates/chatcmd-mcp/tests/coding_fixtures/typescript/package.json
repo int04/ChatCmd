@@ -1,0 +1,8 @@
+{
+  "name": "coding-fixture-typescript",
+  "private": true,
+  "scripts": {
+    "test": "node --test math.test.mjs"
+  }
+}
+

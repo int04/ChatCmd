@@ -1,6 +1,7 @@
 # Kế hoạch nâng cấp ChatCMD thành MCP chuyên cho lập trình
 
-> Trạng thái: **PLANNED — chưa triển khai các hạng mục trong tài liệu này**.
+> Trạng thái triển khai: **IMPLEMENTED_AUTOMATED_ONLY / LIVE_VALIDATION_BLOCKED**.
+> Ngày triển khai: **2026-09-05**. Baseline triển khai thực tế: nhánh `dev`, commit `f8ea45f139e3ea9c3886f726c42030aab3d64d7f`; giữ nguyên thay đổi người dùng, chưa commit.
 > Ngày lập: **2026-09-05**. Baseline đối chiếu: nhánh `dev`, commit `983f360`.
 > Repo: `/Users/ducnghia/Downloads/dev/ChatCmdClient`.
 > Phạm vi lượt tạo tài liệu: chỉ tạo `plan/coding.md`; không sửa source, không commit.
@@ -65,18 +66,18 @@ P0 là an toàn/hợp đồng cần sửa trước. P1 là năng lực coding c�
 
 | Gói | Ưu tiên | Kết quả chính | Phụ thuộc | Trạng thái |
 |---|---|---|---|---|
-| C00 | P0 | Baseline, bản đồ source và tách module cần chạm | Không | [ ] |
-| C01 | P0 | Execution authorization không bị đi vòng bởi tool khác | C00 | [ ] |
-| C02 | P0 | Consent rõ ràng, scope/intent tách khỏi plan heuristic | C01 | [ ] |
-| C03 | P0 | Commit đúng phạm vi, bảo toàn index/worktree của người dùng | C00, C01 | [ ] |
-| C04 | P1 | Instructions có cấu trúc và coding workflow dùng chung | C00; tích hợp C01–C03 | [ ] |
-| C05 | P1 | Project rules theo scope, có nguồn và giới hạn | C04 | [ ] |
-| C06 | P0/P1 | Sửa description ngay; sau đó đồng bộ rule/schema/evidence child | C00; C04–C05 cho phần đầy đủ | [ ] |
-| C07 | P1 | Wire contract, hash/version, errors và recovery nhất quán | C04, C06 | [ ] |
-| C08 | P1 | Thực thi command có kết quả và lifecycle đáng tin cậy | C01, C07 | [ ] |
-| C09 | P1 | Evidence/report, finalization và UI không báo verified sai | C02, C05, C08 | [ ] |
-| C10 | P1/P2 | Regression matrix, fixture coding tasks và live-host evaluation | Theo từng gói; tổng hợp C01–C09 | [ ] |
-| C11 | P2 | Docs, migration/compatibility, release smoke và nghiệm thu | C01–C10 | [ ] |
+| C00 | P0 | Baseline, bản đồ source và tách module cần chạm | Không | [x] Automated accepted |
+| C01 | P0 | Execution authorization không bị đi vòng bởi tool khác | C00 | [x] Automated accepted |
+| C02 | P0 | Consent rõ ràng, scope/intent tách khỏi plan heuristic | C01 | [x] Automated accepted |
+| C03 | P0 | Commit đúng phạm vi, bảo toàn index/worktree của người dùng | C00, C01 | [x] Automated accepted |
+| C04 | P1 | Instructions có cấu trúc và coding workflow dùng chung | C00; tích hợp C01–C03 | [x] Automated accepted |
+| C05 | P1 | Project rules theo scope, có nguồn và giới hạn | C04 | [x] Automated accepted |
+| C06 | P0/P1 | Sửa description ngay; sau đó đồng bộ rule/schema/evidence child | C00; C04–C05 cho phần đầy đủ | [x] Automated accepted |
+| C07 | P1 | Wire contract, hash/version, errors và recovery nhất quán | C04, C06 | [x] Automated accepted |
+| C08 | P1 | Thực thi command có kết quả và lifecycle đáng tin cậy | C01, C07 | [x] Automated accepted |
+| C09 | P1 | Evidence/report, finalization và UI không báo verified sai | C02, C05, C08 | [x] Automated accepted |
+| C10 | P1/P2 | Regression matrix, fixture coding tasks và live-host evaluation | Theo từng gói; tổng hợp C01–C09 | [ ] Tier A/B pass; Tier C blocked |
+| C11 | P2 | Docs, migration/compatibility, release smoke và nghiệm thu | C01–C10 | [ ] Automated/docs pass; live acceptance blocked |
 
 Thứ tự đề xuất: C00 → C01 → C02 → C03, đồng thời sửa tối thiểu description F07; sau đó C04 → C05 → C06 → C07 → C08 → C09 → C10 → C11. Test của từng gói phải đi cùng gói đó, không dồn tất cả đến C10.
 
@@ -557,13 +558,13 @@ Manual/browser smoke phải dùng profile và dữ liệu thử, kiểm tra appr
 
 ### 17.1. Implementation/automated acceptance
 
-- [ ] C01/C02: không tự tăng quyền, không auto-consent, không tool-level bypass như F03/F04; test regression có gọi runtime.
-- [ ] C03: commit explicit scope, không gom staged/unstaged của người dùng ngoài scope; ambiguous same-file diff fail closed.
-- [ ] C04/C05: coding core và scoped project rules được host đọc thật, có version/provenance/bounds, không phụ thuộc skill bắt buộc phải tồn tại.
-- [ ] C06/C07: parent/child/fallback description/schema thống nhất; wire catalog và cached client behavior được test.
-- [ ] C08/C09: execution lifecycle/evidence server-owned, freshness được kiểm tra; final/quality status không đánh đồng; blocked/legacy hoàn tất được.
-- [ ] C10 Tầng A/B pass theo scope; C11 migrations/docs/release smoke phù hợp hoàn tất.
-- [ ] Không có regression mới không được xử lý; không unrelated changes; source đã chạm tuân thủ 500 dòng.
+- [x] C01/C02: không tự tăng quyền, không auto-consent, không tool-level bypass như F03/F04; test regression có gọi runtime.
+- [x] C03: commit explicit scope, không gom staged/unstaged của người dùng ngoài scope; ambiguous same-file diff fail closed.
+- [x] C04/C05: coding core và scoped project rules được host đọc thật, có version/provenance/bounds, không phụ thuộc skill bắt buộc phải tồn tại.
+- [x] C06/C07: parent/child/fallback description/schema thống nhất; wire catalog và cached client behavior được test.
+- [x] C08/C09: execution lifecycle/evidence server-owned, freshness được kiểm tra; final/quality status không đánh đồng; blocked/legacy hoàn tất được.
+- [x] C10 Tầng A/B pass theo scope; C11 migrations/docs/release smoke phù hợp hoàn tất.
+- [x] Không có regression mới không được xử lý; không unrelated changes; source đã chạm tuân thủ 500 dòng.
 
 ### 17.2. Behavioral validation
 
@@ -596,6 +597,17 @@ Giữ tên `plan/coding.md` trừ khi người dùng yêu cầu đổi. Không t
 | Ngày | Gói | Việc thực hiện | Kiểm chứng | Trạng thái |
 |---|---|---|---|---|
 | 2026-09-05 | Tạo plan | Đối chiếu baseline dev/983f360, rules/manifests/consent UI/workflows; soạn coding.md | Không có claim đã triển khai source; baseline test ở mục 2 thuộc lượt audit trước | PLANNED |
+| 2026-09-05 | C00–C09 | Triển khai authorization fail-closed, consent bền vững, Git explicit scope, instruction/project context, child contract, catalog v8, command journal/artifact quota và completion evidence/UI; tách các module source đã chạm xuống ≤500 dòng | `cargo test --workspace`; behavior harness 7/7; MCP lib 69 pass/2 ignored; client 141 pass/1 ignored; runtime lib 132 pass/2 ignored | AUTOMATED_ACCEPTED |
+| 2026-09-05 | C10–C11 | Thêm fixture/harness Tầng A/B, migration 0021, release smoke và tài liệu coding-agent contract; kiểm tra web và extension | release smoke 3/3; web lint + 62/62 test + build; extension 19/19; `cargo check --workspace --all-targets`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo fmt --all -- --check`; `git diff --check` sạch ngoài cảnh báo line-ending | IMPLEMENTED_AUTOMATED_ONLY / LIVE_VALIDATION_BLOCKED |
+
+### Handoff triển khai 2026-09-05
+
+- Baseline HEAD và user changes được giữ: `dev@f8ea45f139e3ea9c3886f726c42030aab3d64d7f`; không reset/clean, không commit.
+- Automated acceptance C01–C09 và C10 Tầng A/B đã pass. Migration schema mới là `0021_plan_questions.sql`; mọi thay đổi wire/schema đều additive hoặc có version/hash/recovery tương ứng.
+- Source audit sau thay đổi cuối: 118 file `.rs/.ts/.tsx/.js/.cjs` modified hoặc untracked, không file nào vượt 500 dòng; file lớn nhất 496 dòng.
+- Không chạy E24 manual UI/browser smoke, live-host Tầng C hoặc các benchmark đánh dấu `ignored`; môi trường lượt này không có live-host/profile thử được cấu hình để chạy an toàn. Vì vậy không claim behavioral/live validation.
+- Giới hạn đã biết: kiểm tra watchdog đóng PID thật chỉ chạy trên Unix; Windows vẫn có test lease timeout/state/unblock. OS sandbox mạnh cho arbitrary executable vẫn ngoài phạm vi đợt này như mục 1.1.
+- Bước tiếp theo: chạy Tầng C bằng profile/dữ liệu thử trên host được hỗ trợ, lưu config/model/date/artifact và chỉ đổi trạng thái behavioral validation khi có evidence.
 
 ### Mẫu cập nhật sau mỗi gói
 

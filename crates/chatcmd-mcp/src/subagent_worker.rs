@@ -5,17 +5,18 @@ use std::{collections::HashSet, sync::Arc};
 use chatcmd_runtime::{OperationContext, RuntimeError, RuntimeResult};
 use rmcp::{
     Peer, RoleServer,
-    model::{
-        ContentBlock, CreateMessageRequestParams, SamplingMessage, SamplingMessageContentBlock,
-        Tool, ToolChoice,
-    },
+    model::{ContentBlock, CreateMessageRequestParams, SamplingMessage, Tool, ToolChoice},
 };
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use crate::{
     RuntimeApi,
-    subagent_protocol::{TextAction, parse_text_action},
+    subagent_protocol::{
+        TextAction, child_completion_arguments, child_system_prompt, enrich_registration,
+        is_internal_tool, limit_text, message_text, parse_text_action, required_child_task_id,
+        required_string, sanitize_arguments, text_protocol_tool_names, tool_result_text,
+    },
 };
 
 const MAX_ROUNDS: usize = 24;
@@ -238,7 +239,7 @@ async fn run_claimed_sampling_subagent(
                 .call(
                     "agent_turn_complete",
                     completion_context,
-                    json!({ "content": final_text }),
+                    child_completion_arguments(&final_text),
                 )
                 .await
             {
@@ -341,7 +342,7 @@ async fn run_tool_sampling(
                 )
                 .await
             };
-            let content = tool_result_text(response);
+            let content = tool_result_text(response, MAX_TOOL_RESULT_CHARS);
             messages.push(SamplingMessage::user_tool_result(
                 tool_use.id,
                 vec![ContentBlock::text(content)],
@@ -367,9 +368,8 @@ async fn run_text_sampling(
     request: &str,
     tools: &[Tool],
 ) -> RuntimeResult<String> {
-    let allowed = tools
-        .iter()
-        .map(|tool| tool.name.to_string())
+    let allowed = text_protocol_tool_names(tools)
+        .into_iter()
         .collect::<HashSet<_>>();
     let mut messages = vec![SamplingMessage::user_text(request.trim())];
     let system_prompt = child_system_prompt(name, true, tools);
@@ -413,7 +413,7 @@ async fn run_text_sampling(
                 .await;
                 messages.push(SamplingMessage::user_text(format!(
                     "TOOL_RESULT {}",
-                    tool_result_text(output)
+                    tool_result_text(output, MAX_TOOL_RESULT_CHARS)
                 )));
             }
         }
@@ -488,108 +488,6 @@ fn child_context(
     context.task_id = Some(task_id.to_owned());
     context.turn_id = Some(turn_id.to_owned());
     context
-}
-
-fn child_system_prompt(name: &str, text_protocol: bool, tools: &[Tool]) -> String {
-    let tool_summary = tools
-        .iter()
-        .map(|tool| {
-            format!(
-                "- {}: {}",
-                tool.name,
-                tool.description.as_deref().unwrap_or("no description")
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    if text_protocol {
-        format!(
-            "You are child agent {name}. Complete only the delegated request. Use the available Rust/ChatCMD tools when needed. Do not delegate further. Every response MUST be exactly one JSON object and no markdown. To call a tool: {{\"action\":\"tool\",\"name\":\"tool_name\",\"arguments\":{{...}}}}. When finished: {{\"action\":\"final\",\"content\":\"concise final answer\"}}. Available tools:\n{tool_summary}"
-        )
-    } else {
-        format!(
-            "You are child agent {name}. Complete only the delegated request. Use the supplied tools whenever inspection or execution is required. Do not delegate further. When the work is complete, return a concise final answer. Available tools:\n{tool_summary}"
-        )
-    }
-}
-
-fn message_text(message: &SamplingMessage) -> String {
-    message
-        .content
-        .iter()
-        .filter_map(SamplingMessageContentBlock::as_text)
-        .map(|content| content.text.as_str())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn tool_result_text(result: RuntimeResult<Value>) -> String {
-    match result {
-        Ok(value) => limit_text(&value.to_string(), MAX_TOOL_RESULT_CHARS),
-        Err(error) => limit_text(
-            &json!({ "error": { "code": error.code, "message": error.message } }).to_string(),
-            MAX_TOOL_RESULT_CHARS,
-        ),
-    }
-}
-
-fn sanitize_arguments(arguments: &mut Map<String, Value>) {
-    for key in [
-        "requestId",
-        "request_id",
-        "agentId",
-        "agent_id",
-        "taskId",
-        "task_id",
-        "turnId",
-        "turn_id",
-        "__chatcmdMcpSessionId",
-        "__chatcmdConversationScopeId",
-    ] {
-        arguments.remove(key);
-    }
-}
-
-fn is_internal_tool(name: &str) -> bool {
-    name.starts_with("agent_")
-}
-
-fn required_child_task_id(value: &Value) -> RuntimeResult<&str> {
-    value
-        .get("childTaskId")
-        .or_else(|| value.get("taskId"))
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| RuntimeError::new("subagent_registration_invalid", "missing childTaskId"))
-}
-
-fn required_string<'a>(value: &'a Value, key: &str) -> RuntimeResult<&'a str> {
-    value
-        .get(key)
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| RuntimeError::new("subagent_registration_invalid", format!("missing {key}")))
-}
-
-fn enrich_registration(mut registration: Value, fields: Value) -> Value {
-    let Some(target) = registration.as_object_mut() else {
-        return registration;
-    };
-    if let Some(fields) = fields.as_object() {
-        target.extend(fields.clone());
-    }
-    registration
-}
-
-fn limit_text(value: &str, max_chars: usize) -> String {
-    if value.chars().count() <= max_chars {
-        return value.to_owned();
-    }
-    value
-        .chars()
-        .take(max_chars.saturating_sub(1))
-        .collect::<String>()
-        + "…"
 }
 
 #[cfg(test)]

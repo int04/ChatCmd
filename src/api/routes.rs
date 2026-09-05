@@ -14,8 +14,8 @@ use crate::websocket::AppState;
 use super::{
     Problem, agents::*, chatgpt::*, chatgpt_completion::*, chatgpt_queue::*, crypto, data::*,
     folders::*, overview::*, plan_questions::*, sessions::*, settings::*, skills::*,
-    subagent_fallback::*, system::*, task_controls::*, task_delete::*, task_views::*, tunnels::*,
-    workspaces::*,
+    subagent_fallback::*, system::*, task_controls::*, task_delete::*, task_execution_mode::*,
+    task_views::*, tunnels::*, workspaces::*,
 };
 
 pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {

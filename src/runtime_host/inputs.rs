@@ -7,6 +7,8 @@ use chatcmd_runtime::{
 };
 use serde::{Deserialize, Serialize};
 
+use super::plan_prompt::PlanQuestionKind;
+
 macro_rules! input {
     ($name:ident { $($(#[$meta:meta])* $field:ident : $ty:ty),* $(,)? }) => {
         #[derive(Deserialize)]
@@ -18,6 +20,14 @@ macro_rules! input {
 input!(DeviceGet { device_id: String });
 input!(SessionInput { session_id: String });
 input!(PathInput { path: PathBuf });
+input!(ProjectContextInput {
+    #[serde(default)]
+    target_paths: Vec<PathBuf>,
+    #[serde(default)]
+    policy: chatcmd_runtime::ProjectContextPolicy,
+    #[serde(default)]
+    range: Option<chatcmd_runtime::ProjectContextRange>
+});
 input!(StatInput {
     path: PathBuf,
     #[serde(default)]
@@ -122,10 +132,14 @@ input!(GitShow {
 input!(GitCommit {
     cwd: Option<PathBuf>,
     message: String,
-    #[serde(default = "default_true")]
+    #[serde(default)]
     all: bool,
     #[serde(default)]
     paths: Vec<String>,
+    #[serde(default)]
+    preview_only: bool,
+    #[serde(default)]
+    expected_preview: Option<chatcmd_runtime::GitCommitPreview>,
     #[serde(flatten, default)]
     options: chatcmd_runtime::GitRunOptions
 });
@@ -154,14 +168,8 @@ pub(super) struct ProgressInput {
 pub(super) struct PlanQuestionInput {
     pub(super) question: String,
     pub(super) options: [String; 2],
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct CompleteInput {
-    pub(super) content: String,
     #[serde(default)]
-    pub(super) suggested_title: Option<String>,
+    pub(super) question_kind: PlanQuestionKind,
 }
 
 #[derive(Deserialize)]
@@ -475,187 +483,5 @@ const fn default_git_count() -> usize {
     20
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{
-        GitCommit, GitCwdInput, GitDiff, ReadInput, ReplaceTextInput, ShellCreate, ShellRead,
-        ShellSignalInput, ShellWrite,
-    };
-
-    #[test]
-    fn git_cwd_can_be_omitted() {
-        let status: GitCwdInput =
-            serde_json::from_value(serde_json::json!({})).expect("git status input");
-        assert!(status.cwd.is_none());
-
-        let diff: GitDiff =
-            serde_json::from_value(serde_json::json!({"stat": true})).expect("git diff input");
-        assert!(diff.cwd.is_none());
-        assert!(diff.stat);
-    }
-
-    #[test]
-    fn git_cwd_accepts_legacy_path_alias() {
-        let status: GitCwdInput = serde_json::from_value(serde_json::json!({
-            "path": "D:/DEV/CmdGPT/ChatCmdClient"
-        }))
-        .expect("legacy git cwd path");
-        assert_eq!(
-            status.cwd.as_deref(),
-            Some(std::path::Path::new("D:/DEV/CmdGPT/ChatCmdClient"))
-        );
-    }
-
-    #[test]
-    fn git_diff_accepts_stat_flag() {
-        let input: GitDiff = serde_json::from_value(serde_json::json!({
-            "cwd": ".",
-            "stat": true,
-            "maxOutputBytes": 4096,
-            "timeoutMs": 1250,
-            "killOnLimit": true
-        }))
-        .expect("git diff stat input");
-        assert!(input.stat);
-        assert!(!input.staged);
-        assert!(input.path.is_none());
-        assert_eq!(input.options.max_output_bytes, 4096);
-        assert_eq!(input.options.timeout_ms, 1250);
-        assert!(input.options.kill_on_limit);
-    }
-
-    #[test]
-    fn shell_create_accepts_legacy_cwd_alias() {
-        let input: ShellCreate = serde_json::from_value(serde_json::json!({
-            "cwd": "."
-        }))
-        .expect("legacy shell create cwd");
-        assert_eq!(
-            input.working_directory.as_deref(),
-            Some(std::path::Path::new("."))
-        );
-    }
-
-    #[test]
-    fn shell_create_accepts_initial_working_directory_alias() {
-        let input: ShellCreate = serde_json::from_value(serde_json::json!({
-            "initialWorkingDirectory": "D:/DEV/CmdGPT/ChatCmdClient/web"
-        }))
-        .expect("legacy shell create initial working directory");
-        assert_eq!(
-            input.working_directory.as_deref(),
-            Some(std::path::Path::new("D:/DEV/CmdGPT/ChatCmdClient/web"))
-        );
-    }
-
-    #[test]
-    fn shell_write_accepts_legacy_input_alias() {
-        let input: ShellWrite = serde_json::from_value(serde_json::json!({
-            "sessionId": "session-1",
-            "input": "echo ok"
-        }))
-        .expect("legacy shell write input");
-        assert_eq!(input.text, "echo ok");
-        assert!(input.append_new_line);
-        assert_eq!(
-            input.input_kind,
-            chatcmd_runtime::ShellInputKind::Interactive
-        );
-        assert!(!input.sensitive);
-    }
-
-    #[test]
-    fn shell_read_accepts_legacy_start_sequence_alias() {
-        let input: ShellRead = serde_json::from_value(serde_json::json!({
-            "sessionId": "session-1",
-            "startSequence": 7,
-            "maxEvents": 50
-        }))
-        .expect("legacy shell read start sequence");
-        assert_eq!(input.after_sequence, 7);
-        assert_eq!(input.max_events, 50);
-    }
-
-    #[test]
-    fn shell_read_accepts_from_sequence_alias() {
-        let input: ShellRead = serde_json::from_value(serde_json::json!({
-            "sessionId": "session-1",
-            "fromSequence": 11
-        }))
-        .expect("legacy shell read from sequence");
-        assert_eq!(input.after_sequence, 11);
-    }
-
-    #[test]
-    fn git_commit_stages_all_by_default() {
-        let input: GitCommit = serde_json::from_value(serde_json::json!({
-            "cwd": ".",
-            "message": "test"
-        }))
-        .expect("git commit input");
-        assert!(input.all);
-    }
-
-    #[test]
-    fn shell_signal_accepts_sigint_alias() {
-        let input: ShellSignalInput = serde_json::from_value(serde_json::json!({
-            "sessionId": "session-1",
-            "signal": "SIGINT"
-        }))
-        .expect("legacy SIGINT signal");
-        assert!(matches!(input.signal, chatcmd_runtime::ShellSignal::CtrlC));
-    }
-
-    #[test]
-    fn fs_read_text_accepts_line_range_fields() {
-        let input: ReadInput = serde_json::from_value(serde_json::json!({
-            "path": "test.txt",
-            "startLine": 10,
-            "lineCount": 25
-        }))
-        .expect("line range input");
-        assert_eq!(input.start_line, 10);
-        assert_eq!(input.line_count, Some(25));
-    }
-
-    #[test]
-    fn fs_replace_text_defaults_to_one_expected_occurrence() {
-        let input: ReplaceTextInput = serde_json::from_value(serde_json::json!({
-            "path": "test.txt",
-            "oldText": "before",
-            "newText": "after"
-        }))
-        .expect("replace text input");
-        assert_eq!(input.expected_occurrences, 1);
-    }
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct SubagentApprovalGrantInput {
-    pub(super) allowed_tools: Vec<String>,
-    pub(super) path_scopes: Vec<String>,
-    pub(super) max_calls: u64,
-    pub(super) max_files_scanned: u64,
-    pub(super) max_bytes_read: u64,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct SubagentStartInput {
-    pub(super) name: String,
-    pub(super) request: String,
-    #[serde(default)]
-    pub(super) approval_grant: Option<SubagentApprovalGrantInput>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(super) struct SubagentWaitInput {
-    #[serde(default = "default_subagent_wait_ms")]
-    pub(super) timeout_ms: u64,
-}
-
-const fn default_subagent_wait_ms() -> u64 {
-    20_000
-}
+include!("inputs_tests.rs");
+include!("inputs_subagent.rs");

@@ -6,8 +6,24 @@ use tempfile::TempDir;
 use super::user_message_tests::{test_host, turn_context};
 use super::*;
 
-#[tokio::test]
-async fn user_supplied_absolute_path_grant_persists_for_task() {
+#[test]
+fn user_supplied_absolute_path_grant_persists_for_task() {
+    std::thread::Builder::new()
+        .name("absolute-path-grant-test".to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("test runtime")
+                .block_on(user_supplied_absolute_path_grant_persists_for_task_case());
+        })
+        .expect("spawn test thread")
+        .join()
+        .expect("absolute path grant test thread");
+}
+
+async fn user_supplied_absolute_path_grant_persists_for_task_case() {
     let (host, agent_id, _workspace_directory) = test_host().await;
     let external = TempDir::new().expect("external directory");
     let granted_directory = external.path().join("reference project");

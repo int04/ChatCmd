@@ -22,6 +22,14 @@ async fn catalog_snapshot_from_packaged_process() -> (CatalogMetadata, Vec<serde
         .peer_info()
         .and_then(|info| info.instructions.clone())
         .expect("server instructions with catalog metadata");
+    let expected_instructions_version = catalog_metadata().instructions_version;
+    assert!(instructions.contains(&format!(
+        "CHATCMD_INSTRUCTIONS_VERSION={expected_instructions_version}"
+    )));
+    assert!(instructions.contains("CHATCMD_INSTRUCTIONS_HASH="));
+    assert!(instructions.contains("COD-01 INTENT AND SCOPE"));
+    assert!(instructions.contains("COD-16 AUTONOMY AND DISCOVERY"));
+    assert!(instructions.contains("REVIEW ROLE"));
     let metadata_json = instructions
         .strip_prefix(METADATA_PREFIX)
         .and_then(|value| value.split_once("} ").map(|(json, _)| format!("{json}}}")))
@@ -89,6 +97,8 @@ async fn packaged_process_advertises_exact_manifest_contract_deterministically()
         "fresh processes must advertise the same catalog metadata"
     );
     assert_eq!(first_metadata, catalog_metadata());
+    assert!(first_metadata.instructions_hash.starts_with("sha256:"));
+    assert!(!first_metadata.instructions_version.is_empty());
 
     let names = first
         .iter()
@@ -97,6 +107,61 @@ async fn packaged_process_advertises_exact_manifest_contract_deterministically()
     assert_eq!(names.as_slice(), TOOL_NAMES.as_slice());
     assert!(names.iter().any(|name| name == "fs_replace_text"));
     assert!(names.iter().any(|name| name == "fs_apply_edits"));
+    assert!(names.iter().any(|name| name == "project_context"));
+    assert_eq!(first_metadata.catalog_version, 8);
+    let project_context = first
+        .iter()
+        .find(|tool| tool["name"] == "project_context")
+        .expect("project_context advertised on wire");
+    assert!(
+        project_context["inputSchema"]["properties"]
+            .get("policy")
+            .is_some()
+    );
+    assert!(
+        project_context["inputSchema"]["properties"]
+            .get("range")
+            .is_some()
+    );
+    assert!(
+        project_context["description"]
+            .as_str()
+            .is_some_and(|value| value.contains("excluded by default"))
+    );
+    let git_commit = first
+        .iter()
+        .find(|tool| tool["name"] == "git_commit")
+        .expect("git_commit advertised on wire");
+    assert!(
+        git_commit["description"]
+            .as_str()
+            .is_some_and(|value| value.contains("all defaults to false"))
+    );
+    assert!(
+        git_commit["inputSchema"]["properties"]
+            .get("paths")
+            .is_some()
+    );
+    let subagent_start = first
+        .iter()
+        .find(|tool| tool["name"] == "agent_subagent_start")
+        .expect("agent_subagent_start advertised on wire");
+    let description = subagent_start["description"]
+        .as_str()
+        .expect("subagent description");
+    for marker in [
+        "samplingTools",
+        "samplingText",
+        "extensionFallback",
+        "existing",
+        "status=failed",
+        "startupError",
+    ] {
+        assert!(
+            description.contains(marker),
+            "missing {marker} in {description}"
+        );
+    }
 
     let manifest = canonical_manifest();
     let manifest_tools = manifest["tools"].as_array().expect("manifest tools");

@@ -1,4 +1,7 @@
-use crate::{CommandOutput, GitOutputMode, GitRunOptions, RuntimeError, RuntimeResult};
+use crate::{
+    CommandOutput, GitOutputMode, GitRunOptions, RuntimeError, RuntimeResult,
+    artifact_quota::ArtifactQuota,
+};
 use sha2::{Digest, Sha256};
 use std::{path::PathBuf, process::Stdio, sync::Arc, time::Instant};
 use tokio::{
@@ -16,25 +19,50 @@ const HARD_PROCESS_RUNTIME_MS: u64 = 10 * 60 * 1_000;
 const HARD_STDOUT_PREVIEW_BYTES: usize = 4 * 1024 * 1024;
 const HARD_STDERR_PREVIEW_BYTES: usize = 1024 * 1024;
 const HARD_ARTIFACT_BYTES: u64 = 1024 * 1024 * 1024;
+const HARD_TOTAL_ARTIFACT_BYTES: u64 = 1024 * 1024 * 1024;
+const ARTIFACT_RETENTION: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 #[derive(Clone)]
 pub(crate) struct BoundedProcessRunner {
     artifact_directory: Arc<PathBuf>,
+    artifact_quota: ArtifactQuota,
+}
+
+pub(crate) struct BoundedProcessResult {
+    pub output: CommandOutput,
+    pub signal: Option<i32>,
 }
 
 impl BoundedProcessRunner {
     pub(crate) fn new(artifact_directory: PathBuf) -> Self {
         Self {
-            artifact_directory: Arc::new(artifact_directory),
+            artifact_directory: Arc::new(artifact_directory.clone()),
+            artifact_quota: ArtifactQuota::new(
+                artifact_directory,
+                HARD_TOTAL_ARTIFACT_BYTES,
+                ARTIFACT_RETENTION,
+            ),
         }
     }
 
     pub(crate) async fn run(
         &self,
-        mut command: Command,
+        command: Command,
         options: &GitRunOptions,
         cancellation: CancellationToken,
     ) -> RuntimeResult<CommandOutput> {
+        Ok(self
+            .run_detailed(command, options, cancellation)
+            .await?
+            .output)
+    }
+
+    pub(crate) async fn run_detailed(
+        &self,
+        mut command: Command,
+        options: &GitRunOptions,
+        cancellation: CancellationToken,
+    ) -> RuntimeResult<BoundedProcessResult> {
         let started = Instant::now();
         command
             .stdin(Stdio::null())
@@ -43,13 +71,19 @@ impl BoundedProcessRunner {
             .kill_on_drop(true);
         configure_process_group(&mut command);
 
+        let artifact_limit = options.artifact_max_bytes.min(HARD_ARTIFACT_BYTES);
+        let artifact_reservation = if options.output_mode == GitOutputMode::InlineOrArtifact {
+            Some(self.artifact_quota.reserve(artifact_limit).await?)
+        } else {
+            None
+        };
         let artifact = if options.output_mode == GitOutputMode::InlineOrArtifact {
             tokio::fs::create_dir_all(self.artifact_directory.as_ref())
                 .await
                 .map_err(io_error)?;
             Some(
                 self.artifact_directory
-                    .join(format!("git-{}.output", uuid::Uuid::new_v4())),
+                    .join(format!("process-{}.output", uuid::Uuid::new_v4())),
             )
         } else {
             None
@@ -63,7 +97,7 @@ impl BoundedProcessRunner {
             stdout,
             options.max_output_bytes.min(HARD_STDOUT_PREVIEW_BYTES),
             artifact.clone(),
-            options.artifact_max_bytes.min(HARD_ARTIFACT_BYTES),
+            artifact_limit,
             limit_tx.clone(),
             started,
             "stdout",
@@ -115,8 +149,18 @@ impl BoundedProcessRunner {
 
         let stdout = join_drain(stdout_task, "stdout").await?;
         let stderr = join_drain(stderr_task, "stderr").await?;
+        let (stdout_preview, stdout_encoding_truncated) = bounded_lossy_utf8(
+            &stdout.preview,
+            options.max_output_bytes.min(HARD_STDOUT_PREVIEW_BYTES),
+        );
+        let (stderr_preview, stderr_encoding_truncated) = bounded_lossy_utf8(
+            &stderr.preview,
+            options.max_stderr_bytes.min(HARD_STDERR_PREVIEW_BYTES),
+        );
         let truncated = stdout.total_bytes > stdout.preview.len() as u64
-            || stderr.total_bytes > stderr.preview.len() as u64;
+            || stderr.total_bytes > stderr.preview.len() as u64
+            || stdout_encoding_truncated
+            || stderr_encoding_truncated;
         let artifact_ref = if truncated && stdout.artifact_bytes > 0 {
             artifact.as_ref().map(|path| path.display().to_string())
         } else {
@@ -138,27 +182,62 @@ impl BoundedProcessRunner {
         };
 
         let artifact_sha256 = artifact_ref.as_ref().map(|_| stdout.sha256);
-        Ok(CommandOutput {
-            exit_code: status.code(),
-            stdout: String::from_utf8_lossy(&stdout.preview).into_owned(),
-            stderr: String::from_utf8_lossy(&stderr.preview).into_owned(),
-            truncated,
-            truncation_reason,
-            stdout_bytes: stdout.total_bytes,
-            stderr_bytes: stderr.total_bytes,
-            artifact_bytes: stdout.artifact_bytes,
-            artifact_ref,
-            artifact_sha256,
-            first_output_ms: [stdout.first_output_ms, stderr.first_output_ms]
-                .into_iter()
-                .flatten()
-                .min(),
-            elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-            timed_out,
-            cancelled,
-            structured: None,
+        if let Some(reservation) = artifact_reservation {
+            reservation.commit(if artifact_ref.is_some() {
+                stdout.artifact_bytes
+            } else {
+                0
+            });
+        }
+        let signal = exit_signal(&status);
+        Ok(BoundedProcessResult {
+            output: CommandOutput {
+                exit_code: status.code(),
+                stdout: stdout_preview,
+                stderr: stderr_preview,
+                truncated,
+                truncation_reason,
+                stdout_bytes: stdout.total_bytes,
+                stderr_bytes: stderr.total_bytes,
+                artifact_bytes: stdout.artifact_bytes,
+                artifact_ref,
+                artifact_sha256,
+                first_output_ms: [stdout.first_output_ms, stderr.first_output_ms]
+                    .into_iter()
+                    .flatten()
+                    .min(),
+                elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                timed_out,
+                cancelled,
+                structured: None,
+            },
+            signal,
         })
     }
+}
+
+fn bounded_lossy_utf8(bytes: &[u8], byte_limit: usize) -> (String, bool) {
+    let rendered = String::from_utf8_lossy(bytes);
+    if rendered.len() <= byte_limit {
+        return (rendered.into_owned(), false);
+    }
+    let mut end = byte_limit;
+    while end > 0 && !rendered.is_char_boundary(end) {
+        end -= 1;
+    }
+    (rendered[..end].to_owned(), true)
+}
+
+#[cfg(unix)]
+fn exit_signal(status: &std::process::ExitStatus) -> Option<i32> {
+    use std::os::unix::process::ExitStatusExt as _;
+
+    status.signal()
+}
+
+#[cfg(not(unix))]
+fn exit_signal(_status: &std::process::ExitStatus) -> Option<i32> {
+    None
 }
 
 struct DrainResult {
@@ -308,199 +387,5 @@ fn io_error(error: std::io::Error) -> RuntimeError {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::TempDir;
-
-    fn noisy_command(bytes: usize) -> Command {
-        if cfg!(windows) {
-            let mut command = Command::new("powershell.exe");
-            command.args([
-                "-NoProfile",
-                "-Command",
-                &format!("$b = New-Object byte[] {bytes}; $o = [Console]::OpenStandardOutput(); $e = [Console]::OpenStandardError(); $o.Write($b, 0, $b.Length); $e.Write($b, 0, $b.Length)"),
-            ]);
-            command
-        } else {
-            let mut command = Command::new("sh");
-            command.args([
-                "-c",
-                &format!("head -c {bytes} /dev/zero | tr '\\0' x; head -c {bytes} /dev/zero | tr '\\0' e >&2"),
-            ]);
-            command
-        }
-    }
-
-    fn endless_output_command() -> Command {
-        if cfg!(windows) {
-            let mut command = Command::new("powershell.exe");
-            command.args([
-                "-NoProfile",
-                "-Command",
-                "$chunk = 'x' * 4096; while ($true) { [Console]::Out.Write($chunk); Start-Sleep -Milliseconds 1 }",
-            ]);
-            command
-        } else {
-            let mut command = Command::new("sh");
-            command.args(["-c", "while true; do printf '%4096s' x; sleep 0.001; done"]);
-            command
-        }
-    }
-
-    #[tokio::test]
-    async fn drains_large_stdout_and_stderr_with_bounded_previews() {
-        let directory = TempDir::new().expect("temporary directory");
-        let runner = BoundedProcessRunner::new(directory.path().to_owned());
-        let options = GitRunOptions {
-            max_output_bytes: 4096,
-            max_stderr_bytes: 2048,
-            artifact_max_bytes: 2 * 1024 * 1024,
-            ..GitRunOptions::default()
-        };
-        let output = runner
-            .run(
-                noisy_command(1024 * 1024),
-                &options,
-                CancellationToken::new(),
-            )
-            .await
-            .expect("bounded process output");
-        assert_eq!(output.exit_code, Some(0), "output={output:?}");
-        assert_eq!(output.stdout.len(), 4096);
-        assert_eq!(output.stderr.len(), 2048);
-        assert_eq!(output.stdout_bytes, 1024 * 1024);
-        assert_eq!(output.stderr_bytes, 1024 * 1024);
-        assert_eq!(
-            output.truncation_reason.as_deref(),
-            Some("contentExternalized")
-        );
-        assert!(output.artifact_ref.is_some());
-    }
-
-    #[tokio::test]
-    async fn artifact_limit_caps_disk_bytes_while_draining_to_exit() {
-        let directory = TempDir::new().expect("temporary directory");
-        let runner = BoundedProcessRunner::new(directory.path().to_owned());
-        let options = GitRunOptions {
-            max_output_bytes: 1024,
-            max_stderr_bytes: 1024,
-            artifact_max_bytes: 4096,
-            ..GitRunOptions::default()
-        };
-        let output = runner
-            .run(
-                noisy_command(128 * 1024),
-                &options,
-                CancellationToken::new(),
-            )
-            .await
-            .expect("artifact limited output");
-        assert_eq!(output.exit_code, Some(0));
-        assert_eq!(output.artifact_bytes, 4096);
-        assert_eq!(output.truncation_reason.as_deref(), Some("artifactLimit"));
-        assert_eq!(output.stdout_bytes, 128 * 1024);
-        assert!(output.artifact_ref.is_some());
-    }
-
-    #[tokio::test]
-    async fn cancellation_stops_and_reaps_process() {
-        let directory = TempDir::new().expect("temporary directory");
-        let runner = BoundedProcessRunner::new(directory.path().to_owned());
-        let cancellation = CancellationToken::new();
-        cancellation.cancel();
-        let command = if cfg!(windows) {
-            let mut command = Command::new("powershell.exe");
-            command.args(["-NoProfile", "-Command", "Start-Sleep -Seconds 30"]);
-            command
-        } else {
-            let mut command = Command::new("sleep");
-            command.arg("30");
-            command
-        };
-        let output = runner
-            .run(command, &GitRunOptions::default(), cancellation)
-            .await
-            .expect("cancelled output");
-        assert!(output.cancelled);
-    }
-
-    #[tokio::test]
-    async fn timeout_stops_a_hanging_process() {
-        let directory = TempDir::new().expect("temporary directory");
-        let runner = BoundedProcessRunner::new(directory.path().to_owned());
-        let options = GitRunOptions {
-            timeout_ms: 50,
-            max_runtime_ms: 50,
-            ..GitRunOptions::default()
-        };
-        let command = if cfg!(windows) {
-            let mut command = Command::new("powershell.exe");
-            command.args(["-NoProfile", "-Command", "Start-Sleep -Seconds 30"]);
-            command
-        } else {
-            let mut command = Command::new("sleep");
-            command.arg("30");
-            command
-        };
-        let output = runner
-            .run(command, &options, CancellationToken::new())
-            .await
-            .expect("timed out output");
-        assert!(output.timed_out);
-        assert!(output.elapsed_ms < 5_000);
-    }
-
-    #[tokio::test]
-    async fn kill_on_limit_stops_output_producer() {
-        let directory = TempDir::new().expect("temporary directory");
-        let runner = BoundedProcessRunner::new(directory.path().to_owned());
-        let options = GitRunOptions {
-            max_output_bytes: 1024,
-            kill_on_limit: true,
-            ..GitRunOptions::default()
-        };
-        let output = runner
-            .run(endless_output_command(), &options, CancellationToken::new())
-            .await
-            .expect("output limited process");
-        assert!(output.truncated);
-        assert_eq!(output.truncation_reason.as_deref(), Some("outputLimit"));
-        assert!(output.elapsed_ms < 5_000);
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn timeout_kills_spawned_grandchild_process_group() {
-        let directory = TempDir::new().expect("temporary directory");
-        let pid_file = directory.path().join("grandchild.pid");
-        let runner = BoundedProcessRunner::new(directory.path().join("artifacts"));
-        let mut command = Command::new("sh");
-        command.args([
-            "-c",
-            &format!("sleep 30 & echo $! > '{}'; wait", pid_file.display()),
-        ]);
-        let options = GitRunOptions {
-            timeout_ms: 250,
-            max_runtime_ms: 250,
-            ..GitRunOptions::default()
-        };
-        let output = runner
-            .run(command, &options, CancellationToken::new())
-            .await
-            .expect("timed out process tree");
-        assert!(output.timed_out);
-
-        let grandchild_pid: u32 = tokio::fs::read_to_string(&pid_file)
-            .await
-            .expect("grandchild pid file")
-            .trim()
-            .parse()
-            .expect("grandchild pid");
-        let status = Command::new("kill")
-            .args(["-0", &grandchild_pid.to_string()])
-            .status()
-            .await
-            .expect("probe grandchild");
-        assert!(!status.success(), "grandchild survived process-group kill");
-    }
-}
+#[path = "process_runner_tests.rs"]
+mod tests;

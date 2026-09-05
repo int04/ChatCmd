@@ -6,6 +6,7 @@
 #![allow(clippy::result_large_err)]
 
 mod api;
+mod catalog_seed;
 mod chatgpt_message;
 mod chatgpt_queue;
 #[cfg(all(not(debug_assertions), any(target_os = "windows", target_os = "macos")))]
@@ -27,15 +28,12 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use axum::{Router, routing::get};
-use chatcmd_core::{
-    McpAgentStore, PolicyLookup, ToolCapability, ToolCatalogStore, ToolDefinition, ToolGroup,
-    ToolPreset,
-};
+use chatcmd_core::PolicyLookup;
 use chatcmd_mcp::{AuthProvider, HttpSecurity, McpServer, OriginPolicy};
 use chatcmd_runtime::{
-    ApprovalDecision, BoxFuture, EventSink, ExecutionPolicy, GitService, PolicyDecision,
-    PolicyEngine, ProcessService, RuntimeConfig, RuntimeError, RuntimeResult, ShellRuntime,
-    SkillService, TimelineEvent, WorkspaceService,
+    ApprovalDecision, BoxFuture, CommandExecutionService, EventSink, ExecutionPolicy, GitService,
+    PolicyDecision, PolicyEngine, ProcessService, RuntimeConfig, RuntimeError, RuntimeResult,
+    ShellRuntime, SkillService, TimelineEvent, WorkspaceService,
 };
 use chatcmd_storage::{SqliteRepository, resolve_database_path};
 use serde_json::json;
@@ -43,6 +41,8 @@ use tokio::sync::broadcast;
 #[cfg(not(feature = "embedded-web"))]
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
+
+use catalog_seed::seed_catalog;
 use tracing::info;
 
 use runtime_host::RuntimeHost;
@@ -209,6 +209,15 @@ async fn run_server(ready: Option<std::sync::mpsc::Sender<()>>) -> Result<()> {
     });
     let shell = ShellRuntime::new(config.clone(), policy_engine.clone(), event_sink);
     let git = GitService::new(workspace.clone(), 200_000);
+    let command = CommandExecutionService::new(
+        workspace.clone(),
+        Arc::new(policy_engine.clone()),
+        database_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join("command-artifacts-v1"),
+        config.max_concurrent_operations,
+    );
     let process = ProcessService::new(policy_engine);
     let skills = SkillService::new(
         config.user_home.as_deref(),
@@ -222,10 +231,21 @@ async fn run_server(ready: Option<std::sync::mpsc::Sender<()>>) -> Result<()> {
         workspace,
         blob_store.clone(),
         git,
+        command,
         process,
         skills.clone(),
         event_tx.clone(),
     ));
+    let expired_plan_questions = runtime
+        .expire_pending_plan_questions_on_startup()
+        .await
+        .context("expire pending plan questions from previous host session")?;
+    if expired_plan_questions > 0 {
+        info!(
+            expired_plan_questions,
+            "Expired pending plan questions after restart"
+        );
+    }
     runtime
         .restore_repository_indexes()
         .await
@@ -337,122 +357,6 @@ fn resolve_frontend_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web/dist")
 }
 
-async fn seed_catalog(repository: &SqliteRepository) -> Result<(), chatcmd_core::StorageError> {
-    let groups = vec![
-        tool_group("group-device", "device", "Device", 10),
-        tool_group("group-terminal", "terminal", "Terminal", 20),
-        tool_group("group-files", "files", "Files & workspace", 30),
-        tool_group("group-git", "git", "Git", 40),
-        tool_group("group-process", "process", "Processes", 50),
-        tool_group("group-skills", "skills", "Skills", 60),
-        tool_group("group-tasks", "tasks", "Tasks & agent lifecycle", 70),
-    ];
-    let tools = chatcmd_mcp::TOOL_NAMES
-        .iter()
-        .map(|name| ToolDefinition {
-            id: seeded_tool_id(name),
-            key: name.clone(),
-            group_id: tool_group_id(name).to_owned(),
-            title: name.replace('_', " "),
-            description: format!("Local {name} operation"),
-            input_schema_json: "{}".to_owned(),
-            capabilities: if [
-                "fs_delete",
-                "fs_move",
-                "git_commit",
-                "process_kill",
-                "shell_close",
-            ]
-            .contains(&name.as_str())
-            {
-                vec![ToolCapability::Destructive]
-            } else if name.starts_with("blob_")
-                || name.starts_with("fs_write")
-                || matches!(name.as_str(), "fs_replace_text" | "fs_apply_edits")
-            {
-                vec![ToolCapability::Write]
-            } else {
-                vec![ToolCapability::Read]
-            },
-            enabled: true,
-        })
-        .collect::<Vec<_>>();
-    let safe_ids = tools
-        .iter()
-        .filter(|tool| !tool.capabilities.contains(&ToolCapability::Destructive))
-        .map(|tool| tool.id.clone())
-        .collect();
-    let presets = vec![ToolPreset {
-        id: "preset-safe".to_owned(),
-        key: "safe".to_owned(),
-        name: "Safe local tools".to_owned(),
-        description: "All non-destructive local tools".to_owned(),
-        tool_ids: safe_ids,
-    }];
-    repository
-        .replace_catalog(&groups, &tools, &presets)
-        .await?;
-
-    let write_id = seeded_tool_id("fs_write_text");
-    let replace_id = seeded_tool_id("fs_replace_text");
-    let apply_edits_id = seeded_tool_id("fs_apply_edits");
-    for agent in repository.list_agents().await? {
-        let mut allowed = repository.agent_allowed_tool_ids(&agent.id).await?;
-        let mut changed = false;
-        if allowed.contains(&write_id) && !allowed.contains(&replace_id) {
-            allowed.push(replace_id.clone());
-            changed = true;
-        }
-        if allowed.contains(&write_id) && !allowed.contains(&apply_edits_id) {
-            allowed.push(apply_edits_id.clone());
-            changed = true;
-        }
-        if changed {
-            repository
-                .set_agent_allowed_tools(&agent.id, &allowed)
-                .await?;
-        }
-    }
-    Ok(())
-}
-
-fn tool_group(id: &str, key: &str, display_name: &str, sort_order: i32) -> ToolGroup {
-    ToolGroup {
-        id: id.to_owned(),
-        key: key.to_owned(),
-        display_name: display_name.to_owned(),
-        sort_order,
-    }
-}
-
-fn tool_group_id(name: &str) -> &'static str {
-    if name.starts_with("device_") {
-        "group-device"
-    } else if name.starts_with("shell_") {
-        "group-terminal"
-    } else if name.starts_with("fs_") || name.starts_with("blob_") || name == "workspace_roots" {
-        "group-files"
-    } else if name.starts_with("git_") {
-        "group-git"
-    } else if name.starts_with("process_") {
-        "group-process"
-    } else if name.starts_with("skill_") || name.starts_with("skills_") {
-        "group-skills"
-    } else {
-        "group-tasks"
-    }
-}
-fn seeded_tool_id(name: &str) -> String {
-    match name {
-        "device_list" => "tool-device-list".to_owned(),
-        "shell_create" => "tool-shell-create".to_owned(),
-        "shell_read" => "tool-shell-read".to_owned(),
-        "shell_write" => "tool-shell-write".to_owned(),
-        "fs_read_text" => "tool-fs-read".to_owned(),
-        _ => format!("tool-{name}"),
-    }
-}
-
 struct DatabaseAuth(SqliteRepository);
 impl AuthProvider for DatabaseAuth {
     fn authorize<'a>(&'a self, token: &'a str) -> BoxFuture<'a, RuntimeResult<String>> {
@@ -557,14 +461,18 @@ mod tests {
 
     #[test]
     fn runtime_dispatcher_matches_generated_mcp_catalog() {
-        let mut dispatched = include_str!("runtime_host/dispatch.rs")
-            .lines()
-            .filter_map(|line| {
-                let rest = line.strip_prefix("            \"")?;
-                let (name, tail) = rest.split_once('"')?;
-                tail.trim_start().starts_with("=>").then(|| name.to_owned())
-            })
-            .collect::<Vec<_>>();
+        let mut dispatched = [
+            include_str!("runtime_host/dispatch.rs"),
+            include_str!("runtime_host/dispatch/filesystem_tools.rs"),
+        ]
+        .into_iter()
+        .flat_map(str::lines)
+        .filter_map(|line| {
+            let rest = line.strip_prefix("            \"")?;
+            let (name, tail) = rest.split_once('"')?;
+            tail.trim_start().starts_with("=>").then(|| name.to_owned())
+        })
+        .collect::<Vec<_>>();
         dispatched.sort_unstable();
         dispatched.dedup();
         assert_eq!(dispatched.as_slice(), chatcmd_mcp::TOOL_NAMES.as_slice());

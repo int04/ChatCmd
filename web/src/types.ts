@@ -16,7 +16,14 @@ export interface Overview {
 }
 export interface McpStatus { state: HealthState; endpoint?: string; connectedClients?: number; lastError?: string }
 export interface TimelineEvent { id: Id; type: string; occurredAt: string; taskId?: Id; sessionId?: Id; turnId?: Id; payload?: unknown }
-export interface PlanQuestion { id: Id; taskId: Id; turnId: Id; question: string; options: [string, string]; createdAtMs: number; deadlineAtMs: number }
+export type WorkOutcome = 'completed' | 'partial' | 'blocked';
+export type VerificationState = 'passed' | 'failed' | 'notRun' | 'notApplicable' | 'stale' | 'unknown';
+export interface VerificationEvidence { executionId: Id; taskId?: Id; turnId?: Id; cwd?: string; command?: { executable?: string; argumentCount?: number; argumentsSha256?: string }; startedAtMs?: number; finishedAtMs?: number; terminalState?: string; exitCode?: number | null; timedOut?: boolean; cancelled?: boolean; artifactRef?: Id | null; status: VerificationState; reason?: string }
+export interface CompletionCriterion { criterion: string; evidenceRefs: Id[]; covered: boolean }
+export interface CompletionQualityReport { schemaVersion: number; lifecycle: 'completed'; workOutcome: WorkOutcome; workOutcomeProvenance: string; verification: VerificationState; verificationProvenance: string; verificationReason?: string | null; verificationScope?: string | null; criteria: CompletionCriterion[]; evidence: VerificationEvidence[]; diagnostics: Array<{ code: string; evidenceRef?: Id; message?: string }>; blockers: string[]; limitations: string[] }
+export type PlanQuestionKind = 'clarification' | 'executionConsent';
+export type PlanQuestionAnswer = { kind: 'option'; optionIndex: 1 | 2 } | { kind: 'custom'; text: string } | { kind: 'approveExecution' } | { kind: 'denyExecution' } | { kind: 'cancel' };
+export interface PlanQuestion { id: Id; taskId: Id; turnId: Id; question: string; options: [string, string]; questionKind: PlanQuestionKind; issuerAgentId: Id; scopeDigest: string; createdAtMs: number; deadlineAtMs: number }
 export interface Agent { id: Id; name: string; enabled: boolean; presetId?: Id; toolIds: Id[]; secretLast4?: string; updatedAtUtc?: string }
 export interface AgentInput { name: string; enabled: boolean; presetId?: Id; toolIds: Id[] }
 export interface SecretResult { agent?: Agent; endpoint: string }

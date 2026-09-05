@@ -19,6 +19,7 @@ mod subagents;
 mod system;
 mod task_controls;
 mod task_delete;
+mod task_execution_mode;
 pub(crate) mod task_views;
 mod tunnels;
 mod workspaces;
@@ -27,6 +28,7 @@ use overview::default_shell;
 use settings::*;
 use subagents::*;
 use task_controls::*;
+use task_execution_mode::*;
 
 use std::{collections::BTreeMap, sync::Arc};
 

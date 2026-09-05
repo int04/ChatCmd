@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "required": [
+    "caseId",
+    "seed",
+    "fixtureHash",
+    "instructionsHash",
+    "redactedTranscript",
+    "beforeDiff",
+    "afterDiff",
+    "evidence",
+    "rubricResult",
+    "host",
+    "model",
+    "config",
+    "date"
+  ],
+  "redactionSentinel": "[REDACTED]"
+}
+

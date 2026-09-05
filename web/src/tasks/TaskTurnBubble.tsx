@@ -8,7 +8,9 @@ import { Modal } from '../components';
 import { appLocale, formatAppNumber, tr } from '../i18n';
 import type { SubagentRun, TaskActivityDetail, TaskTurn, TimelineEvent } from '../types';
 import { ApprovalDecisionActions } from './ApprovalDecisionActions';
+import { CompletionQualityCard } from './CompletionQualityCard';
 import { StopActivityDialog } from './StopActivityDialog';
+import { completionQualityReport } from './completionQuality';
 import {
   activityCodeView,
   activityDiffView,
@@ -34,6 +36,7 @@ const TaskCodeViewer = lazy(async () => ({ default: (await import('../TaskCodeVi
 export function TaskTurnBubble({ turn, taskId, subagents = [], agentLabel = 'Codex Agent' }: { turn: TaskTurn; taskId: string; subagents?: SubagentRun[]; agentLabel?: string }) {
   const events = turn.events ?? [];
   const completion = findCompletionSignal(events);
+  const qualityReport = completionQualityReport(events);
   const response = findFinalResponse(events);
   const autoFinalized = completion?.payload.autoFinalized === true;
   const userMessage = findUserMessage(events);
@@ -101,6 +104,7 @@ export function TaskTurnBubble({ turn, taskId, subagents = [], agentLabel = 'Cod
       </section>}
       {status === 'completed' && response && <section className="turn-final-section">
         <div className="turn-response"><div className="turn-response-label"><CheckCircle2 /> {tr('Final response')}</div><div className="turn-response-content"><RichText content={response.text} /></div></div>
+        {qualityReport && <CompletionQualityCard report={qualityReport} />}
         {fileChangeTrackingIncomplete && <div className="turn-warning" role="status"><CircleAlert /><div><strong>{tr('File change tracking was incomplete')}</strong><p>{tr('Some shell file events were dropped. The list below may not include every changed file.')}</p></div></div>}
         {fileChanges.length > 0 && <TurnFileChanges changes={fileChanges} onOpen={(activity) => setChangeTarget(activity)} />}
       </section>}

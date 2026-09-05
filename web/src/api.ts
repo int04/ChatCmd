@@ -1,6 +1,6 @@
 import { decodeEncryptedApiResponse, encryptedApiFetch } from './apiCrypto';
 import { tr } from './i18n';
-import type { Agent, AgentInput, ChatGptBridge, ChatGptQueuedMessage, ChatGptRequest, CommandExecutionMode, LiveTerminalOutput, LocalSettings, McpStatus, Overview, PlanQuestion, PluginLink, ProblemDetails, SecretResult, Session, SessionDetail, Skill, SkillInstallPreview, SkillInstallResult, SkillOptionValue, Task, TaskActivityDetail, TaskDetail, TaskPage, Tool, ToolPreset, Tunnel, TunnelTestResult, UserSkill, WorkspaceProject } from './types';
+import type { Agent, AgentInput, ChatGptBridge, ChatGptQueuedMessage, ChatGptRequest, CommandExecutionMode, LiveTerminalOutput, LocalSettings, McpStatus, Overview, PlanQuestion, PlanQuestionAnswer, PluginLink, ProblemDetails, SecretResult, Session, SessionDetail, Skill, SkillInstallPreview, SkillInstallResult, SkillOptionValue, Task, TaskActivityDetail, TaskDetail, TaskPage, Tool, ToolPreset, Tunnel, TunnelTestResult, UserSkill, WorkspaceProject } from './types';
 
 export class ApiError extends Error {
   constructor(message: string, public status?: number, public problem?: ProblemDetails) { super(message); this.name = 'ApiError'; }
@@ -93,7 +93,7 @@ export const api = {
   pendingSubagentFallbacks: () => request<SubagentFallbackRequest[]>('/api/local/subagents/fallback/pending'),
   reportSubagentFallbackResult: (id: string, input: { attempt: number; status: 'failed' | 'stopped' | 'completed'; errorMessage?: string; assistantContent?: string; conversationId?: string; conversationUrl?: string }) => request<SubagentFallbackResult>(`/api/local/subagents/${item(id)}/fallback/result`, { method: 'POST', body: json(input) }),
   pendingPlanQuestions: () => request<PlanQuestion[]>('/api/local/plan/questions/pending'),
-  answerPlanQuestion: (id: string, answer: { kind: 'option'; optionIndex: 1 | 2 } | { kind: 'custom'; text: string }) => request<{ accepted: boolean; questionId: string; taskId: string; turnId: string }>(`/api/local/plan/questions/${item(id)}/answer`, { method: 'POST', body: json(answer) }),
+  answerPlanQuestion: (question: PlanQuestion, answer: PlanQuestionAnswer) => request<{ accepted: boolean; questionId: string; taskId: string; turnId: string; questionKind: PlanQuestion['questionKind'] }>(`/api/local/plan/questions/${item(question.id)}/answer`, { method: 'POST', body: json({ ...answer, taskId: question.taskId, turnId: question.turnId }) }),
   task: (id: string, cursor?: string, limit = 2) => request<TaskDetail>(`/api/local/tasks/${item(id)}?limit=${limit}${cursor ? `&cursor=${item(cursor)}` : ''}`),
   taskActivity: (taskId: string, activityId: string) => request<TaskActivityDetail>(`/api/local/tasks/${item(taskId)}/activities/${item(activityId)}`),
   setTaskTitle: (id: string, title: string) => request<TaskDetail>(`/api/local/tasks/${item(id)}/title`, { method: 'PUT', body: json({ title }) }),

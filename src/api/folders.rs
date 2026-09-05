@@ -167,7 +167,7 @@ try {
                 String::from_utf8_lossy(&output.stderr).trim().to_string(),
             ));
         }
-        return Ok(clean_path(&output.stdout));
+        Ok(clean_path(&output.stdout))
     }
 
     #[cfg(target_os = "macos")]

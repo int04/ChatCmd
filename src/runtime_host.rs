@@ -1,7 +1,12 @@
 mod activity_control;
 mod agent_lifecycle;
 mod approval;
+#[cfg(test)]
+mod approval_regression_tests;
 mod chatgpt_identity;
+#[cfg(test)]
+mod command_tests;
+mod completion_report;
 mod dispatch;
 mod filesystem_dispatch;
 mod finalization_watchdog;
@@ -12,12 +17,15 @@ mod identity;
 mod inputs;
 mod persistence;
 mod plan_prompt;
+pub(crate) mod plan_prompt_persistence;
 mod queued_messages;
 mod subagent_concurrency;
+mod subagent_contract;
 mod subagent_fallback;
 #[cfg(test)]
 mod subagent_tests;
 mod subagents;
+mod task_serialization;
 mod terminal_lifecycle;
 mod tool_event_projection;
 mod turn_file_changes;
@@ -29,16 +37,16 @@ mod user_message_project_tests;
 #[cfg(test)]
 pub(crate) mod user_message_tests;
 
-use chatcmd_core::{LocalDevice, Task, TaskId, TaskStore as _};
+use chatcmd_core::{LocalDevice, TaskId, TaskStore as _};
 use chatcmd_mcp::RuntimeApi;
 use chatcmd_runtime::{
-    BlobStore, BoxFuture, CursorCodec, DeviceDescriptor, GitService, IndexFreshness,
-    OperationContext, ProcessService, RuntimeError, RuntimeResult, ShellRuntime, SkillService,
-    WorkspaceService,
+    BlobStore, BoxFuture, CommandExecutionService, CursorCodec, DeviceDescriptor, GitService,
+    IndexFreshness, OperationContext, ProcessService, RuntimeError, RuntimeResult, ShellRuntime,
+    SkillService, WorkspaceService,
 };
 use chatcmd_storage::{PersistedWorkspaceIndex, PersistedWorkspaceIndexEntry, SqliteRepository};
 use serde::de::DeserializeOwned;
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::{
     path::Path,
     sync::{
@@ -54,6 +62,7 @@ pub(crate) use activity_control::{ActivityRegistry, StopActivityResult};
 pub(crate) use plan_prompt::{
     PlanPromptRegistry, PlanPromptResolution, PlanPromptResolveError, PlanPromptView,
 };
+pub(super) use task_serialization::task_json;
 use turn_file_changes::TurnFileChangeTracker;
 
 #[derive(Clone)]
@@ -64,6 +73,7 @@ pub(crate) struct RuntimeHost {
     workspace: WorkspaceService,
     blob_store: BlobStore,
     git: GitService,
+    command: CommandExecutionService,
     process: ProcessService,
     skills: SkillService,
     events: broadcast::Sender<AppEvent>,
@@ -87,6 +97,7 @@ impl RuntimeHost {
         workspace: WorkspaceService,
         blob_store: BlobStore,
         git: GitService,
+        command: CommandExecutionService,
         process: ProcessService,
         skills: SkillService,
         events: broadcast::Sender<AppEvent>,
@@ -98,6 +109,7 @@ impl RuntimeHost {
             workspace,
             blob_store,
             git,
+            command,
             process,
             skills,
             events,
@@ -477,21 +489,6 @@ pub(super) fn storage_error(error: chatcmd_core::StorageError) -> RuntimeError {
         }
         _ => RuntimeError::new("storage_error", "local storage operation failed"),
     }
-}
-
-pub(super) fn task_json(task: Task) -> Value {
-    json!({
-        "id": task.id.as_str(),
-        "agentId": task.agent_id.map(|id| id.into_string()),
-        "deviceId": task.device_id.as_str(),
-        "title": task.title,
-        "source": task.source,
-        "status": task.status.as_str(),
-        "activeSessionId": task.active_session_id.map(|id| id.into_string()),
-        "generation": task.generation,
-        "createdAtMs": task.created_at_ms,
-        "updatedAtMs": task.updated_at_ms
-    })
 }
 
 pub(super) fn now_ms() -> i64 {

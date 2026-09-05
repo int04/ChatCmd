@@ -108,6 +108,19 @@ If no dialog is visible, reload the management page and check pending approvals,
 
 Interactive input is disabled while an agent owns the terminal. Wait for the active operation, stop that activity from the task timeline, or close the session if interruption is acceptable. After an unexpected restart, stale sessions are marked interrupted and cannot be resumed as live processes.
 
+## Completion is shown as not run, unknown, stale, or failed
+
+- `notRun`: no execution evidence was supplied. Legacy clients that only send final content use this safe default.
+- `unknown`: an execution ID is missing/wrong-owner/lost after restart, criterion coverage is incomplete, or source freshness was not captured.
+- `stale`: evidence belongs to an earlier turn or captured source state changed.
+- `failed`: the referenced command exited non-zero, timed out, or was cancelled.
+- `notApplicable`: valid only for review/docs-only work with an explicit reason.
+
+An exit-0 `command_run` may currently remain `unknown` because source fingerprints are not yet
+captured. Do not work around this by claiming a boolean pass or parsing `PASS` from terminal text.
+Re-run only when the operation is safe and a prior execution is known terminal; after connection
+loss, reuse the same idempotency key so the runtime can observe the original in-flight execution.
+
 ## The UI says “Request failed (200)”
 
 An HTTP handler may have succeeded while the browser failed to decrypt the response. Check:

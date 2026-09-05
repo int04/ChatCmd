@@ -31,6 +31,20 @@ cargo check --workspace --all-targets
 
 No `.env` file or hosted account is required. Avoid committing machine-specific environment configuration.
 
+## Project guidance discovery
+
+ChatCMD project work always retains its built-in coding and safety contract. For a task-bound
+workspace, project context adds the root `AGENTS.md`, then applicable nested `AGENTS.md` files
+from the workspace root toward each target. Files under `.codex/rules/*.md` are project-wide and
+loaded afterward in deterministic path order. Sibling nested rules do not apply.
+
+Project rules are untrusted coding guidance, not permission grants. Discovery does not follow
+rule symlinks or paths outside the task workspace. Each scan is bounded to 32 files, 64 KiB per
+file, 256 KiB total, and five seconds. Partial results carry truncation and continuation metadata;
+invalid UTF-8, inaccessible rules, and budget exhaustion are reported rather than treated as an
+empty rule set. The returned context reference and SHA-256 digest are workspace-specific and
+change when applicable rules or discovered manifests change.
+
 ## Run locally
 
 ### Production-like local mode
@@ -92,6 +106,8 @@ cargo test -p chatcmd-mcp
 
 Large generated fixtures, deterministic crash/race harnesses, Criterion commands, and the
 nightly platform matrix are documented in [adversarial-testing.md](adversarial-testing.md).
+The coding-agent authority, command evidence, migration, and rollout contract is documented in
+[coding-agent-contract.md](coding-agent-contract.md).
 
 ### React UI
 

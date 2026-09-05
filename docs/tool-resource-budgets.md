@@ -16,6 +16,7 @@ infinite. Deadlines use monotonic `Instant` values.
 | `fs_apply_edits` | 15 s | 5 min | 2 GiB read/write; 10,000 edits | Staging is rolled back before returning; a published result wins a late cancel |
 | copy/move/delete | 5 min | 30 min | 2,000,000 entries; 2 TiB read/write | Pre-publish rollback; post-publish state is reported explicitly |
 | Git subprocess | 30 s | 10 min | 4 MiB stdout preview; 1 MiB stderr preview; 1 GiB artifact | Process tree is killed and child reaped on cancel/timeout |
+| `command_run` | 30 s | 10 min | 4 MiB stdout preview; 1 MiB stderr preview; 1 GiB artifact; 32 concurrent hard ceiling | Exit/signal/timeout/cancel is server-observed; output limit can kill and reap the process tree |
 
 ## Architecture
 
@@ -42,7 +43,9 @@ envelope for partial reads.
 ## Migration status
 
 Migrated in this change: search, find, ranged text reads, range edits, recursive safe mutations,
-Git process execution, and persisted cancellation waiting. Blob storage retains its existing
+Git/`command_run` process execution, and persisted cancellation waiting. `command_run` reuses the
+bounded process supervisor, but its execution registry is currently in-memory; restart/orphan
+recovery and source-state snapshots remain follow-ups. Blob storage retains its existing
 upload/download quotas and ownership checks; interactive PTY sessions retain their session and
 replay limits. Converting those two legacy subsystems to emit `BudgetUsage` directly remains a
 follow-up because it changes their public response schemas.

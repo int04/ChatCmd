@@ -1,93 +1,12 @@
 use std::collections::HashSet;
 
 use crate::runtime_host::StopActivityResult;
-use chatcmd_core::{
-    ActorKind, EventId, EventKind, ExecutionMode, TaskExecutionMode, TerminalEventStore as _,
-    TimelineEvent,
-};
+use chatcmd_core::{ActorKind, EventId, EventKind, TerminalEventStore as _, TimelineEvent};
 use chatcmd_runtime::{OperationContext, ShellSignal};
 use serde::Deserialize;
 
 use super::task_views::task_detail;
 use super::*;
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(super) struct TaskExecutionModeRequest {
-    mode: String,
-}
-
-pub(super) async fn task_execution_mode(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<Json<Value>, Problem> {
-    let task_id = TaskId::new(&id).map_err(|_| bad_id())?;
-    if state
-        .repository
-        .task(&task_id)
-        .await
-        .map_err(storage_problem)?
-        .is_none()
-    {
-        return Err(not_found());
-    }
-    let overridden = sqlx::query_scalar::<_, i64>(
-        "SELECT EXISTS(SELECT 1 FROM task_execution_modes WHERE task_id=? LIMIT 1)",
-    )
-    .bind(task_id.as_str())
-    .fetch_one(state.repository.pool())
-    .await
-    .map_err(db_problem)?
-        == 1;
-    let mode = state
-        .repository
-        .execution_mode(Some(&task_id))
-        .await
-        .map_err(storage_problem)?;
-    Ok(Json(
-        json!({ "mode": execution_mode_name(mode), "overridden": overridden }),
-    ))
-}
-
-pub(super) async fn set_task_execution_mode(
-    State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-    Json(request): Json<TaskExecutionModeRequest>,
-) -> Result<Json<Value>, Problem> {
-    let task_id = TaskId::new(&id).map_err(|_| bad_id())?;
-    if state
-        .repository
-        .task(&task_id)
-        .await
-        .map_err(storage_problem)?
-        .is_none()
-    {
-        return Err(not_found());
-    }
-    let mode = match request.mode.as_str() {
-        "approval" => ExecutionMode::Approval,
-        "allowAll" | "allow" => ExecutionMode::Allow,
-        _ => {
-            return Err(Problem::new(
-                StatusCode::BAD_REQUEST,
-                "Invalid command execution mode",
-                "Mode must be 'approval' or 'allowAll'.",
-            ));
-        }
-    };
-    state
-        .repository
-        .set_execution_mode(&TaskExecutionMode {
-            task_id,
-            mode,
-            updated_at_ms: now_ms(),
-        })
-        .await
-        .map_err(storage_problem)?;
-    Ok(Json(
-        json!({ "mode": execution_mode_name(mode), "overridden": true }),
-    ))
-}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -272,11 +191,24 @@ pub(super) async fn revoke_task_approval_grant(
 ) -> Result<StatusCode, Problem> {
     let now = now_ms();
     let mut transaction = state.repository.pool().begin().await.map_err(db_problem)?;
-    let affected = sqlx::query("UPDATE approval_grants SET state='revoked',updated_at_ms=? WHERE id=? AND task_id=? AND state='active'")
-        .bind(now).bind(&grant_id).bind(&task_id).execute(&mut *transaction).await.map_err(db_problem)?.rows_affected();
-    if affected == 0 {
+    let target_exists = sqlx::query_scalar::<_, i64>(
+        "SELECT EXISTS(SELECT 1 FROM approval_grants WHERE id=? AND task_id=? AND state='active')",
+    )
+    .bind(&grant_id)
+    .bind(&task_id)
+    .fetch_one(&mut *transaction)
+    .await
+    .map_err(db_problem)?
+        == 1;
+    if !target_exists {
         return Err(not_found());
     }
+    sqlx::query("WITH RECURSIVE grants(id) AS (SELECT id FROM approval_grants WHERE id=? UNION ALL SELECT child.id FROM approval_grants child JOIN grants parent ON child.inherited_from=parent.id) UPDATE approval_grants SET state='revoked',updated_at_ms=? WHERE id IN (SELECT id FROM grants) AND state='active'")
+        .bind(&grant_id)
+        .bind(now)
+        .execute(&mut *transaction)
+        .await
+        .map_err(db_problem)?;
     transaction.commit().await.map_err(db_problem)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -525,11 +457,4 @@ pub(super) async fn stop_conversation(
     event.task_id = Some(id.to_owned());
     state.publish(event);
     task_detail(state, id).await
-}
-
-pub(super) fn execution_mode_name(mode: ExecutionMode) -> &'static str {
-    match mode {
-        ExecutionMode::Allow => "allowAll",
-        ExecutionMode::Approval | ExecutionMode::Deny => "approval",
-    }
 }

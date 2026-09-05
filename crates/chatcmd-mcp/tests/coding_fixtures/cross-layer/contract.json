@@ -1,0 +1,6 @@
+{
+  "feature": "questionKind",
+  "layers": ["mcpSchema", "runtimeInput", "dispatch", "api", "webUi"],
+  "acceptance": ["schemaDefault", "runtimeRouting", "apiSerialization", "uiFallback"]
+}
+

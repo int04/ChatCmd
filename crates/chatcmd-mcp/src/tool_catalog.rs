@@ -1,11 +1,11 @@
-use super::McpServer;
+use super::{McpServer, server_contract};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::sync::LazyLock;
 
 pub const PROTOCOL_VERSION: u32 = 2;
-pub const CATALOG_VERSION: u32 = 4;
+pub const CATALOG_VERSION: u32 = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -14,12 +14,17 @@ pub struct CatalogMetadata {
     pub protocol_version: u32,
     pub catalog_version: u32,
     pub catalog_hash: String,
+    pub instructions_version: String,
+    pub instructions_hash: String,
     pub build_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolCapabilityFlags {
+    /// Stable semantic class used by runtime authorization. UI hints must not
+    /// be treated as an authority decision.
+    pub operation_class: ToolOperationClass,
     pub approval_required: bool,
     pub supports_cursor: bool,
     pub supports_content_ref: bool,
@@ -32,6 +37,40 @@ pub struct ToolCapabilityFlags {
     pub supports_budget: bool,
     pub supports_dry_run: bool,
     pub supports_expected_version: bool,
+}
+
+impl ToolCapabilityFlags {
+    #[must_use]
+    pub const fn is_execution_policy_controlled(&self) -> bool {
+        self.operation_class.is_execution_policy_controlled()
+    }
+
+    #[must_use]
+    pub const fn is_permission_change(&self) -> bool {
+        matches!(self.operation_class, ToolOperationClass::PermissionChange)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ToolOperationClass {
+    MetadataRead,
+    ContentRead,
+    Mutation,
+    ProcessExecution,
+    PermissionChange,
+    Lifecycle,
+    StopCleanup,
+}
+
+impl ToolOperationClass {
+    #[must_use]
+    pub const fn is_execution_policy_controlled(self) -> bool {
+        matches!(
+            self,
+            Self::ContentRead | Self::Mutation | Self::ProcessExecution
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,6 +133,8 @@ pub fn catalog_metadata() -> CatalogMetadata {
         protocol_version: PROTOCOL_VERSION,
         catalog_version: CATALOG_VERSION,
         catalog_hash: catalog_hash(),
+        instructions_version: server_contract::instructions::INSTRUCTIONS_VERSION.to_owned(),
+        instructions_hash: instructions_hash(),
         build_id: build_id().to_owned(),
     }
 }
@@ -140,6 +181,31 @@ pub fn catalog_hash() -> String {
     hash_manifest_value(&canonical_manifest())
 }
 
+pub fn instructions_hash() -> String {
+    let mut descriptions = McpServer::tool_router()
+        .list_all()
+        .into_iter()
+        .map(|tool| {
+            (
+                tool.name.to_string(),
+                tool.description.as_deref().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    descriptions.sort_by(|left, right| left.0.cmp(&right.0));
+    hash_instruction_value(&serde_json::json!({
+        "bundle": server_contract::instruction_bundle_for_hash().replace("\r\n", "\n"),
+        "descriptions": descriptions,
+        "version": server_contract::instructions::INSTRUCTIONS_VERSION,
+    }))
+}
+
+pub(crate) fn hash_instruction_value(value: &Value) -> String {
+    let bytes = serde_json::to_vec(value).expect("instruction manifest must serialize");
+    let digest = Sha256::digest(bytes);
+    format!("sha256:{digest:x}")
+}
+
 pub(crate) fn hash_manifest_value(value: &Value) -> String {
     let canonical = canonicalize_contract(value.clone());
     let bytes = serde_json::to_vec(&canonical).expect("canonical manifest must serialize");
@@ -170,13 +236,10 @@ pub(crate) fn canonicalize_contract(value: Value) -> Value {
 
 fn capability_flags(name: &str) -> ToolCapabilityFlags {
     let risk_class = risk_class(name);
+    let operation_class = operation_class(name);
     ToolCapabilityFlags {
-        approval_required: name == "shell_write"
-            || name.starts_with("fs_")
-            || name.starts_with("git_")
-            || name == "process_kill"
-            || name == "workspace_index_rebuild"
-            || name == "task_artifact_create",
+        operation_class,
+        approval_required: operation_class.is_execution_policy_controlled(),
         supports_cursor: matches!(name, "fs_list_v2" | "fs_find" | "fs_search" | "shell_read"),
         supports_content_ref: matches!(
             name,
@@ -227,132 +290,7 @@ fn capability_flags(name: &str) -> ToolCapabilityFlags {
     }
 }
 
-fn risk_class(name: &str) -> ToolRiskClass {
-    match name {
-        "device_list"
-        | "device_get"
-        | "workspace_roots"
-        | "fs_list"
-        | "fs_list_v2"
-        | "fs_stat"
-        | "fs_batch_stat"
-        | "workspace_index_status"
-        | "process_list"
-        | "process_inspect"
-        | "shell_list"
-        | "shell_inspect"
-        | "task_get"
-        | "task_list"
-        | "task_artifact_list"
-        | "blob_status" => ToolRiskClass::MetadataRead,
-        "fs_read_text" | "fs_read_text_v2" | "fs_batch_read" | "task_artifact_read"
-        | "skill_read" | "shell_read" => ToolRiskClass::ContentRead,
-        "fs_find" | "fs_search" | "skills_list" => ToolRiskClass::ComputeRead,
-        "fs_create_directory" | "blob_begin" | "blob_write_chunk" | "blob_seal" => {
-            ToolRiskClass::Create
-        }
-        "fs_write_text"
-        | "fs_write_raw"
-        | "fs_replace_text"
-        | "fs_apply_edits"
-        | "workspace_index_rebuild"
-        | "shell_write"
-        | "shell_resize"
-        | "task_artifact_create" => ToolRiskClass::Modify,
-        "fs_copy" | "fs_move" | "fs_restore_quarantine" => ToolRiskClass::MoveCopy,
-        "fs_delete" | "fs_quarantine_gc" | "process_kill" | "blob_abort" | "shell_close" => {
-            ToolRiskClass::Destructive
-        }
-        "shell_create" | "shell_wait" | "shell_signal" | "git_status" | "git_diff" | "git_log"
-        | "git_branch" | "git_show" | "git_commit" => ToolRiskClass::ProcessExecution,
-        "task_set_execution_mode"
-        | "agent_user_message"
-        | "agent_progress"
-        | "agent_plan_question"
-        | "agent_subagent_start"
-        | "agent_subagent_wait"
-        | "agent_turn_complete" => ToolRiskClass::Privileged,
-        _ => ToolRiskClass::Privileged,
-    }
-}
-
-fn path_fields(name: &str) -> Vec<PathFieldRole> {
-    use PathFieldRole::{
-        Cwd, Destination, Path, Paths, QuarantinePath, RequestPaths, Source, WorkingDirectory,
-    };
-    match name {
-        "fs_batch_stat" | "fs_batch_read" => vec![Paths, RequestPaths],
-        "fs_copy" | "fs_move" => vec![Source, Destination],
-        "fs_restore_quarantine" => vec![QuarantinePath, Destination],
-        "git_commit" => vec![Cwd, Paths],
-        "git_diff" | "git_log" | "git_show" => vec![Cwd, Path],
-        "git_status" | "git_branch" => vec![Cwd],
-        "shell_create" => vec![WorkingDirectory],
-        name if name.starts_with("fs_") || name.starts_with("workspace_index_") => vec![Path],
-        _ => Vec::new(),
-    }
-}
-
-fn result_schema(name: &str) -> Value {
-    let schema = match name {
-        "fs_list_v2" => serde_json::to_value(schemars::schema_for!(
-            chatcmd_runtime::ToolResultEnvelope<chatcmd_runtime::FsListPageData>
-        )),
-        "fs_find" => serde_json::to_value(schemars::schema_for!(
-            chatcmd_runtime::ToolResultEnvelope<chatcmd_runtime::FsFindPageData>
-        )),
-        "fs_search" => serde_json::to_value(schemars::schema_for!(
-            chatcmd_runtime::ToolResultEnvelope<chatcmd_runtime::FsSearchPageData>
-        )),
-        "fs_read_text_v2" => {
-            serde_json::to_value(schemars::schema_for!(chatcmd_runtime::TextReadResultV2))
-        }
-        "fs_batch_read" => {
-            serde_json::to_value(schemars::schema_for!(chatcmd_runtime::FsBatchReadResult))
-        }
-        "fs_batch_stat" => {
-            serde_json::to_value(schemars::schema_for!(chatcmd_runtime::FsBatchStatResult))
-        }
-        "workspace_index_status" | "workspace_index_rebuild" => {
-            serde_json::to_value(schemars::schema_for!(chatcmd_runtime::WorkspaceIndexStatus))
-        }
-        "fs_apply_edits" => {
-            serde_json::to_value(schemars::schema_for!(chatcmd_runtime::ApplyEditsResult))
-        }
-        "fs_write_text" | "fs_write_raw" => {
-            serde_json::to_value(schemars::schema_for!(chatcmd_runtime::AtomicWriteResult))
-        }
-        _ => return Value::Null,
-    }
-    .expect("result schema must serialize");
-    canonicalize_contract(schema)
-}
-
-fn is_mutating(name: &str) -> bool {
-    name.starts_with("blob_")
-        || name.starts_with("fs_write")
-        || name.starts_with("fs_replace")
-        || name == "fs_apply_edits"
-        || name == "workspace_index_rebuild"
-        || name.starts_with("fs_create")
-        || matches!(
-            name,
-            "fs_copy"
-                | "fs_move"
-                | "fs_delete"
-                | "fs_restore_quarantine"
-                | "fs_quarantine_gc"
-                | "git_commit"
-                | "process_kill"
-        )
-        || name.starts_with("shell_write")
-        || name.starts_with("shell_signal")
-        || name.starts_with("shell_resize")
-        || name.starts_with("shell_close")
-        || name.starts_with("task_set_")
-        || name == "task_artifact_create"
-        || name.starts_with("agent_")
-}
+include!("tool_catalog/classification.rs");
 
 fn build_id() -> &'static str {
     option_env!("CHATCMD_BUILD_ID")

@@ -1,0 +1,7 @@
+{
+  "cached": { "catalogVersion": 5, "fields": ["catalogHash"] },
+  "current": { "catalogVersion": 6, "fields": ["catalogHash", "instructionsVersion", "instructionsHash"] },
+  "recovery": "refreshOnce",
+  "permissionDefault": "deny"
+}
+

@@ -1,0 +1,8 @@
+{
+  "test": "zero divisor returns none",
+  "assertion": "ratio(10, 0) == None",
+  "before": "failed",
+  "after": "passed",
+  "assertionChanged": false
+}
+

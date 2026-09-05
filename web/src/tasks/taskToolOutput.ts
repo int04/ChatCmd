@@ -23,6 +23,7 @@ function formatKnownTool(tool: string, output: unknown): string {
     case 'process_list': return formatProcessList(output);
     case 'process_inspect': return formatProcess(value);
     case 'process_kill': return booleanAction('Đã dừng process', value.killed ?? value.terminated, stringish(value.processId ?? value.pid));
+    case 'command_run': return formatCommandExecution(value);
     case 'shell_create': return formatShell(value, 'Đã tạo terminal session');
     case 'shell_inspect': return formatShell(value, 'Terminal session');
     case 'shell_list': return formatShellList(output);
@@ -41,6 +42,24 @@ function formatKnownTool(tool: string, output: unknown): string {
     case 'agent_subagent_wait': return formatSubagents(value);
     default: return '';
   }
+}
+
+function formatCommandExecution(value: Record<string, unknown>) {
+  const command = asObject(value.command);
+  return compact([
+    label('Execution ID', value.executionId),
+    label('Lệnh', command.executable),
+    label('Số đối số', command.argumentCount),
+    label('Thư mục', value.cwd),
+    label('Trạng thái', value.terminalState),
+    value.exitCode !== undefined ? `Exit code: ${value.exitCode ?? '—'}` : '',
+    value.timedOut === true ? 'Đã hết thời gian.' : '',
+    value.cancelled === true ? 'Đã hủy.' : '',
+    label('Thời gian', value.elapsedMs !== undefined ? `${value.elapsedMs} ms` : undefined),
+    label('Artifact', value.artifactRef),
+    stringish(value.stdout) ? `stdout:\n${stringish(value.stdout)}` : '',
+    stringish(value.stderr) ? `stderr:\n${stringish(value.stderr)}` : '',
+  ]);
 }
 
 function formatFsList(output: unknown) {

@@ -1,7 +1,7 @@
 use chatcmd_runtime::{OperationContext, RuntimeError, RuntimeResult};
 use serde_json::Value;
 
-use super::{RuntimeHost, inputs::CompleteInput, parse};
+use super::{RuntimeHost, completion_report::CompleteInput, parse};
 
 impl RuntimeHost {
     pub(super) async fn complete_agent_turn(
@@ -27,6 +27,7 @@ impl RuntimeHost {
             ));
         }
         self.ensure_subagents_finished(context).await?;
+        let quality = self.normalize_completion_report(context, &input).await;
         let result = self
             .save_agent_event(
                 context,
@@ -35,7 +36,10 @@ impl RuntimeHost {
                 input.suggested_title.as_deref(),
             )
             .await?;
+        self.persist_completion_report(context, &quality).await;
         self.demote_immediate_messages(context).await?;
+        let mut result = result;
+        result["qualityReport"] = quality;
         Ok(result)
     }
 }

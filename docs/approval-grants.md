@@ -18,11 +18,26 @@ or the child lease. Terminal child transitions revoke any remaining active child
 | Create/modify | writes, edits, index rebuild | No |
 | Move/copy | `fs_move`, `fs_copy` | No |
 | Destructive | `fs_delete`, `process_kill` | No |
-| Process execution | shell and Git operations | No |
+| Process execution | `command_run`, shell and Git operations | No |
 | Privileged | task and agent control tools | Never through execution approval |
 
-The MCP catalog is the single source of truth for the risk class, path roles, budget support,
-dry-run support, expected-version support, and whether execution approval is required.
+The MCP catalog is the single source of truth for the risk class, operation class, path roles,
+budget support, dry-run support, expected-version support, and approval UI hint. Runtime
+authorization uses the operation class independently from the UI hint. Unknown tools fail closed
+as permission changes until they are explicitly classified.
+
+`command_run` and `shell_create` are process execution. `shell_create` remains execution even when no arguments are supplied: shell startup and profile
+loading can execute code. In deny mode it cannot create a process. In approval mode the exact
+operation must be approved before spawn and is rechecked immediately before dispatch. Lifecycle
+reads and owner-scoped stop/cleanup controls remain available so a denied task can still report its
+state and release resources.
+
+MCP callers cannot change task execution mode. `task_set_execution_mode` remains available as a
+compatibility adapter but returns `permission_change_requires_user`; only the encrypted,
+management-header-protected local UI API may persist a mode change. A UI change writes a
+server-generated audit event, cancels pending approvals, and revokes active grants for the task and
+its descendants. An approved shell runs with the operating-system rights of the ChatCMD process.
+Working-directory validation and approval are not an OS filesystem or network sandbox.
 
 ## Grant matching and budget precedence
 
@@ -33,6 +48,13 @@ outside the scope, with ignored/hidden traversal enabled, or beyond any remainin
 again. Catalog changes invalidate matching. Restart preserves only unexpired persisted grants;
 task stop, agent disable, credential rotation, deletion, expiry, exhaustion, and user revocation
 invalidate them.
+
+Execution consent from `agent_plan_question` is separate from approval grants. Old clarification
+answers, custom text, timeout/reject/cancel outcomes, and records from a previous runtime are never
+converted into a reusable grant or revived as pending authority. The server persists consent audit
+state in `plan_questions`, closes pending rows on restart/disconnect, and uses a single-winner terminal
+transition. An `approved` audit row does not change execution mode, mint a grant, or bypass the C01
+tool authorization performed immediately before dispatch.
 
 ## Approval summaries
 
