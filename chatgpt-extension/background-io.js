@@ -245,10 +245,20 @@ function sameConversationUrl(left, right) {
   return Boolean(leftId && rightId && leftId === rightId);
 }
 
-function isNewConversationUrl(value) {
+function normalizeNewConversationUrl(value) {
+  if (!value) return CHATGPT_HOME;
+  const url = new URL(value);
+  if (url.origin !== 'https://chatgpt.com' || !/^\/g\/g-p-[A-Za-z0-9_-]+\/project$/.test(url.pathname) || url.search || url.hash) {
+    throw new Error('Link dự án ChatGPT không đúng định dạng https://chatgpt.com/g/g-p-{MÃ}/project.');
+  }
+  return `${url.origin}${url.pathname}`;
+}
+
+function isNewConversationUrl(value, target = CHATGPT_HOME) {
   try {
     const url = new URL(value || '');
-    return url.origin === 'https://chatgpt.com' && url.pathname === '/';
+    const expected = new URL(target || CHATGPT_HOME);
+    return url.origin === expected.origin && url.pathname === expected.pathname && !url.search && !url.hash;
   } catch { return false; }
 }
 

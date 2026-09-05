@@ -20,6 +20,7 @@ export function NewChatGptConversation() {
   const location = useLocation();
   const navigate = useNavigate();
   const launchProjectFolder = routeProjectFolder(location.state);
+  const launchProjectChatGptUrl = routeProjectChatGptUrl(location.state);
   const enabledAgents = useMemo(() => (agents.data ?? []).filter((agent) => agent.enabled), [agents.data]);
   const [agentId, setAgentId] = useState('');
   const [projectFolder, setProjectFolder] = useState(launchProjectFolder);
@@ -30,6 +31,8 @@ export function NewChatGptConversation() {
   const [confirmWithoutFolder, setConfirmWithoutFolder] = useState(false);
   const [extensionReady, setExtensionReady] = useState<boolean | null>(null);
   const [chatGptTabOpen, setChatGptTabOpen] = useState<boolean | null>(null);
+  const selectedProject = useMemo(() => (projects.data ?? []).find((project) => canonicalProjectPath(project.path) === canonicalProjectPath(projectFolder)), [projectFolder, projects.data]);
+  const newConversationUrl = selectedProject?.chatGptProjectUrl?.trim() || (canonicalProjectPath(projectFolder) === canonicalProjectPath(launchProjectFolder) ? launchProjectChatGptUrl : '') || undefined;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   useEffect(() => {
@@ -79,7 +82,7 @@ export function NewChatGptConversation() {
     if (busy || modelTabOpening) return;
     setModelTabOpening(true); setError('');
     try {
-      await prepareChatGptModelTab();
+      await prepareChatGptModelTab(newConversationUrl);
       setExtensionReady(true);
       setChatGptTabOpen(true);
     } catch (reason) {
@@ -100,7 +103,7 @@ export function NewChatGptConversation() {
       setExtensionReady(status.ready); setChatGptTabOpen(status.chatGptTabOpen);
       if (!status.ready) throw new Error(tr('ChatCMD ChatGPT Bridge extension is not ready. Enable or reload it, then try again.'));
       const request = await api.createChatGptRequest({ agentId, model: DEFAULT_MODEL, projectFolder: projectFolder.trim(), content: content.trim() });
-      await dispatchChatGptRequest({ requestId: request.id, submittedContent: request.submittedContent, model: request.model });
+      await dispatchChatGptRequest({ requestId: request.id, submittedContent: request.submittedContent, model: request.model, newConversationUrl });
       const taskId = await waitForTaskBinding(request.id);
       navigate(`/tasks/${encodeURIComponent(taskId)}`, { replace: true });
     } catch (reason) {
@@ -367,6 +370,11 @@ function selectedPrompt(agents: Agent[], agentId: string, projectFolder: string,
 function routeProjectFolder(state: unknown) {
   if (!state || typeof state !== 'object' || Array.isArray(state)) return '';
   const value = (state as Record<string, unknown>).projectFolder;
+  return typeof value === 'string' ? value.trim() : '';
+}
+function routeProjectChatGptUrl(state: unknown) {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) return '';
+  const value = (state as Record<string, unknown>).chatGptProjectUrl;
   return typeof value === 'string' ? value.trim() : '';
 }
 

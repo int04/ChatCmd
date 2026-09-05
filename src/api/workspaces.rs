@@ -23,6 +23,8 @@ const MAX_PROJECT_PATH_CHARS: usize = 4_096;
 pub(super) struct SaveWorkspaceProject {
     name: String,
     path: String,
+    #[serde(rename = "chatGptProjectUrl")]
+    chatgpt_project_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -35,7 +37,7 @@ pub(super) async fn workspace_projects(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Value>, Problem> {
     let rows = sqlx::query(
-        "SELECT id,name,path,sort_order,created_at_ms,updated_at_ms FROM workspace_projects ORDER BY COALESCE(sort_order, 2147483647), updated_at_ms DESC, name COLLATE NOCASE",
+        "SELECT id,name,path,chatgpt_project_url,sort_order,created_at_ms,updated_at_ms FROM workspace_projects ORDER BY COALESCE(sort_order, 2147483647), updated_at_ms DESC, name COLLATE NOCASE",
     )
     .fetch_all(state.repository.pool())
     .await
@@ -51,39 +53,26 @@ pub(super) async fn save_workspace_project(
 ) -> Result<Json<Value>, Problem> {
     let name = input.name.trim();
     let path = input.path.trim();
-    if name.is_empty() || path.is_empty() {
-        return Err(Problem::new(
-            StatusCode::BAD_REQUEST,
-            "Invalid workspace project",
-            "name and path are required",
-        ));
-    }
-    if name.chars().count() > MAX_PROJECT_NAME_CHARS
-        || path.chars().count() > MAX_PROJECT_PATH_CHARS
-    {
-        return Err(Problem::new(
-            StatusCode::BAD_REQUEST,
-            "Invalid workspace project",
-            "name or path is too long",
-        ));
-    }
+    let chatgpt_project_url = normalize_chatgpt_project_url(input.chatgpt_project_url.as_deref())?;
+    validate_project_input(name, path)?;
     let canonical = canonical_project_path(path);
     let id = format!("project-{}", Uuid::new_v4());
     let now = now_ms();
     sqlx::query(
-        "INSERT INTO workspace_projects(id,name,path,canonical_path,sort_order,created_at_ms,updated_at_ms) VALUES(?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM workspace_projects),?,?) ON CONFLICT(canonical_path) DO UPDATE SET name=excluded.name,path=excluded.path,updated_at_ms=excluded.updated_at_ms",
+        "INSERT INTO workspace_projects(id,name,path,canonical_path,chatgpt_project_url,sort_order,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,(SELECT COALESCE(MAX(sort_order),-1)+1 FROM workspace_projects),?,?) ON CONFLICT(canonical_path) DO UPDATE SET name=excluded.name,path=excluded.path,chatgpt_project_url=excluded.chatgpt_project_url,updated_at_ms=excluded.updated_at_ms",
     )
     .bind(&id)
     .bind(name)
     .bind(path)
     .bind(&canonical)
+    .bind(chatgpt_project_url.as_deref())
     .bind(now)
     .bind(now)
     .execute(state.repository.pool())
     .await
     .map_err(db_problem)?;
     let row = sqlx::query(
-        "SELECT id,name,path,created_at_ms,updated_at_ms FROM workspace_projects WHERE canonical_path=?",
+        "SELECT id,name,path,chatgpt_project_url,created_at_ms,updated_at_ms FROM workspace_projects WHERE canonical_path=?",
     )
     .bind(&canonical)
     .fetch_one(state.repository.pool())
@@ -99,6 +88,7 @@ pub(super) async fn update_workspace_project(
 ) -> Result<Json<Value>, Problem> {
     let name = input.name.trim();
     let path = input.path.trim();
+    let chatgpt_project_url = normalize_chatgpt_project_url(input.chatgpt_project_url.as_deref())?;
     validate_project_input(name, path)?;
 
     let existing = sqlx::query("SELECT id,path,canonical_path FROM workspace_projects WHERE id=?")
@@ -134,11 +124,12 @@ pub(super) async fn update_workspace_project(
     let now = now_ms();
     let mut transaction = state.repository.pool().begin().await.map_err(db_problem)?;
     sqlx::query(
-        "UPDATE workspace_projects SET name=?,path=?,canonical_path=?,updated_at_ms=? WHERE id=?",
+        "UPDATE workspace_projects SET name=?,path=?,canonical_path=?,chatgpt_project_url=?,updated_at_ms=? WHERE id=?",
     )
     .bind(name)
     .bind(path)
     .bind(&canonical)
+    .bind(chatgpt_project_url.as_deref())
     .bind(now)
     .bind(&id)
     .execute(&mut *transaction)
@@ -183,7 +174,7 @@ pub(super) async fn update_workspace_project(
     transaction.commit().await.map_err(db_problem)?;
 
     let row = sqlx::query(
-        "SELECT id,name,path,created_at_ms,updated_at_ms FROM workspace_projects WHERE id=?",
+        "SELECT id,name,path,chatgpt_project_url,created_at_ms,updated_at_ms FROM workspace_projects WHERE id=?",
     )
     .bind(&id)
     .fetch_one(state.repository.pool())
@@ -297,6 +288,31 @@ fn validate_project_input(name: &str, path: &str) -> Result<(), Problem> {
     Ok(())
 }
 
+fn normalize_chatgpt_project_url(value: Option<&str>) -> Result<Option<String>, Problem> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    const PREFIX: &str = "https://chatgpt.com/g/g-p-";
+    const SUFFIX: &str = "/project";
+    let code = value
+        .strip_prefix(PREFIX)
+        .and_then(|rest| rest.strip_suffix(SUFFIX))
+        .filter(|code| {
+            !code.is_empty()
+                && code
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+        });
+    if code.is_none() {
+        return Err(Problem::new(
+            StatusCode::BAD_REQUEST,
+            "Invalid ChatGPT project link",
+            "Link dự án ChatGPT phải có dạng https://chatgpt.com/g/g-p-{MÃ}/project.",
+        ));
+    }
+    Ok(Some(value.to_owned()))
+}
+
 pub(super) async fn reorder_workspace_projects(
     State(state): State<Arc<AppState>>,
     Json(input): Json<ReorderWorkspaceProjects>,
@@ -351,6 +367,7 @@ fn workspace_project_value(row: &sqlx::sqlite::SqliteRow) -> Value {
         "id": row.get::<String, _>("id"),
         "name": row.get::<String, _>("name"),
         "path": row.get::<String, _>("path"),
+        "chatGptProjectUrl": row.get::<Option<String>, _>("chatgpt_project_url"),
         "createdAtUtc": iso_ms(row.get::<i64, _>("created_at_ms")),
         "updatedAtUtc": iso_ms(row.get::<i64, _>("updated_at_ms"))
     })
@@ -374,6 +391,24 @@ mod tests {
         assert_ne!(
             canonical_project_path("/Work/Client"),
             canonical_project_path("/work/client")
+        );
+    }
+
+    #[test]
+    fn chatgpt_project_url_requires_project_shape() {
+        assert_eq!(
+            normalize_chatgpt_project_url(Some(" https://chatgpt.com/g/g-p-demo_123/project "))
+                .expect("valid project url"),
+            Some("https://chatgpt.com/g/g-p-demo_123/project".to_owned())
+        );
+        assert!(normalize_chatgpt_project_url(Some("https://chatgpt.com/")).is_err());
+        assert!(
+            normalize_chatgpt_project_url(Some("https://chatgpt.com/g/g-p-demo/project?x=1"))
+                .is_err()
+        );
+        assert_eq!(
+            normalize_chatgpt_project_url(Some("  ")).expect("empty optional url"),
+            None
         );
     }
 }

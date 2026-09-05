@@ -35,10 +35,14 @@ async fn schema_twenty_upgrades_additively_without_inventing_consent() {
         .execute(repository.pool())
         .await
         .expect("simulate schema twenty");
-    sqlx::query("DELETE FROM _sqlx_migrations WHERE version=21")
+    sqlx::query("DELETE FROM _sqlx_migrations WHERE version IN (21,22)")
         .execute(repository.pool())
         .await
-        .expect("remove migration marker");
+        .expect("remove migration markers");
+    sqlx::query("ALTER TABLE workspace_projects DROP COLUMN chatgpt_project_url")
+        .execute(repository.pool())
+        .await
+        .expect("simulate pre-project-link schema");
     sqlx::query("UPDATE schema_version SET version=20 WHERE singleton_id=1")
         .execute(repository.pool())
         .await

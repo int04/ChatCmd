@@ -34,7 +34,7 @@ export interface Tool { id: Id; name: string; description?: string; group?: stri
 export interface ToolPreset { id: Id; name: string; description?: string; toolIds: Id[] }
 export interface Task { id: Id; title?: string; source?: string; projectFolder?: string | null; allowExecute?: boolean | null; approvalDeadlineUtc?: string | null; status: string; updatedAtUtc: string; createdAtUtc?: string; generation?: number; turnCount?: number; activeSessionId?: Id; outputPreview?: string; approvalPending?: boolean; finalResponseCount?: number; isSubagent?: boolean; parentTaskId?: Id; parentTurnId?: Id; agentName?: string }
 export interface TaskPage { items: Task[]; nextCursor?: string }
-export interface WorkspaceProject { id: Id; name: string; path: string; createdAtUtc?: string; updatedAtUtc?: string }
+export interface WorkspaceProject { id: Id; name: string; path: string; chatGptProjectUrl?: string | null; createdAtUtc?: string; updatedAtUtc?: string }
 export interface ChatGptRequest { id: Id; taskId?: Id; turnId: Id; agentId: Id; model: string; userContent: string; submittedContent: string; projectFolder?: string | null; status: string; conversationId?: string; conversationUrl?: string; assistantContent?: string; errorMessage?: string; hasFinalResponse?: boolean }
 export interface ChatGptBridge { taskId: Id; conversationId: string; conversationUrl: string; model: string; taskStatus?: string; activeRequestId?: Id; activeStatus?: string; activeSubmittedContent?: string }
 export interface ChatGptQueuedMessage { id: Id; taskId: Id; content: string; mode: 'queued' | 'immediate'; sortOrder: number; createdAtMs: number; updatedAtMs: number }

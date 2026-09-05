@@ -5,14 +5,14 @@ const RESPONSE_TYPE = 'chatcmd-chatgpt-extension-response';
 
 type BridgeCommand =
   | { action: 'ping'; nonce: string; conversationUrl?: string }
-  | { action: 'prepare-tab'; nonce: string }
+  | { action: 'prepare-tab'; nonce: string; newConversationUrl?: string }
   | { action: 'open-tab'; nonce: string; conversationUrl: string }
   | { action: 'focus-tab'; nonce: string; conversationUrl: string }
   | { action: 'close-tab'; nonce: string; conversationUrl: string }
   | { action: 'logs'; nonce: string }
   | { action: 'clear-logs'; nonce: string }
-  | { action: 'send'; nonce: string; requestId: string; submittedContent: string; model: string; conversationUrl?: string; localBaseUrl: string }
-  | { action: 'subagent-send'; nonce: string; subagentId: string; childTaskId: string; submittedContent: string; attempt: number; model: string; localBaseUrl: string }
+  | { action: 'send'; nonce: string; requestId: string; submittedContent: string; model: string; conversationUrl?: string; newConversationUrl?: string; localBaseUrl: string }
+  | { action: 'subagent-send'; nonce: string; subagentId: string; childTaskId: string; submittedContent: string; attempt: number; model: string; newConversationUrl?: string; localBaseUrl: string }
   | { action: 'subagent-close'; nonce: string; subagentId: string }
   | { action: 'stop'; nonce: string; requestId: string; localBaseUrl: string }
   | { action: 'reconcile'; nonce: string; requestId: string };
@@ -41,8 +41,8 @@ export async function chatGptExtensionAvailable() {
   return (await chatGptExtensionStatus()).ready;
 }
 
-export async function prepareChatGptModelTab() {
-  return bridge({ action: 'prepare-tab', nonce: nonce() }, 3_000);
+export async function prepareChatGptModelTab(newConversationUrl?: string) {
+  return bridge({ action: 'prepare-tab', nonce: nonce(), newConversationUrl }, 3_000);
 }
 
 export async function openChatGptConversationTab(conversationUrl: string) {
@@ -66,11 +66,11 @@ export async function clearChatGptExtensionLogs() {
   await bridge({ action: 'clear-logs', nonce: nonce() }, 2_000);
 }
 
-export async function dispatchChatGptRequest(input: { requestId: string; submittedContent: string; model: string; conversationUrl?: string }) {
+export async function dispatchChatGptRequest(input: { requestId: string; submittedContent: string; model: string; conversationUrl?: string; newConversationUrl?: string }) {
   await bridge({ action: 'send', nonce: nonce(), ...input, localBaseUrl: window.location.origin }, 5_000);
 }
 
-export async function dispatchSubagentFallback(input: { subagentId: string; childTaskId: string; submittedContent: string; attempt: number; model?: string }) {
+export async function dispatchSubagentFallback(input: { subagentId: string; childTaskId: string; submittedContent: string; attempt: number; model?: string; newConversationUrl?: string }) {
   await bridge({ action: 'subagent-send', nonce: nonce(), ...input, model: input.model || 'Auto', localBaseUrl: window.location.origin }, 5_000);
 }
 

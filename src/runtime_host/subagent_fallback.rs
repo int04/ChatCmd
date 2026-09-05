@@ -73,6 +73,14 @@ impl RuntimeHost {
         let parent_task_id = row.get::<String, _>("parent_task_id");
         let parent_turn_id = row.get::<String, _>("parent_turn_id");
         let name = row.get::<String, _>("name");
+        let project_folder = sqlx::query_scalar::<_, String>(
+            "SELECT project_folder FROM tasks WHERE id=? AND project_folder IS NOT NULL LIMIT 1",
+        )
+        .bind(&parent_task_id)
+        .fetch_optional(self.repository.pool())
+        .await
+        .ok()
+        .flatten();
         let agent_name =
             sqlx::query_scalar::<_, String>("SELECT name FROM mcp_agents WHERE id=? LIMIT 1")
                 .bind(&parent_context.agent_id)
@@ -102,6 +110,7 @@ impl RuntimeHost {
                 "parentTurnId": parent_turn_id,
                 "childTaskId": child_task_id,
                 "name": name,
+                "projectFolder": project_folder,
                 "submittedContent": submitted_content,
                 "attempt": attempt,
                 "maxAttempts": MAX_EXTENSION_FALLBACK_ATTEMPTS,

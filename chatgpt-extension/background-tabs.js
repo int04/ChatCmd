@@ -33,20 +33,21 @@ async function chatGptTabStatus(conversationUrl, sourceTabId) {
   };
 }
 
-async function prepareNewConversationTab(sourceTabId) {
+async function prepareNewConversationTab(sourceTabId, newConversationUrl) {
   if (!sourceTabId) throw new Error('Không xác định được tab ChatCMD hiện tại.');
-  let tab = await preparedTabForSource(sourceTabId);
+  const target = normalizeNewConversationUrl(newConversationUrl);
+  let tab = await preparedTabForSource(sourceTabId, target);
   if (tab?.id) {
     await chrome.tabs.update(tab.id, { active: true });
   } else {
-    tab = await findAvailableNewConversationTab();
+    tab = await findAvailableNewConversationTab(target);
     if (tab?.id) await chrome.tabs.update(tab.id, { active: true });
-    else tab = await chrome.tabs.create({ url: CHATGPT_HOME, active: true });
+    else tab = await chrome.tabs.create({ url: target, active: true });
   }
   if (!tab?.id) throw new Error('Không thể mở tab ChatGPT để chọn model.');
   if (tab.windowId) await chrome.windows.update(tab.windowId, { focused: true });
   await chrome.storage.session.set({
-    [`${PREPARED_TAB_PREFIX}${sourceTabId}`]: { tabId: tab.id },
+    [`${PREPARED_TAB_PREFIX}${sourceTabId}`]: { tabId: tab.id, target },
     [`${RETURN_TAB_PREFIX}${tab.id}`]: { sourceTabId },
   });
   void sendToChatGpt(tab.id, { type: 'chatcmd-return-binding', enabled: true }, { quiet: true }).catch(() => undefined);
@@ -54,25 +55,27 @@ async function prepareNewConversationTab(sourceTabId) {
   return tab;
 }
 
-async function preparedTabForSource(sourceTabId) {
+async function preparedTabForSource(sourceTabId, target) {
   if (!sourceTabId) return null;
   const key = `${PREPARED_TAB_PREFIX}${sourceTabId}`;
   const stored = await chrome.storage.session.get(key);
   const tabId = stored[key]?.tabId;
+  const expectedTarget = target || stored[key]?.target || CHATGPT_HOME;
   if (!tabId) return null;
   const tab = await safeTab(tabId);
-  if (tab?.id && isNewConversationUrl(tab.url)) return tab;
+  if (tab?.id && isNewConversationUrl(tab.url, expectedTarget)) return tab;
   await chrome.storage.session.remove(key);
   return null;
 }
 
-async function acquireNewConversationTab(sourceTabId) {
-  let tab = await preparedTabForSource(sourceTabId);
+async function acquireNewConversationTab(sourceTabId, newConversationUrl) {
+  const target = normalizeNewConversationUrl(newConversationUrl);
+  let tab = await preparedTabForSource(sourceTabId, target);
   if (tab?.id && sourceTabId) {
     await chrome.storage.session.remove(`${PREPARED_TAB_PREFIX}${sourceTabId}`);
   } else {
-    tab = await findAvailableNewConversationTab();
-    if (!tab?.id) tab = await chrome.tabs.create({ url: CHATGPT_HOME, active: true });
+    tab = await findAvailableNewConversationTab(target);
+    if (!tab?.id) tab = await chrome.tabs.create({ url: target, active: true });
   }
   if (!tab?.id) throw new Error('Không thể tự mở tab ChatGPT mới. Hãy kiểm tra quyền của extension rồi thử lại.');
   await waitForTab(tab.id);
@@ -118,7 +121,7 @@ async function acquireConversationTab(target) {
   return tab;
 }
 
-async function findAvailableNewConversationTab() {
+async function findAvailableNewConversationTab(target = CHATGPT_HOME) {
   const tabs = await chatGptTabs();
   const stored = await chrome.storage.session.get(null);
   const reservedTabIds = new Set(
@@ -127,7 +130,7 @@ async function findAvailableNewConversationTab() {
       .map(([, value]) => value?.tabId)
       .filter(Boolean),
   );
-  return tabs.find((tab) => tab.id && !reservedTabIds.has(tab.id) && isNewConversationUrl(tab.url));
+  return tabs.find((tab) => tab.id && !reservedTabIds.has(tab.id) && isNewConversationUrl(tab.url, target));
 }
 
 async function findConversationTab(target) {

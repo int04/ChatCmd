@@ -15,6 +15,7 @@ export interface SubagentFallbackRequest {
   parentTurnId?: string;
   childTaskId: string;
   name: string;
+  projectFolder?: string | null;
   submittedContent: string;
   attempt: number;
   maxAttempts: number;
@@ -76,8 +77,8 @@ export const api = {
   restartElevated: () => request<ElevationStatus>('/api/local/system/elevation/restart', { method: 'POST', body: '{}' }),
   exitApplication: () => request<{ closing: boolean }>('/api/local/system/exit', { method: 'POST', body: '{}' }),
   workspaceProjects: () => request<WorkspaceProject[]>('/api/local/workspaces/projects'),
-  saveWorkspaceProject: (input: { name: string; path: string }) => request<WorkspaceProject>('/api/local/workspaces/projects', { method: 'POST', body: json(input) }),
-  updateWorkspaceProject: (id: string, input: { name: string; path: string }) => request<WorkspaceProject>(`/api/local/workspaces/projects/${item(id)}`, { method: 'PUT', body: json(input) }),
+  saveWorkspaceProject: (input: { name: string; path: string; chatGptProjectUrl?: string }) => request<WorkspaceProject>('/api/local/workspaces/projects', { method: 'POST', body: json(input) }),
+  updateWorkspaceProject: (id: string, input: { name: string; path: string; chatGptProjectUrl?: string }) => request<WorkspaceProject>(`/api/local/workspaces/projects/${item(id)}`, { method: 'PUT', body: json(input) }),
   deleteWorkspaceProject: (id: string) => request<{ deleted: boolean; deletedConversations: number; preservedConversations: number }>(`/api/local/workspaces/projects/${item(id)}`, { method: 'DELETE' }),
   reorderWorkspaceProjects: (projectIds: string[]) => request<void>('/api/local/workspaces/projects/order', { method: 'PUT', body: json({ projectIds }) }),
   createChatGptRequest: (input: { agentId: string; model?: string; projectFolder?: string; content: string }) => request<ChatGptRequest>('/api/local/chatgpt/requests', { method: 'POST', body: json(input) }),

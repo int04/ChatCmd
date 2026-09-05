@@ -33,7 +33,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
     }
     if (message.action === 'prepare-tab') {
-      void prepareNewConversationTab(sender.tab?.id)
+      void prepareNewConversationTab(sender.tab?.id, message.newConversationUrl)
         .then((tab) => sendResponse({ ok: true, tabId: tab.id, tabUrl: tab.url }))
         .catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
       return true;
@@ -134,7 +134,7 @@ async function startRequest(message) {
   const target = await conversationTarget(message.conversationUrl);
   const tab = message.conversationUrl
     ? await acquireConversationTab(target)
-    : await acquireNewConversationTab(message.sourceTabId);
+    : await acquireNewConversationTab(message.sourceTabId, message.newConversationUrl);
   await bindReturnSource(tab.id, message.sourceTabId);
   await chrome.storage.session.set({
     [requestKey(message.requestId)]: {
@@ -162,7 +162,8 @@ async function startSubagentRequest(message) {
   if (existing?.attempt === attempt && existing?.tabId && await safeTab(existing.tabId)) return;
   if (existing) await closeSubagentRequest(message.subagentId);
 
-  const tab = await chrome.tabs.create({ url: CHATGPT_HOME, active: false });
+  const target = normalizeNewConversationUrl(message.newConversationUrl);
+  const tab = await chrome.tabs.create({ url: target, active: false });
   if (!tab?.id) throw new Error('Không thể mở tab ChatGPT cho sub-agent.');
   await waitForTab(tab.id);
   const requestId = `subagent:${message.subagentId}:${attempt}`;
