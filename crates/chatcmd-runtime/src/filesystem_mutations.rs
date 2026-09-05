@@ -1018,7 +1018,12 @@ impl WorkspaceService {
                             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
                             Err(error) => return Err(io_error(error)),
                         };
-                        reject_reparse_metadata(&metadata)?;
+                        if let Err(error) = reject_reparse_metadata(&metadata) {
+                            if error.code == "symlink_traversal_rejected" {
+                                continue;
+                            }
+                            return Err(error);
+                        }
                         if metadata.is_dir() {
                             stack.push(path);
                             continue;

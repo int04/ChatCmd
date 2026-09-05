@@ -1003,6 +1003,30 @@ async fn startup_recovery_restores_backup_and_removes_staging_for_unpublished_op
     assert!(!journal.exists());
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn startup_recovery_skips_symlinks_without_following_them() {
+    use std::os::unix::fs::symlink;
+
+    let directory = tempfile::tempdir().expect("temp directory");
+    let outside = tempfile::tempdir().expect("outside directory");
+    let root = directory.path();
+    let outside_file = outside.path().join("outside.txt");
+    std::fs::write(&outside_file, "safe").expect("outside fixture");
+    symlink(&outside_file, root.join("ordinary-symlink")).expect("create symlink");
+
+    let recovered = service(root)
+        .recover_interrupted_mutations()
+        .await
+        .expect("recovery should ignore symlinks");
+
+    assert_eq!(recovered, 0);
+    assert_eq!(
+        std::fs::read_to_string(&outside_file).expect("outside file"),
+        "safe"
+    );
+}
+
 #[tokio::test]
 async fn startup_recovery_rejects_journal_paths_outside_workspace() {
     let directory = tempfile::tempdir().expect("temp directory");
