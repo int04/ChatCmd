@@ -109,3 +109,22 @@ Với backend capture v2 đã chạy từ đợt 0.1.4, bản sửa tab nền ch
 Sau khi tải lại, gửi câu hỏi rồi chuyển ngay sang ChatCMD/tab khác và giữ ChatGPT ở nền đến khi hoàn tất. Kiểm tra ChatGPT Think cập nhật mà không cần quay lại tab nguồn, sau đó refresh task để kiểm tra dữ liệu đã lưu.
 
 Smoke test trên Chrome: gửi trực tiếp một câu không gọi plugin; gửi câu nhiều đoạn từ ChatCMD; kiểm tra nguồn ChatGPT xuất hiện trước MCP; hoàn tất rồi refresh task để đọc lịch sử; gửi câu giống nhau hai lần; chuyển chat giữa lúc trả lời và kiểm tra không trộn nội dung.
+
+## Nhiều hội thoại đồng thời
+
+Kiểm tra bổ sung trên extension 0.1.6: hai và ba conversation riêng, tất cả tab nguồn ở nền, có cả native và ChatCMD-dispatched turn. Dùng cùng prompt và cùng user/assistant message ID giữa các tab nhưng nội dung đánh dấu riêng để bắt lỗi trộn. Một snapshot được cố tình giữ rồi trả 503; những chat khác vẫn phải stream. Một kịch bản đóng một tab giữa lượt xác nhận hai tab còn lại vẫn hoàn tất. Sau khi hoàn tất, không gửi snapshot mới hoặc tiếp tục đánh thức service worker trong cửa sổ idle đo được.
+
+Mỗi document có recorder/clock riêng; worker định tuyến theo tabId và requestId, backend suy ra task/turn từ request. Chỉ một snapshot đang chờ ACK trong mỗi recorder; cập nhật trong lúc chờ được gom vào bản mới nhất. UI chi tiết chỉ hợp nhất event của task đang xem; dữ liệu task khác vẫn được lưu ở backend và tải khi chọn task đó. Muốn thu song song ba conversation, giữ ba tab ChatGPT nguồn riêng: chuyển sang conversation khác trong cùng một tab không giữ DOM của conversation trước để tiếp tục thu. Hai tab mở cùng một conversation không thuộc kịch bản được xác nhận ở đây.
+
+### Sửa tranh chấp SQLite
+
+Test ba native enrollment đồng thời đã phát hiện HTTP 500 với SQLite code 5, database is locked. Ba transaction của enroll, persist_observation và persist_browser_completion đọc trước khi ghi bằng BEGIN deferred. Đã đổi riêng ba transaction ghi này sang BEGIN IMMEDIATE, sử dụng busy_timeout có sẵn để chờ quyền ghi trước khi lấy snapshot đọc. Quyền ghi chỉ được giữ trong transaction SQL ngắn; không bao gồm chờ network, browser hoặc MCP. Các transaction chỉ đọc, schema, quyền thực thi, và extension production không đổi. Tham chiếu: SQLite Isolation (https://sqlite.org/isolation.html), SQLx 0.8.6 Pool::begin_with.
+
+Kết quả kiểm tra: 35 test liên quan ChatGPT đạt; test concurrency mới chạy lặp 20/20 lần đạt sau sửa. 54 test extension đạt. Smoke Chrome thật chạy ba kịch bản: 2 chat, 3 chat, 3 chat rồi đóng 1. Chrome/extension/HTTP transport là thật; trang rAF và API trong smoke là fixture. SQLite/router và API lịch sử GUI mã hóa được kiểm tra riêng bằng Rust. Không kiểm thử phiên ChatGPT đăng nhập, không đo CPU/RAM dài hạn hoặc suy rộng cho hàng chục tab.
+
+```powershell
+node chatgpt-extension/multi-chat-browser-smoke.cjs
+cargo test -p chat-cmd-client three_concurrent_native_conversations_stay_isolated_in_sqlite --target-dir target/chatgpt-think-verification -- --nocapture
+```
+
+**Kích hoạt phần sửa concurrency:** giữ extension 0.1.6; build/chạy backend Rust mới. Reload extension đơn thuần không áp dụng được thay đổi SQLite này. Không tự restart ứng dụng đang phục vụ MCP và không tự commit.

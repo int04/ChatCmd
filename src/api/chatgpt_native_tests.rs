@@ -242,3 +242,138 @@ async fn identical_native_questions_in_same_millisecond_do_not_share_a_final() {
     assert_eq!(status["hasFinalResponse"], false);
     assert_eq!(status["status"], "running");
 }
+
+#[tokio::test]
+async fn three_concurrent_native_conversations_stay_isolated_in_sqlite() {
+    use std::collections::HashSet;
+    let (state, app, _directory) = fixture("completed").await;
+    async fn enroll(app: &axum::Router, conversation: &str) -> Value {
+        expect_json(extension_request(app, "POST", "/api/local/chatgpt/capture/turns",
+            json!({"conversationId":conversation,"conversationUrl":format!("https://chatgpt.com/c/{conversation}"),
+                "userMessageId":"same-user-id","content":"Exactly the same question"})).await, StatusCode::OK).await
+    }
+    let (a, b, c) = tokio::join!(
+        enroll(&app, "multi-a"),
+        enroll(&app, "multi-b"),
+        enroll(&app, "multi-c")
+    );
+    let requests = [a, b, c];
+    assert_eq!(
+        requests
+            .iter()
+            .map(|r| r["taskId"].as_str().unwrap())
+            .collect::<HashSet<_>>()
+            .len(),
+        3
+    );
+    assert_eq!(
+        requests
+            .iter()
+            .map(|r| r["id"].as_str().unwrap())
+            .collect::<HashSet<_>>()
+            .len(),
+        3
+    );
+    async fn snapshot(app: &axum::Router, request: &Value, revision: u64) {
+        let id = request["id"].as_str().unwrap();
+        let conversation = request["conversationId"].as_str().unwrap();
+        expect_json(extension_request(app, "POST", &format!("/api/local/chatgpt/bridge/{id}/observation"),
+            json!({"conversationId":conversation,"conversationUrl":request["conversationUrl"],
+                "userMessageId":"same-user-id","revision":revision,"completed":false,
+                "messages":[{"id":"same-assistant-id","kind":"answer","content":format!("Only {conversation} revision {revision}")}]})).await, StatusCode::OK).await;
+    }
+    // Writes arrive together, repeatedly, sharing both user and assistant IDs across chats.
+    for revision in 2..=8 {
+        tokio::join!(
+            snapshot(&app, &requests[0], revision),
+            snapshot(&app, &requests[1], revision),
+            snapshot(&app, &requests[2], revision)
+        );
+    }
+    let a_id = requests[0]["id"].as_str().unwrap();
+    expect_json(
+        extension_request(
+            &app,
+            "POST",
+            &format!("/api/local/chatgpt/bridge/{a_id}/browser-completed"),
+            json!({"assistantContent":"Only multi-a FINAL"}),
+        )
+        .await,
+        StatusCode::OK,
+    )
+    .await;
+    for request in &requests[1..] {
+        let id = request["id"].as_str().unwrap();
+        let status = expect_json(
+            extension_request(
+                &app,
+                "GET",
+                &format!("/api/local/chatgpt/requests/{id}"),
+                Value::Null,
+            )
+            .await,
+            StatusCode::OK,
+        )
+        .await;
+        assert_eq!(
+            status["status"], "running",
+            "one completion must not finish another chat"
+        );
+        assert_eq!(status["hasFinalResponse"], false);
+    }
+    async fn complete(app: &axum::Router, request: &Value) {
+        let id = request["id"].as_str().unwrap();
+        let conversation = request["conversationId"].as_str().unwrap();
+        expect_json(
+            extension_request(
+                app,
+                "POST",
+                &format!("/api/local/chatgpt/bridge/{id}/browser-completed"),
+                json!({"assistantContent":format!("Only {conversation} FINAL")}),
+            )
+            .await,
+            StatusCode::OK,
+        )
+        .await;
+    }
+    tokio::join!(complete(&app, &requests[1]), complete(&app, &requests[2]));
+    let token = state
+        .gui_auth
+        .setup_password("multi-chat-test-password".to_owned())
+        .await
+        .unwrap();
+    let cookie = format!("chatcmd_gui_session={token}");
+    for request in &requests {
+        let id = request["id"].as_str().unwrap();
+        let task_id = request["taskId"].as_str().unwrap();
+        let conversation = request["conversationId"].as_str().unwrap();
+        let (status, detail) =
+            gui_get(&app, &format!("/api/local/tasks/{task_id}"), Some(&cookie)).await;
+        assert_eq!(status, StatusCode::OK);
+        let events = detail["events"].as_array().unwrap();
+        let snapshots: Vec<_> = events
+            .iter()
+            .filter(|event| event["type"] == "chatgpt_think")
+            .collect();
+        assert_eq!(
+            snapshots.len(),
+            1,
+            "updates replace one durable snapshot, not append a token log"
+        );
+        assert_eq!(snapshots[0]["payload"]["bridgeRequestId"], id);
+        assert_eq!(snapshots[0]["payload"]["completed"], true);
+        for message in snapshots[0]["payload"]["messages"].as_array().unwrap() {
+            assert!(
+                message["content"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with(&format!("Only {conversation}"))
+            );
+        }
+        assert!(
+            !events
+                .iter()
+                .any(|event| event["type"] == "tool_call" || event["type"] == "tool_result")
+        );
+    }
+}

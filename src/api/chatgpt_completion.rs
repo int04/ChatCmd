@@ -122,7 +122,13 @@ pub(super) async fn persist_browser_completion(
     repository: &SqliteRepository,
     completion: &BrowserCompletion<'_>,
 ) -> Result<BrowserCompletionEvents, Problem> {
-    let mut transaction = repository.pool().begin().await.map_err(db_problem)?;
+    // This short transaction reads before writing. Reserve the SQLite writer first
+    // so concurrent chat captures wait under busy_timeout instead of failing an upgrade.
+    let mut transaction = repository
+        .pool()
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(db_problem)?;
     let row = sqlx::query("SELECT task_id,turn_id,user_content,submitted_content,status,created_at_ms FROM chatgpt_bridge_requests WHERE id=?")
         .bind(completion.request_id)
         .fetch_optional(&mut *transaction)

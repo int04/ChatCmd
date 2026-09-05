@@ -24,7 +24,7 @@ window.queueText = function(text, final = false) {
 };
 document.querySelector('[data-testid="send-button"]').onclick = () => begin(document.querySelector('textarea').value);
 </script>`;
-async function fixtureApi() {
+async function fixtureApi(options = {}) {
   const requests = new Map();
   const observations = [];
   const calls = [];
@@ -49,7 +49,13 @@ async function fixtureApi() {
       const request = requests.get(id);
       if (!request) { res.writeHead(404); res.end('{}'); return; }
       if (action === 'observation') {
-        observations.push({ id, ...body });
+        // Test-only fault injection: a delayed/failing tab must not block another tab.
+        const rejection = await options.beforeObservation?.({ id, ...body });
+        if (rejection) {
+          res.writeHead(rejection, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ detail: 'Injected transient capture failure' })); return;
+        }
+        observations.push({ id, receivedAtMs: Date.now(), ...body });
         response = { accepted: true, revision: body.revision };
       } else if (action === 'started' || action === 'identity') {
         Object.assign(request, { conversationId: body.conversationId, conversationUrl: body.conversationUrl });

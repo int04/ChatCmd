@@ -138,7 +138,13 @@ pub(super) async fn persist_observation(
     input: &Observation,
 ) -> Result<ObservationEvents, Problem> {
     validate(input)?;
-    let mut tx = repository.pool().begin().await.map_err(db_problem)?;
+    // This short transaction reads before writing. Reserve the SQLite writer first
+    // so concurrent chat captures wait under busy_timeout instead of failing an upgrade.
+    let mut tx = repository
+        .pool()
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(db_problem)?;
     let row = sqlx::query("SELECT task_id,turn_id,user_content,submitted_content,conversation_id,created_at_ms FROM chatgpt_bridge_requests WHERE id=?")
         .bind(request_id).fetch_optional(&mut *tx).await.map_err(db_problem)?.ok_or_else(not_found_chat)?;
     let task_id = row.get::<Option<String>, _>("task_id").ok_or_else(|| {
