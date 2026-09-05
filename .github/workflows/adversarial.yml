@@ -41,13 +41,22 @@ jobs:
       - run: cargo test -p chatcmd-mcp --test release_catalog_smoke
 
   tier-2-benchmark:
-    name: Tier 2 / benchmark report
+    name: Tier 2 / stress and benchmark report
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
+    env:
+      CHATCMD_PLAN20_PATHS: "100000"
+      CHATCMD_PLAN22_BYTES: "16777216"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test -p chatcmd-runtime --test adversarial_filesystem -- --ignored --nocapture
+      - run: cargo test -p chatcmd-runtime --test mutation_safety mutation_100k_small_files_reports_resource_metrics -- --ignored --exact --nocapture
+      - run: cargo test -p chatcmd-runtime --test repository_index_perf repository_index_cold_warm_incremental_and_batch_benchmark -- --ignored --exact --nocapture
+      - run: cargo test -p chatcmd-runtime --test git_streaming_perf git_status_100k_entries_reports_first_page_and_metrics -- --ignored --exact --nocapture
+      - run: cargo test -p chatcmd-runtime --test git_streaming_perf git_diff_cancellation_latency_is_bounded -- --ignored --exact --nocapture
+      - run: cargo test -p chatcmd-runtime --test shell_output_perf plan22_pty_output_benchmark -- --ignored --exact --nocapture
       - run: cargo bench -p chatcmd-runtime --bench filesystem_workloads -- --sample-size 10 --measurement-time 1 --warm-up-time 1
       - run: cargo bench -p chatcmd-runtime --bench tool_telemetry -- --sample-size 10 --measurement-time 1 --warm-up-time 1
       - uses: actions/upload-artifact@v4

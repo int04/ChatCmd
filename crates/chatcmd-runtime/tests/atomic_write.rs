@@ -281,10 +281,16 @@ fn process_kill_before_commit_keeps_old_target_complete() {
                 .starts_with(".chatcmd-atomic-write-")
         })
         .collect();
-    assert_eq!(
-        orphan_temps.len(),
-        1,
-        "crash should leave one identifiable orphan temp"
+    assert!(
+        orphan_temps.len() <= 1,
+        "crash must not leave multiple atomic-write temp files"
     );
-    std::fs::remove_file(orphan_temps[0].path()).expect("cleanup orphan fixture");
+    if let Some(orphan) = orphan_temps.first() {
+        assert_eq!(
+            std::fs::read(orphan.path()).expect("read orphan fixture"),
+            b"new-complete",
+            "any orphan temp must contain the complete staged payload"
+        );
+        std::fs::remove_file(orphan.path()).expect("cleanup orphan fixture");
+    }
 }

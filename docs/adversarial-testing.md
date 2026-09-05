@@ -10,7 +10,7 @@ tiers. Fixtures live only in unique temporary directories; no generated binary i
 | --- | --- | --- |
 | 0 | Every pull request and `dev` push | Format, all-target check, complete workspace test suite |
 | 1 | Nightly/manual, three operating systems | 10 MiB streaming file, sparse 1 GiB ranges, deterministic writer race, bounded tree search, Git spill, crash harness, packaged MCP catalog |
-| 2 | Nightly/manual, Linux | Criterion reports for middle-range reads at 1/10 MiB, a 1,000-file search, 1 MiB atomic replacement, and telemetry |
+| 2 | Nightly/manual, Linux | 1 GiB adversarial file/blob runs, 100k-file mutation, 100k-path index, 100k-entry Git status, Git cancellation, 16 MiB PTY backpressure, plus Criterion reports |
 
 Run the tiers locally:
 
@@ -20,6 +20,12 @@ cargo check --workspace --all-targets
 cargo test --workspace
 cargo test -p chatcmd-runtime --test adversarial_filesystem
 cargo test -p chatcmd-mcp --test release_catalog_smoke
+cargo test -p chatcmd-runtime --test adversarial_filesystem -- --ignored --nocapture
+cargo test -p chatcmd-runtime --test mutation_safety mutation_100k_small_files_reports_resource_metrics -- --ignored --exact --nocapture
+CHATCMD_PLAN20_PATHS=100000 cargo test -p chatcmd-runtime --test repository_index_perf repository_index_cold_warm_incremental_and_batch_benchmark -- --ignored --exact --nocapture
+cargo test -p chatcmd-runtime --test git_streaming_perf git_status_100k_entries_reports_first_page_and_metrics -- --ignored --exact --nocapture
+cargo test -p chatcmd-runtime --test git_streaming_perf git_diff_cancellation_latency_is_bounded -- --ignored --exact --nocapture
+CHATCMD_PLAN22_BYTES=16777216 cargo test -p chatcmd-runtime --test shell_output_perf plan22_pty_output_benchmark -- --ignored --exact --nocapture
 cargo bench -p chatcmd-runtime --bench filesystem_workloads -- --sample-size 10 --measurement-time 1 --warm-up-time 1
 ```
 

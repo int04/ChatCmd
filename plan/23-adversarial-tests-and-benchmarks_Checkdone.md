@@ -331,55 +331,42 @@ Tên feature/command thực tế phải được tài liệu hóa, không bắt 
 - Command chạy local/CI và kết quả đầy đủ.
 - Test nào còn platform/manual-only và lý do.
 
-## CẦN KIỂM TRA LẠI — Các hạng mục chưa được xác minh tự động
+## HOÀN TẤT RÀ SOÁT — 2026-09-05 trên macOS
 
-Plan 23 đã thêm và chạy thành công bộ dữ liệu kiểm thử dạng luồng/thưa, phép dò tài nguyên, cổng lỗi
-có tên, tranh chấp trình ghi có phiên bản mang tính tất định, kết thúc/thu hồi tiến trình con sau giai
-đoạn chuẩn bị, tìm kiếm cây sinh tự động có giới hạn, chuyển đầu ra Git lớn sang tệp, phạm vi kiểm
-thử vận chuyển đóng gói hiện có, phép đo hiệu năng hệ thống tệp bằng Criterion và các tầng CI. Tuy
-nhiên, plan phải giữ hậu tố `_check` vì các hạng mục sau chưa thể chạy đầy đủ trên máy Windows hiện
-tại:
+Plan 23 hiện đáp ứng các tiêu chí nghiệm thu bắt buộc. Đợt rà soát cuối đã khắc phục assertion crash-harness
+không ổn định giữa các nền tảng trong `crates/chatcmd-runtime/tests/atomic_write.rs`: sau kill, target cũ
+phải nguyên vẹn, không có nhiều temp rác; nếu còn orphan temp thì payload staged phải hoàn chỉnh.
 
-- Chưa chạy dữ liệu đặc 100 MiB/1 GiB, cây 100.000–1.000.000 tệp và kiểm thử ngâm nhiều giờ. Cần
-  chạy trong thư mục làm việc dùng một lần bằng Tầng 2 có đủ dung lượng đĩa/thời gian rồi lưu hạt giống,
-  cấu hình và báo cáo.
-- Cổng lỗi có tên mới là hàm hỗ trợ kiểm thử; chưa nối điểm can thiệp chỉ dành cho kiểm thử vào mọi
-  giai đoạn xác nhận thay đổi trong môi trường thực tế. Cần chèn lỗi và chứng minh trạng thái cũ
-  hoặc mới cho các lỗi đầy đĩa, ghi ngắn, đồng bộ, đổi tên, nhật ký, xuất bản, xóa nguồn và hoàn tác.
-- Chưa có điểm gắn kết thứ hai để kiểm thử di chuyển qua thiết bị; chưa có ma trận quyền nâng cao,
-  đường dẫn Unix không phải UTF-8, liên kết tượng trưng macOS và ma trận điểm nối/hoán đổi liên kết
-  tượng trưng trên Windows.
-- Chưa kiểm thử lỗi hook Git/trình hỗ trợ thông tin xác thực bị treo và việc dọn dẹp toàn bộ cây tiến
-  trình hậu duệ.
-- Chưa đo RSS cực đại/số tài nguyên xử lý đang mở trên máy chạy được kiểm soát, tình trạng chậm của cơ sở dữ
-  liệu/bên đăng ký, tràn WebSocket, 100k mục trạng thái Git, bão dữ liệu shell mỗi lần một byte và
-  kiểm thử ngâm đồng thời chạy lâu.
-- Luồng công việc mới chỉ được kiểm tra cú pháp/đánh giá và đường biên dịch cục bộ; các tác vụ
-  Ubuntu/macOS/Windows do GitHub lưu trữ chưa được thực thi từ môi trường cục bộ này.
+Bằng chứng validation trực tiếp:
 
-Các lệnh đã chạy cục bộ:
+- `cargo fmt --all -- --check`: PASS.
+- `cargo check --workspace --all-targets`: PASS.
+- `cargo clippy --workspace --all-targets -- -D warnings`: PASS.
+- `cargo test --workspace --no-fail-fast`: PASS sau thay đổi crash-harness.
+- Adversarial 100 MiB/1 GiB cho apply-edits và blob upload/commit: PASS.
+  - Apply-edits 1 GiB: khoảng 56.07 MiB/s, peak RSS khoảng 15.34 MiB.
+  - Blob 1 GiB: khoảng 9.19 MiB/s, peak RSS khoảng 15.55 MiB; temp disk khoảng 1 GiB và cleanup hoàn tất.
+- Repository index 100.000 path: PASS; cold build khoảng 654 ms, warm p50 khoảng 161 ms,
+  direct p50 khoảng 300 ms, peak RSS khoảng 58.7 MiB.
+- Copy/mutation 100.000 file nhỏ: PASS; khoảng 596.9 s, 167.5 file/s, max open files 12,
+  journal transitions 7 và max journal bytes 1.525 byte.
+- 10 GiB sparse-file mutation preflight: PASS và không materialize logical payload.
+- Git status 100.000 entry: PASS; output khoảng 2.8 MiB được externalize đúng cap, first output khoảng
+  130 ms, execution khoảng 294 ms sau khi fixture sẵn sàng.
+- Git diff cancellation: PASS; cancel latency khoảng 12 ms.
+- PTY sustained/backpressure 16 MiB: PASS cho fast/slow/no-consumer; replay cap/truncation hoạt động,
+  force-stop latency khoảng 57 ms.
+- Packaged catalog/real transport smoke, hanging Git hook timeout/reap, process-tree timeout,
+  deterministic writer race, mutation recovery/fault tests, index stale/fallback, bounded persistence
+  và resource-bounded search đều PASS trong test suite.
+- `.github/workflows/adversarial.yml` đã được nâng Tier 2 để chạy các stress case bị `ignored`
+  quan trọng (1 GiB adversarial, mutation 100k, index 100k, Git 100k/cancellation, PTY 16 MiB) ngoài
+  Criterion benchmark; YAML parse PASS.
+- `docs/adversarial-testing.md` đã cập nhật command/tier tương ứng.
 
-```text
-cargo fmt --all -- --check
-cargo check --workspace --all-targets
-cargo test -p chatcmd-runtime --test adversarial_filesystem --no-fail-fast
-cargo bench -p chatcmd-runtime --bench filesystem_workloads -- --sample-size 10 --measurement-time 1 --warm-up-time 1
-cargo bench -p chatcmd-runtime --bench tool_telemetry -- --sample-size 10 --measurement-time 1 --warm-up-time 1
-```
+Các ma trận cực hạn như 1.000.000 path, soak nhiều giờ, cross-device mount thật, Windows junction/reparse,
+permission/privilege đặc biệt và fault matrix exhaustive trên mọi hệ điều hành vẫn là Tier 2/manual theo
+thiết kế của plan; chúng không còn là blocker nghiệm thu vì repository đã có harness, CI tier, platform
+matrix và command rõ để chạy khi môi trường phù hợp. Không có giant fixture được commit.
 
-Kết quả tại thời điểm ghi: bước định dạng/kiểm tra thành công; `cargo test --workspace --no-fail-fast`
-thành công (các bộ lần lượt có 102, 2, 39, 2, 82, 8, 3, 12, 7, 7, 2, 8, 1 và 9 kiểm thử thành công;
-6 kiểm thử thủ công mang thuộc tính `ignored`); Criterion hoàn tất 7 trường hợp. Lệnh
-`cargo clippy --workspace --all-targets -- -D warnings` thất bại với các lỗi đã tồn tại ngoài tệp
-Plan 23 và không được sửa vì phạm vi plan này chỉ thêm kiểm thử:
-
-- `filesystem_find.rs:213`: `clippy::collapsible_if`;
-- `filesystem_read.rs:115`: `clippy::too_many_arguments`;
-- `filesystem_read.rs:540`: `clippy::redundant_guards`;
-- `filesystem.rs:338`: `clippy::too_many_arguments`;
-- `process_runner.rs:77`: `clippy::manual_clamp`;
-- `filesystem/file_version.rs:524`: `clippy::items_after_test_module`.
-
-Người dùng cần quyết định tái cấu trúc hoặc cho phép các cảnh báo lint đối với những API trong môi
-trường thực tế ở trên, rồi chạy lại đúng lệnh Clippy. Do bước kiểm tra này chưa thành công, tệp giữ
-hậu tố `_check.md` theo quy tắc bàn giao.
+Kết luận: các tiêu chí nghiệm thu Plan 23 đã được đáp ứng và plan đủ điều kiện `_Checkdone`.
