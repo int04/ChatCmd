@@ -5,9 +5,17 @@ pub(super) async fn delete_task(
     Path(id): Path<String>,
 ) -> Result<StatusCode, Problem> {
     let task_id = TaskId::new(&id).map_err(|_| bad_id())?;
+    delete_task_by_id(&state, &task_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn delete_task_by_id(
+    state: &Arc<AppState>,
+    task_id: &TaskId,
+) -> Result<(), Problem> {
     let task = state
         .repository
-        .task(&task_id)
+        .task(task_id)
         .await
         .map_err(storage_problem)?
         .ok_or_else(not_found)?;
@@ -56,7 +64,7 @@ pub(super) async fn delete_task(
         let _ = state.blob_store.cleanup_task(child_id);
     }
     let _ = state.blob_store.cleanup_task(task_id.as_str());
-    Ok(StatusCode::NO_CONTENT)
+    Ok(())
 }
 
 async fn delete_task_data(

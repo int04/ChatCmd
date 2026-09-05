@@ -1,6 +1,11 @@
 use std::{collections::HashSet, sync::Arc};
 
-use axum::{Json, extract::State, http::StatusCode};
+use axum::{
+    Json,
+    extract::{Path, State},
+    http::StatusCode,
+};
+use chatcmd_core::TaskId;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::Row;
@@ -8,7 +13,7 @@ use uuid::Uuid;
 
 use crate::websocket::AppState;
 
-use super::{Problem, db_problem, iso_ms, now_ms};
+use super::{Problem, db_problem, iso_ms, now_ms, task_delete::delete_task_by_id};
 
 const MAX_PROJECT_NAME_CHARS: usize = 160;
 const MAX_PROJECT_PATH_CHARS: usize = 4_096;
@@ -85,6 +90,211 @@ pub(super) async fn save_workspace_project(
     .await
     .map_err(db_problem)?;
     Ok(Json(workspace_project_value(&row)))
+}
+
+pub(super) async fn update_workspace_project(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(input): Json<SaveWorkspaceProject>,
+) -> Result<Json<Value>, Problem> {
+    let name = input.name.trim();
+    let path = input.path.trim();
+    validate_project_input(name, path)?;
+
+    let existing = sqlx::query("SELECT id,path,canonical_path FROM workspace_projects WHERE id=?")
+        .bind(&id)
+        .fetch_optional(state.repository.pool())
+        .await
+        .map_err(db_problem)?
+        .ok_or_else(|| {
+            Problem::new(
+                StatusCode::NOT_FOUND,
+                "Workspace project not found",
+                "Dự án không còn tồn tại.",
+            )
+        })?;
+    let old_canonical = existing.get::<String, _>("canonical_path");
+    let canonical = canonical_project_path(path);
+    let duplicate = sqlx::query_scalar::<_, String>(
+        "SELECT id FROM workspace_projects WHERE canonical_path=? AND id<>?",
+    )
+    .bind(&canonical)
+    .bind(&id)
+    .fetch_optional(state.repository.pool())
+    .await
+    .map_err(db_problem)?;
+    if duplicate.is_some() {
+        return Err(Problem::new(
+            StatusCode::CONFLICT,
+            "Workspace project already exists",
+            "Thư mục này đã được dùng bởi một dự án khác.",
+        ));
+    }
+
+    let now = now_ms();
+    let mut transaction = state.repository.pool().begin().await.map_err(db_problem)?;
+    sqlx::query(
+        "UPDATE workspace_projects SET name=?,path=?,canonical_path=?,updated_at_ms=? WHERE id=?",
+    )
+    .bind(name)
+    .bind(path)
+    .bind(&canonical)
+    .bind(now)
+    .bind(&id)
+    .execute(&mut *transaction)
+    .await
+    .map_err(db_problem)?;
+
+    if old_canonical != canonical {
+        let task_rows =
+            sqlx::query("SELECT id,project_folder FROM tasks WHERE project_folder IS NOT NULL")
+                .fetch_all(&mut *transaction)
+                .await
+                .map_err(db_problem)?;
+        for row in task_rows {
+            let folder = row.get::<String, _>("project_folder");
+            if canonical_project_path(&folder) == old_canonical {
+                sqlx::query("UPDATE tasks SET project_folder=?,updated_at_ms=? WHERE id=?")
+                    .bind(path)
+                    .bind(now)
+                    .bind(row.get::<String, _>("id"))
+                    .execute(&mut *transaction)
+                    .await
+                    .map_err(db_problem)?;
+            }
+        }
+        let request_rows = sqlx::query("SELECT id,project_folder FROM chatgpt_bridge_requests WHERE project_folder IS NOT NULL")
+            .fetch_all(&mut *transaction)
+            .await
+            .map_err(db_problem)?;
+        for row in request_rows {
+            let folder = row.get::<String, _>("project_folder");
+            if canonical_project_path(&folder) == old_canonical {
+                sqlx::query("UPDATE chatgpt_bridge_requests SET project_folder=?,updated_at_ms=? WHERE id=?")
+                    .bind(path)
+                    .bind(now)
+                    .bind(row.get::<String, _>("id"))
+                    .execute(&mut *transaction)
+                    .await
+                    .map_err(db_problem)?;
+            }
+        }
+    }
+    transaction.commit().await.map_err(db_problem)?;
+
+    let row = sqlx::query(
+        "SELECT id,name,path,created_at_ms,updated_at_ms FROM workspace_projects WHERE id=?",
+    )
+    .bind(&id)
+    .fetch_one(state.repository.pool())
+    .await
+    .map_err(db_problem)?;
+    Ok(Json(workspace_project_value(&row)))
+}
+
+pub(super) async fn delete_workspace_project(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, Problem> {
+    let row = sqlx::query("SELECT id,canonical_path FROM workspace_projects WHERE id=?")
+        .bind(&id)
+        .fetch_optional(state.repository.pool())
+        .await
+        .map_err(db_problem)?
+        .ok_or_else(|| {
+            Problem::new(
+                StatusCode::NOT_FOUND,
+                "Workspace project not found",
+                "Dự án không còn tồn tại.",
+            )
+        })?;
+    let canonical = row.get::<String, _>("canonical_path");
+    let child_ids = sqlx::query_scalar::<_, String>(
+        "SELECT child_task_id FROM subagent_runs WHERE child_task_id IS NOT NULL",
+    )
+    .fetch_all(state.repository.pool())
+    .await
+    .map_err(db_problem)?
+    .into_iter()
+    .collect::<HashSet<_>>();
+    let task_rows =
+        sqlx::query("SELECT id,status,project_folder FROM tasks WHERE project_folder IS NOT NULL")
+            .fetch_all(state.repository.pool())
+            .await
+            .map_err(db_problem)?;
+
+    let mut deleted = 0usize;
+    let mut preserved = 0usize;
+    for task_row in task_rows {
+        let folder = task_row.get::<String, _>("project_folder");
+        if canonical_project_path(&folder) != canonical {
+            continue;
+        }
+        let task_id = task_row.get::<String, _>("id");
+        let status = task_row.get::<String, _>("status");
+        if child_ids.contains(&task_id) {
+            continue;
+        }
+        if matches!(status.as_str(), "pending" | "running")
+            || has_active_descendant(&state, &task_id).await?
+        {
+            preserved += 1;
+            continue;
+        }
+        let parsed = TaskId::new(&task_id).map_err(|_| {
+            Problem::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Invalid stored task id",
+                "Không thể xóa cuộc trò chuyện của dự án.",
+            )
+        })?;
+        delete_task_by_id(&state, &parsed).await?;
+        deleted += 1;
+    }
+
+    sqlx::query("DELETE FROM workspace_projects WHERE id=?")
+        .bind(&id)
+        .execute(state.repository.pool())
+        .await
+        .map_err(db_problem)?;
+    Ok(Json(
+        json!({ "deleted": true, "deletedConversations": deleted, "preservedConversations": preserved }),
+    ))
+}
+
+async fn has_active_descendant(state: &Arc<AppState>, task_id: &str) -> Result<bool, Problem> {
+    let count = sqlx::query_scalar::<_, i64>(
+        "WITH RECURSIVE descendants(id) AS (\
+            SELECT child_task_id FROM subagent_runs WHERE parent_task_id=? AND child_task_id IS NOT NULL \
+            UNION \
+            SELECT r.child_task_id FROM subagent_runs r JOIN descendants d ON r.parent_task_id=d.id WHERE r.child_task_id IS NOT NULL\
+         ) SELECT COUNT(*) FROM tasks WHERE id IN (SELECT id FROM descendants) AND status IN ('pending','running')",
+    )
+    .bind(task_id)
+    .fetch_one(state.repository.pool())
+    .await
+    .map_err(db_problem)?;
+    Ok(count > 0)
+}
+
+fn validate_project_input(name: &str, path: &str) -> Result<(), Problem> {
+    if name.is_empty() || path.is_empty() {
+        return Err(Problem::new(
+            StatusCode::BAD_REQUEST,
+            "Invalid workspace project",
+            "name and path are required",
+        ));
+    }
+    if name.chars().count() > MAX_PROJECT_NAME_CHARS
+        || path.chars().count() > MAX_PROJECT_PATH_CHARS
+    {
+        return Err(Problem::new(
+            StatusCode::BAD_REQUEST,
+            "Invalid workspace project",
+            "name or path is too long",
+        ));
+    }
+    Ok(())
 }
 
 pub(super) async fn reorder_workspace_projects(
