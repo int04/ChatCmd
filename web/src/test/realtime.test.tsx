@@ -22,7 +22,7 @@ describe('realtime reconnect', () => {
       await FakeSocket.instances[0].message({ id: 'evt-1', type: 'task.updated', occurredAt: '2026-01-01' });
       await FakeSocket.instances[0].message({ id: 'evt-1', type: 'task.updated', occurredAt: '2026-01-01' });
     });
-    expect(receive).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(receive).toHaveBeenCalledTimes(1));
     act(() => FakeSocket.instances[0].disconnect());
     expect(result.current).toBe('reconnecting');
     act(() => vi.advanceTimersByTime(500));

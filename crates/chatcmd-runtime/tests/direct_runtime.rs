@@ -335,6 +335,112 @@ async fn shell_lifecycle_timeout_duplicate_and_force_close() {
         .expect("retired shell output remains readable");
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn shell_force_close_kills_stubborn_process_group() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let runtime = runtime(directory.path().to_path_buf(), 1);
+    let pid_file = directory.path().join("grandchild.pid");
+    let command = format!(
+        "sh -c 'trap \"\" HUP TERM INT; sleep 60' & child=$!; echo $child > '{}'; wait",
+        pid_file.display()
+    );
+    let created = runtime
+        .create(
+            &OperationContext::new("tree-create", "agent", "shell_create"),
+            ShellCreateRequest {
+                request_id: "tree-create".to_owned(),
+                working_directory: Some(directory.path().to_path_buf()),
+                executable: Some(PathBuf::from("/bin/sh")),
+                arguments: vec!["-c".to_owned(), command],
+                environment: BTreeMap::new(),
+                columns: Some(100),
+                rows: Some(24),
+            },
+        )
+        .await
+        .expect("create process tree");
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !pid_file.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "grandchild pid file was not created"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let grandchild_pid = std::fs::read_to_string(&pid_file)
+        .expect("read grandchild pid")
+        .trim()
+        .parse::<u32>()
+        .expect("parse grandchild pid");
+
+    runtime
+        .close(
+            &OperationContext::new("tree-close", "agent", "shell_close"),
+            &created.session_id,
+            true,
+        )
+        .await
+        .expect("force close process tree");
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let alive = std::process::Command::new("kill")
+            .args(["-0", &grandchild_pid.to_string()])
+            .status()
+            .is_ok_and(|status| status.success());
+        if !alive {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "stubborn grandchild {grandchild_pid} survived force close"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test]
+async fn force_close_is_idempotent_after_process_exit() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let runtime = runtime(directory.path().to_path_buf(), 1);
+    let created = runtime
+        .create(
+            &OperationContext::new("exit-close-create", "agent", "shell_create"),
+            create_request(directory.path().to_path_buf(), "exit-close-create"),
+        )
+        .await
+        .expect("create shell");
+    runtime
+        .write(
+            &OperationContext::new("exit-close-write", "agent", "shell_write"),
+            ShellWriteRequest {
+                request_id: "exit-close-write".to_owned(),
+                session_id: created.session_id.clone(),
+                text: "exit".to_owned(),
+                append_new_line: true,
+                input_kind: chatcmd_runtime::ShellInputKind::Interactive,
+                sensitive: false,
+            },
+        )
+        .await
+        .expect("exit shell");
+    let waited = runtime
+        .wait(&created.session_id, Duration::from_secs(5))
+        .await
+        .expect("wait for shell exit");
+    assert!(waited.completed);
+    runtime
+        .close(
+            &OperationContext::new("exit-close-force", "agent", "shell_close"),
+            &created.session_id,
+            true,
+        )
+        .await
+        .expect("force close after exit is idempotent");
+}
+
 #[tokio::test]
 async fn shell_write_rejects_bulk_input_before_writing() {
     let directory = tempfile::tempdir().expect("temp directory");

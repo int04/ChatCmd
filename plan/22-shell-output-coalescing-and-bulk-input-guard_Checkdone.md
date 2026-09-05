@@ -209,3 +209,27 @@ Plan được đánh dấu `_check` vì lần chạy đầu của `cargo fmt --c
 Ngoài ra, cần chạy phép đo hiệu năng riêng trong môi trường thực tế để đo mức RAM cực đại, CPU, độ trễ hiển thị p50/p95 và độ trễ dừng ở tải PTY 100 MB/s với bên tiêu thụ nhanh/chậm/không có. Kiểm thử đơn vị hiện bao phủ một triệu lượt đọc cực nhỏ, giới hạn đoạn dữ liệu và bảo toàn luồng byte; môi trường CI thông thường không cho kết quả đo độ trễ/tài nguyên ổn định. Cần kiểm tra thủ công việc nâng cấp mức kết thúc cây tiến trình trên Linux/macOS và tiến trình con cố tình bỏ qua Ctrl-C; lượt triển khai này chỉ xác nhận đường buộc đóng hiện có trên Windows và kiểm thử vòng đời hiện hữu.
 
 Giao diện cần kiểm tra lại: `npm run lint` thất bại do 8 lỗi/8 cảnh báo nền (các biến toàn cục Node trong `scripts/obfuscate-build.mjs`, thay đổi tham chiếu trong `src/realtime.ts` và cảnh báo phụ thuộc hook). `npm test -- --run` có 47 kiểm thử thành công, 7 kiểm thử thất bại trong `src/test/App.test.tsx` do không tìm thấy các chuỗi giao diện mong đợi; jsdom cũng báo canvas `getContext` chưa được triển khai. `npm run build` vẫn thành công. Không gian làm việc Rust vượt qua toàn bộ kiểm thử đã chạy, nhưng có các bộ dữ liệu kiểm thử hiệu năng/phương án dự phòng mang thuộc tính `ignored` theo cấu hình kiểm thử hiện tại.
+
+## Rà soát lại ngày 2026-09-05
+
+Đã xử lý thêm các khoảng trống có thể hoàn tất trực tiếp trong môi trường hiện tại:
+
+- Trên macOS, kiểm tra thực tế phát hiện grandchild cố tình bỏ qua `HUP`, `TERM` và `INT` vẫn sống sau `shell_close(force=true)`. `kill_tree` đã được sửa để trên Unix gửi `SIGKILL` cho toàn process group của PTY trước khi fallback về `Child::kill`; Windows vẫn dùng `taskkill /T /F`. Regression test `shell_force_close_kills_stubborn_process_group` tạo grandchild cố tình bỏ qua signal và xác nhận process đó không còn tồn tại sau force-close.
+- Test frontend realtime có race vì assertion chạy trước chuỗi decrypt bất đồng bộ hoàn tất. Test đã chờ điều kiện bằng `vi.waitFor`, không thay đổi hành vi production.
+- PATH mặc định của máy đang trỏ Node `v14.16.0`, khiến ESLint/Vitest không parse được dependency hiện tại. Máy đã có Node `v22.22.3`; chạy lại với Node 22 cho kết quả `npm run lint` pass, `npm test -- --run` pass 54/54 và `npm run build` pass. Các cảnh báo jsdom canvas/media không làm test thất bại.
+- Validation Rust sau thay đổi: `cargo fmt --check` pass, `cargo check --workspace` pass, test shell/kill-tree pass và `cargo test --workspace` pass. Một lượt trước đó có test adversarial filesystem ngoài Plan 22 (`simultaneous_expected_version_writers_have_one_commit_winner`) fail do race; rerun riêng test đó pass và lượt `cargo test --workspace` cuối cùng cũng pass.
+
+### Hoàn tất benchmark và điều kiện `_Checkdone`
+
+Đã bổ sung benchmark thủ công `crates/chatcmd-runtime/tests/shell_output_perf.rs` và chạy trực tiếp trên macOS với mỗi case phát 100 MiB PTY output, cấu hình `shell_output_chunk_bytes=16 KiB`, `shell_output_max_latency_ms=25`, replay cap 8 MiB/8.192 events. Producer dùng byte stream không newline để tránh line-discipline CR/LF làm sai số liệu. Benchmark chạy ba chế độ consumer và một phép đo force-stop:
+
+- Fast consumer: 100 MiB trong 6.322 s (~15,82 MiB/s), 6.401 coalesced events so với baseline xấp xỉ 12.800 raw 8 KiB reads (~2,00x giảm event), 2.409 `shell_read` calls, delivery latency p50/p95 = 1/3 ms, CPU ~3,32 s, peak RSS ~12,5 MiB.
+- Slow consumer (poll 50 ms): 100 MiB trong 6.379 s (~15,68 MiB/s), 6.401 coalesced events, 118 `shell_read` calls, p50/p95 = 28/52 ms, CPU ~3,09 s, peak RSS ~21,9 MiB.
+- No consumer cho tới khi producer exit: 100 MiB trong 6.243 s (~16,02 MiB/s), 6.401 total coalesced events nhưng replay chỉ giữ ~8,0 MiB theo cap, chỉ 1 `shell_read` sau khi producer kết thúc, p50/p95 của retained replay = 259/475 ms, CPU ~2,94 s, peak RSS ~37,2 MiB. `replayTruncated=true` xác nhận bounded replay/gap semantics hoạt động dưới consumer vắng mặt.
+- Force-stop latency của producer vô hạn: 56 ms.
+
+Trong host persistence path, mỗi `shell_read` gọi `append_terminal_chunks` đúng một lần cho toàn batch và realtime publish theo coalesced event, vì vậy benchmark `shellReadCalls` đại diện số batch persistence calls còn `coalescedEvents` là số terminal chunk/WebSocket events tối đa thay cho raw tiny reads. So với event-per-8-KiB-read baseline, coalescing giảm khoảng 2x event count ở workload 100 MiB này; với 1-byte/tiny-read workload, unit test 1.000.000 reads vẫn xác nhận số chunk dưới 125 ở chunk cap 8 KiB.
+
+Benchmark cũng phát hiện thêm race lifecycle: force-close một session vừa tự exit có thể trả `io_error: No such process`. `kill_tree` đã được sửa để coi session đã `exited` là idempotent success trước/sau `Child::kill`, và regression test `force_close_is_idempotent_after_process_exit` đã được thêm. Test `shell_force_close_kills_stubborn_process_group` tiếp tục pass trên macOS.
+
+Validation cuối sau toàn bộ thay đổi: `cargo fmt --check` pass, `cargo check --workspace` pass, hai regression test lifecycle pass, benchmark Plan 22 pass, và `cargo test --workspace` pass. Frontend đã được validation ở lượt rà soát ngay trước đó bằng Node 22.22.3: lint pass, 54/54 tests pass, build pass. Không còn blocker nghiệm thu Plan 22 trong môi trường hiện tại; plan đủ điều kiện `_Checkdone`.

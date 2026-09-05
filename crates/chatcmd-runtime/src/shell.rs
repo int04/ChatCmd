@@ -252,19 +252,40 @@ fn spawn_session_reaper(inner: Arc<ShellRuntimeInner>, session: Arc<Session>) ->
 }
 
 fn kill_tree(session: &Session) -> RuntimeResult<()> {
+    if session.exited.load(Ordering::Acquire) {
+        return Ok(());
+    }
+    let mut tree_killed = false;
     if cfg!(windows)
         && let Some(pid) = session.process_id
     {
-        let _ = std::process::Command::new("taskkill.exe")
+        tree_killed = std::process::Command::new("taskkill.exe")
             .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .output();
+            .output()
+            .is_ok_and(|output| output.status.success());
     }
-    session
-        .child
-        .lock()
-        .map_err(lock_error)?
-        .kill()
-        .map_err(io_error)
+    if cfg!(unix)
+        && let Some(pid) = session.process_id
+    {
+        tree_killed = std::process::Command::new("kill")
+            .args(["-KILL", &format!("-{pid}")])
+            .output()
+            .is_ok_and(|output| output.status.success());
+    }
+    let child_kill = session.child.lock().map_err(lock_error)?.kill();
+    if tree_killed {
+        return Ok(());
+    }
+    match child_kill {
+        Ok(()) => Ok(()),
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                || session.exited.load(Ordering::Acquire) =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(io_error(error)),
+    }
 }
 
 fn lock_error<T>(_error: std::sync::PoisonError<T>) -> RuntimeError {
