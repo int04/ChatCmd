@@ -4,19 +4,30 @@ import { outcomeLabel, qualityCopy, verificationLabel } from './completionQualit
 
 export function CompletionQualityCard({ report }: { report: CompletionQualityReport }) {
   const labels = qualityCopy();
+  const coveredCriteria = report.criteria.filter((item) => item.covered).length;
   return <section className={`turn-quality-report ${report.verification}`} aria-label={labels.quality}>
-    <header>{verificationIcon(report.verification)}<strong>{labels.quality}</strong></header>
-    <dl>
-      <div><dt>{labels.outcome}</dt><dd>{outcomeLabel(report.workOutcome)}</dd></div>
-      <div><dt>{labels.verification}</dt><dd>{verificationLabel(report.verification)}</dd></div>
-      {report.verificationScope && <div><dt>{labels.scope}</dt><dd>{report.verificationScope}</dd></div>}
-    </dl>
-    {report.verificationReason && <p><strong>{labels.reason}:</strong> {report.verificationReason}</p>}
-    {report.criteria.length > 0 && <details><summary>{labels.criteria} · {report.criteria.filter((item) => item.covered).length}/{report.criteria.length}</summary><ul>{report.criteria.map((item, index) => <li key={`${item.criterion}:${index}`}>{item.criterion} — {item.covered ? labels.covered : labels.uncovered}</li>)}</ul></details>}
-    {report.evidence.length > 0 && <details><summary>{labels.evidence} · {report.evidence.length}</summary><ul>{report.evidence.map((item) => <li key={item.executionId}><code>{item.command?.executable || item.executionId}</code>{item.exitCode !== undefined && <> · {labels.exit}: {item.exitCode ?? '—'}</>}{item.cwd && <> · <code>{item.cwd}</code></>}{item.reason && <small>{labels.reason}: {item.reason}</small>}</li>)}</ul></details>}
-    {report.blockers.length > 0 && <div role="status"><strong>{labels.blockers}</strong><ul>{report.blockers.map((item, index) => <li key={`${item}:${index}`}>{item}</li>)}</ul></div>}
-    {report.limitations.length > 0 && <div><strong>{labels.limitations}</strong><ul>{report.limitations.map((item, index) => <li key={`${item}:${index}`}>{item}</li>)}</ul></div>}
+    <header className="turn-quality-header">
+      <div><span className="turn-quality-kicker">{labels.quality}</span><h3>{outcomeLabel(report.workOutcome)}</h3></div>
+      <span className="turn-quality-mark">{verificationIcon(report.verification)}</span>
+    </header>
+    <div className="turn-quality-summary">
+      <span><small>{labels.verification}</small><strong>{verificationLabel(report.verification)}</strong></span>
+      <span><small>{labels.criteria}</small><strong>{coveredCriteria}/{report.criteria.length}</strong></span>
+      <span><small>{labels.evidence}</small><strong>{report.evidence.length}</strong></span>
+    </div>
+    {(report.verificationScope || report.verificationReason) && <div className="turn-quality-narrative">
+      {report.verificationScope && <section><span>{labels.scope}</span><p>{report.verificationScope}</p></section>}
+      {report.verificationReason && <section><span>{labels.reason}</span><p>{report.verificationReason}</p></section>}
+    </div>}
+    {report.criteria.length > 0 && <section className="turn-quality-section"><header><strong>{labels.criteria}</strong><span>{coveredCriteria}/{report.criteria.length}</span></header><ul className="turn-quality-checklist">{report.criteria.map((item, index) => <li className={item.covered ? 'covered' : 'uncovered'} key={`${item.criterion}:${index}`}><span>{item.covered ? <CheckCircle2 /> : <CircleAlert />}</span><p>{item.criterion}</p><small>{item.covered ? labels.covered : labels.uncovered}</small></li>)}</ul></section>}
+    {report.evidence.length > 0 && <section className="turn-quality-section"><header><strong>{labels.evidence}</strong><span>{report.evidence.length}</span></header><ul className="turn-quality-evidence">{report.evidence.map((item) => <li key={item.executionId}><div><code>{item.command?.executable || item.executionId}</code>{item.exitCode !== undefined && <span>{labels.exit}: {item.exitCode ?? '—'}</span>}</div>{item.cwd && <code>{item.cwd}</code>}{item.reason && <small>{labels.reason}: {item.reason}</small>}</li>)}</ul></section>}
+    {report.blockers.length > 0 && <QualityNotice title={labels.blockers} tone="danger" items={report.blockers} />}
+    {report.limitations.length > 0 && <QualityNotice title={labels.limitations} tone="muted" items={report.limitations} />}
   </section>;
+}
+
+function QualityNotice({ title, tone, items }: { title: string; tone: 'danger' | 'muted'; items: string[] }) {
+  return <section className={`turn-quality-notice ${tone}`} role={tone === 'danger' ? 'status' : undefined}><header><strong>{title}</strong></header><ul>{items.map((item, index) => <li key={`${item}:${index}`}>{item}</li>)}</ul></section>;
 }
 
 function verificationIcon(state: VerificationState) {
