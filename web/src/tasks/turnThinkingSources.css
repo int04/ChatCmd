@@ -20,4 +20,3 @@
 .turn-source-empty { display: flex; align-items: center; gap: 9px; min-height: 36px; font-size: 12px; opacity: .65; }
 .turn-source-empty svg { width: 15px; height: 15px; }
 @media (max-width: 600px) { .turn-thinking-source-switch { display: flex; } .turn-thinking-source-switch button { flex: 1; padding-inline: 8px; } }
-@media (prefers-reduced-motion: reduce) { .turn-thinking-source-switch button { transition: none; } }
