@@ -1,5 +1,6 @@
+export { mergeTaskEvent, upsertTaskEvent, taskFromRealtimeEvent, mergeLiveDetail } from './taskEventMerge';
 import { appLocale, formatAppNumber, tr } from '../i18n';
-import type { Task, TaskDetail, TaskTurn, TimelineEvent } from '../types';
+import type { Task, TaskTurn, TimelineEvent } from '../types';
 import { collapseChatGptFallbackTurns } from './chatGptTurnPreference';
 import { formatToolOutput } from './taskToolOutput';
 
@@ -159,7 +160,8 @@ export function buildProcessBlocks(events: TimelineEvent[]): ProcessBlock[] {
 }
 
 export function findUserMessage(events: TimelineEvent[]) {
-  for (const event of events) {
+  const ordered = [...events.filter((event) => payloadObject(event).provider !== 'chatgpt_web'), ...events.filter((event) => payloadObject(event).provider === 'chatgpt_web')];
+  for (const event of ordered) {
     const payload = payloadObject(event);
     if (event.type !== 'message' || stringValue(payload.role) !== 'user') continue;
     const text = eventText(event);
@@ -169,8 +171,9 @@ export function findUserMessage(events: TimelineEvent[]) {
 }
 
 export function findCompletionSignal(events: TimelineEvent[]) {
-  for (let index = events.length - 1; index >= 0; index--) {
-    const event = events[index];
+  const ordered = [...events.filter((event) => payloadObject(event).provider === 'chatgpt_web'), ...events.filter((event) => payloadObject(event).provider !== 'chatgpt_web')];
+  for (let index = ordered.length - 1; index >= 0; index--) {
+    const event = ordered[index];
     const payload = payloadObject(event);
     if (event.type === 'status' && stringValue(payload.status) === 'completed') return { event, payload };
   }
@@ -375,83 +378,6 @@ export function formatClockTime(value: string) {
   return new Intl.DateTimeFormat(appLocale(), { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(value));
 }
 
-export function mergeTaskEvent(task: Task, event: TimelineEvent): Task {
-  const payload = payloadObject(event);
-  const status = stringValue(payload.status);
-  const title = stringValue(payload.title);
-  const finalCompleted = event.type === 'status' && status === 'completed'
-    && Boolean(stringValue(payload.content) || stringValue(payload.response) || stringValue(payload.message));
-  const nextStatus = taskStatusFromEvent(status, event.type, task.status);
-  return {
-    ...task,
-    status: nextStatus,
-    title: title || task.title,
-    updatedAtUtc: event.occurredAt || task.updatedAtUtc,
-    outputPreview: stringValue(payload.content) || stringValue(payload.message) || task.outputPreview,
-    finalResponseCount: (task.finalResponseCount ?? 0) + (finalCompleted ? 1 : 0),
-  };
-}
-
-export function upsertTaskEvent(tasks: Task[] | undefined, event: TimelineEvent): Task[] | undefined {
-  if (!event.taskId) return tasks;
-  const current = tasks ?? [];
-  if (current.some((task) => task.id === event.taskId)) return current.map((task) => task.id === event.taskId ? mergeTaskEvent(task, event) : task);
-  const created = taskFromRealtimeEvent(event);
-  return created ? [created, ...current] : tasks;
-}
-
-export function taskFromRealtimeEvent(event: TimelineEvent): Task | null {
-  if (!event.taskId) return null;
-  const payload = payloadObject(event);
-  const status = stringValue(payload.status);
-  const finalCompleted = event.type === 'status' && status === 'completed'
-    && Boolean(stringValue(payload.content) || stringValue(payload.response) || stringValue(payload.message));
-  return {
-    id: event.taskId,
-    title: stringValue(payload.title) || undefined,
-    status: taskStatusFromEvent(status, event.type, 'running'),
-    createdAtUtc: event.occurredAt,
-    updatedAtUtc: event.occurredAt,
-    turnCount: event.turnId ? 1 : 0,
-    activeSessionId: event.sessionId,
-    outputPreview: stringValue(payload.content) || stringValue(payload.message) || undefined,
-    finalResponseCount: finalCompleted ? 1 : 0,
-  };
-}
-
-export function mergeLiveDetail(detail: TaskDetail, liveEvents: TimelineEvent[]): TaskDetail {
-  const events = [...(detail.events ?? [])];
-  const seen = new Set(events.map((event) => event.id));
-  for (const event of liveEvents) if (!seen.has(event.id)) { events.push(event); seen.add(event.id); }
-  events.sort((left, right) => Date.parse(left.occurredAt) - Date.parse(right.occurredAt) || left.id.localeCompare(right.id));
-  const mergedTask = liveEvents.reduce(mergeTaskEvent, detail.task);
-  const task = reconcileTaskStatusFromEvents(mergedTask, events);
-  if (!liveEvents.length && task === detail.task) return detail;
-  return { ...detail, task, turns: undefined, events };
-}
-
-function reconcileTaskStatusFromEvents(task: Task, events: TimelineEvent[]) {
-  if (task.status !== 'running') return task;
-  const final = findFinalResponse(events);
-  if (!final) return task;
-  const finalIndex = events.indexOf(final.event);
-  const finalTurnId = final.event.turnId;
-  const hasLaterWork = events.slice(finalIndex + 1).some((event) => {
-    if (event.turnId && finalTurnId && event.turnId !== finalTurnId) return true;
-    const payload = payloadObject(event);
-    if (event.type === 'message' && stringValue(payload.role) === 'user') return true;
-    if (event.type === 'progress') return true;
-    if (event.type === 'tool_call') return stringValue(payload.tool) !== 'agent_turn_complete';
-    return false;
-  });
-  return hasLaterWork ? task : { ...task, status: 'completed' };
-}
-
-function taskStatusFromEvent(status: string, eventType: string, fallback: string) {
-  if (['pending', 'running', 'completed', 'failed', 'stopped', 'interrupted'].includes(status)) return status;
-  if (eventType === 'progress' || eventType === 'tool_call') return 'running';
-  return fallback;
-}
 function isUserMessage(event: TimelineEvent) { const payload = payloadObject(event); return event.type === 'message' && stringValue(payload.role) === 'user'; }
 function isVisibleAgentMessage(event: TimelineEvent) {
   if (isUserMessage(event) || !['progress', 'message', 'warning', 'status'].includes(event.type)) return false;

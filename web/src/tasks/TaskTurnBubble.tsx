@@ -1,3 +1,5 @@
+import { TurnThinkingSources } from './TurnThinkingSources';
+import { browserThinking, isBrowserEvent } from './chatGptThinking';
 import { BookOpen, Bot, CheckCircle2, ChevronDown, CircleAlert, CircleStop, Clock3, ExternalLink, FileCode2, FilePenLine, GitBranch, LoaderCircle, MessageSquareText, Search, TerminalSquare, Wrench } from 'lucide-react';
 import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
@@ -41,7 +43,9 @@ export function TaskTurnBubble({ turn, taskId, subagents = [], agentLabel = 'Cod
   const autoFinalized = completion?.payload.autoFinalized === true;
   const userMessage = findUserMessage(events);
   const visibleUserMessage = userMessage?.text.replace(/^\s*CMDGPT_SUBAGENT_ID=subagent-[A-Za-z0-9_-]+\s*$/gm, '').trim();
-  const processEvents = events.filter((event) => event !== userMessage?.event);
+  const browser = browserThinking(events);
+  const dualSources = agentLabel === 'ChatGPT' || events.some(isBrowserEvent);
+  const processEvents = events.filter((event) => event !== userMessage?.event && !isBrowserEvent(event));
   const blocks = buildProcessBlocks(processEvents);
   const activities = blocks.flatMap((block) => block.type === 'activities' ? block.activities : []);
   const rawStatus = turn.status ?? 'incomplete';
@@ -55,7 +59,8 @@ export function TaskTurnBubble({ turn, taskId, subagents = [], agentLabel = 'Cod
   const [changeTarget, setChangeTarget] = useState<ToolActivity | null>(null);
   const hasResponse = Boolean(response);
   const [thinkingOpen, setThinkingOpen] = useState(() => !hasResponse);
-  const hasThinkingContent = subagents.length > 0 || activities.length > 0 || blocks.some((block) => block.type === 'progress') || isThinking || status === 'failed' || status === 'incomplete' || (status === 'completed' && autoFinalized && !hasResponse);
+  const hasMcp = subagents.length > 0 || activities.length > 0 || blocks.some((block) => block.type === 'progress') || Boolean(response && !isBrowserEvent(response.event));
+  const hasThinkingContent = dualSources || subagents.length > 0 || activities.length > 0 || blocks.some((block) => block.type === 'progress') || isThinking || status === 'failed' || status === 'incomplete' || (status === 'completed' && autoFinalized && !hasResponse);
   const fileChanges = response ? responseFileChanges(response.event) : [];
   const fileChangeTrackingIncomplete = response ? responseFileChangeTrackingIncomplete(response.event) : false;
 
@@ -91,6 +96,7 @@ export function TaskTurnBubble({ turn, taskId, subagents = [], agentLabel = 'Cod
           <span><MessageSquareText aria-hidden="true" />{tr('Thinking')}</span><ChevronDown aria-hidden="true" />
         </button>
         {thinkingOpen && <div className="turn-thinking-content">
+          <TurnThinkingSources enabled={dualSources} browser={browser} hasMcp={hasMcp} running={status === 'running'}>
           {subagents.length > 0 && <SubagentList agents={subagents} />}
           {(activities.length > 0 || blocks.some((block) => block.type === 'progress')) && <TurnProcess blocks={blocks} taskId={taskId} onStop={setStopTarget} />}
           {isThinking && <div className="turn-thinking" role="status"><span>{tr('Thinking and preparing a response…')}</span></div>}
@@ -99,6 +105,7 @@ export function TaskTurnBubble({ turn, taskId, subagents = [], agentLabel = 'Cod
             : <div className="turn-error" role="alert"><CircleAlert /><div><strong>{tr('Agent turn failed')}</strong><p>{latestMessage(events) || tr('The Agent could not complete this turn. Review the activity above to find the cause.')}</p></div></div>)}
           {status === 'incomplete' && <div className="turn-warning" role="status"><CircleAlert /><div><strong>{tr('This turn may have been interrupted')}</strong><p>{latestMessage(events) || tr('No new activity or completion signal was received for a long time. The turn may have been interrupted or delayed; its state will recover automatically if new data arrives.')}</p></div></div>}
           {status === 'completed' && autoFinalized && !response && <div className="turn-warning" role="status"><CircleAlert /><div><strong>{tr('Finalizer was not received')}</strong><p>{tr('No completion callback arrived from the Agent. ChatCMD stopped waiting after the inactivity grace period; later Agent activity will reopen the turn automatically.')}</p></div></div>}
+          </TurnThinkingSources>
           <button type="button" className="turn-thinking-collapse" onClick={() => setThinkingOpen(false)}><ChevronDown aria-hidden="true" />{tr('Show less')}</button>
         </div>}
       </section>}

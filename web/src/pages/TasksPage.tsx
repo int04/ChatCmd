@@ -1,3 +1,4 @@
+import { mergeTimelineEvents, snapshotRevision } from '../tasks/timelineSnapshots';
 import { CheckCircle2, CircleAlert, Clock3, LoaderCircle, MessageSquareText, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
@@ -54,7 +55,7 @@ function TasksWorkspace() {
     if (event.taskId === taskId && (event.type === 'approval.pending' || event.type === 'conversation.approval_pending' || event.type === 'conversation.title_updated')) { setDetailVersion((value) => value + 1); return; }
     if (event.taskId === taskId) {
       const compactEvent = compactLiveToolEvent(event);
-      setLiveEvents((current) => current.some((item) => item.id === compactEvent.id) ? current : [...current, compactEvent]);
+      setLiveEvents((current) => mergeTimelineEvents(current, [compactEvent]));
     }
     else if (taskId && hiddenSubagentTaskIds.current.has(event.taskId)) setDetailVersion((value) => value + 1);
   }, [hideSubagentTask, taskId]);
@@ -104,7 +105,7 @@ function TaskDetailContent({ detail, realtime, onTaskChanged, hasOlder, loadingO
   const sidebarResize = useResizableWidth({ storageKey: 'chatcmd.layout.taskDetailSidebarWidth.v1', cssVariable: '--task-detail-sidebar-width', defaultWidth: typeof window !== 'undefined' && window.innerWidth <= 1180 ? 300 : 340, minWidth: 280, maxWidth: 520, direction: -1 });
   const activeTaskRef = useRef<string | null>(null);
   const lastEvent = events.at(-1); const lastTurn = turns.at(-1);
-  const updateKey = `${events.length}:${lastEvent?.id ?? 'empty'}:${turns.length}:${lastTurn?.id ?? 'empty'}:${lastTurn?.status ?? 'empty'}:${lastTurn?.completedAtUtc ?? ''}`;
+  const updateKey = `${events.reduce((max, event) => Math.max(max, snapshotRevision(event)), 0)}:${events.length}:${lastEvent?.id ?? 'empty'}:${turns.length}:${lastTurn?.id ?? 'empty'}:${lastTurn?.status ?? 'empty'}:${lastTurn?.completedAtUtc ?? ''}`;
   useLayoutEffect(() => { const root = chatRef.current; if (!root) return; const taskChanged = activeTaskRef.current !== task.id; activeTaskRef.current = task.id; if (!taskChanged && !nearBottomRef.current) return; const frame = window.requestAnimationFrame(() => { root.scrollTop = root.scrollHeight; }); return () => window.cancelAnimationFrame(frame); }, [task.id, updateKey]);
   const toggleSidebar = () => setSidebarCollapsed((current) => {
     const next = !current;
@@ -150,9 +151,7 @@ function TaskDetailContent({ detail, realtime, onTaskChanged, hasOlder, loadingO
 
 
 function mergeUniqueEvents(first: TimelineEvent[], second: TimelineEvent[]) {
-  const merged = new Map<string, TimelineEvent>();
-  for (const event of [...first, ...second]) if (!merged.has(event.id)) merged.set(event.id, event);
-  return [...merged.values()].sort((left, right) => left.occurredAt.localeCompare(right.occurredAt) || left.id.localeCompare(right.id));
+  return mergeTimelineEvents(first, second);
 }
 
 function compactLiveToolEvent(event: TimelineEvent): TimelineEvent {

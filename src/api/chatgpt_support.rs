@@ -18,32 +18,16 @@ pub(super) async fn request_json(state: &Arc<AppState>, id: &str) -> Result<Json
     let submitted = row.get::<String, _>("submitted_content");
     let created_at_ms = row.get::<i64, _>("created_at_ms");
     let has_final_response = if let Some(task_id) = task_id.as_deref() {
-        let completed_messages = sqlx::query_scalar::<_, String>(
-            r#"SELECT COALESCE(json_extract(user_event.payload_json,'$.submittedContent'),json_extract(user_event.payload_json,'$.content'))
-                FROM timeline_events user_event
-                JOIN timeline_events final_event
-                  ON final_event.task_id=user_event.task_id
-                 AND final_event.turn_id=user_event.turn_id
-                WHERE user_event.task_id=?
-                  AND user_event.actor='user'
-                  AND user_event.kind='message'
-                  AND json_type(user_event.payload_json,'$.content')='text'
-                  AND user_event.created_at_ms>=?
-                  AND final_event.actor='assistant'
-                  AND final_event.kind='status'
-                  AND json_extract(final_event.payload_json,'$.status')='completed'
-                  AND final_event.created_at_ms>=user_event.created_at_ms
-                ORDER BY final_event.created_at_ms DESC,user_event.created_at_ms DESC
-                LIMIT 64"#,
-        )
-        .bind(task_id)
-        .bind(created_at_ms)
-        .fetch_all(state.repository.pool())
-        .await
-        .map_err(db_problem)?;
-        completed_messages
-            .iter()
-            .any(|content| crate::chatgpt_message::equivalent(content, &submitted))
+        let mut tx = state.repository.pool().begin().await.map_err(db_problem)?;
+        let mcp_turn =
+            crate::chatgpt_transcript::mcp_turn(&mut tx, task_id, id, created_at_ms, &submitted)
+                .await
+                .map_err(db_problem)?;
+        let turn_id = mcp_turn.unwrap_or_else(|| row.get::<String, _>("turn_id"));
+        let found: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM timeline_events WHERE task_id=? AND turn_id=? AND actor='assistant' AND kind='status' AND json_extract(payload_json,'$.status')='completed')")
+            .bind(task_id).bind(turn_id).fetch_one(&mut *tx).await.map_err(db_problem)?;
+        tx.commit().await.map_err(db_problem)?;
+        found
     } else {
         false
     };
@@ -85,34 +69,6 @@ pub(super) async fn request_json(state: &Arc<AppState>, id: &str) -> Result<Json
         object.insert("hasFinalResponse".to_owned(), json!(has_final_response));
     }
     Ok(Json(value))
-}
-
-pub(super) async fn has_mcp_turn_for_request(
-    state: &Arc<AppState>,
-    task_id: &str,
-    submitted: &str,
-    created_at_ms: i64,
-) -> Result<bool, Problem> {
-    let messages = sqlx::query_scalar::<_, String>(
-        r#"SELECT json_extract(payload_json,'$.content')
-            FROM timeline_events
-            WHERE task_id=?
-              AND actor='user'
-              AND kind='message'
-              AND json_type(payload_json,'$.content')='text'
-              AND COALESCE(json_extract(payload_json,'$.provider'),'') <> 'chatgpt_web'
-              AND created_at_ms>=?
-            ORDER BY created_at_ms DESC,event_id DESC
-            LIMIT 64"#,
-    )
-    .bind(task_id)
-    .bind(created_at_ms)
-    .fetch_all(state.repository.pool())
-    .await
-    .map_err(db_problem)?;
-    Ok(messages
-        .iter()
-        .any(|content| crate::chatgpt_message::equivalent(content, submitted)))
 }
 
 pub(super) async fn bridge_request_row(
@@ -310,6 +266,9 @@ pub(super) fn wrapped_message(
     project_folder: Option<&str>,
     content: &str,
 ) -> String {
+    if agent_name == super::chatgpt_native::RECORDER_AGENT_NAME {
+        return content.to_owned();
+    }
     match project_folder
         .map(str::trim)
         .filter(|value| !value.is_empty())

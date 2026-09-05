@@ -20,7 +20,7 @@ use crate::{runtime_host::user_message_tests::test_host, websocket::AppState};
 const CRYPTO_KEY: [u8; 32] = [7; 32];
 const CRYPTO_SESSION: &str = "bridge-router-test-session";
 
-async fn fixture(status: &str) -> (Arc<AppState>, Router, TempDir) {
+pub(super) async fn fixture(status: &str) -> (Arc<AppState>, Router, TempDir) {
     let (host, agent_id, directory) = test_host().await;
     let state =
         Arc::new(host.test_app_state(directory.path().join("chatcmd.db").display().to_string()));
@@ -48,7 +48,12 @@ async fn fixture(status: &str) -> (Arc<AppState>, Router, TempDir) {
     (state, app, directory)
 }
 
-async fn extension_request(app: &Router, method: &str, path: &str, body: Value) -> Response {
+pub(super) async fn extension_request(
+    app: &Router,
+    method: &str,
+    path: &str,
+    body: Value,
+) -> Response {
     app.clone()
         .oneshot(
             Request::builder()
@@ -67,7 +72,7 @@ async fn extension_request(app: &Router, method: &str, path: &str, body: Value) 
         .expect("router response")
 }
 
-async fn expect_json(response: Response, status: StatusCode) -> Value {
+pub(super) async fn expect_json(response: Response, status: StatusCode) -> Value {
     let actual = response.status();
     let body = to_bytes(response.into_body(), 128 * 1024)
         .await
@@ -81,7 +86,7 @@ async fn expect_json(response: Response, status: StatusCode) -> Value {
     serde_json::from_slice(&body).expect("JSON response")
 }
 
-async fn gui_get(app: &Router, path: &str, cookie: Option<&str>) -> (StatusCode, Value) {
+pub(super) async fn gui_get(app: &Router, path: &str, cookie: Option<&str>) -> (StatusCode, Value) {
     let mut request = Request::builder()
         .uri(path)
         .header("X-ChatCmdClient", "local-ui")

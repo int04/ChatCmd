@@ -179,6 +179,8 @@ pub(super) async fn require_gui_auth(
 fn extension_route_allowed(method: &Method, path: &str) -> bool {
     let parts = path.trim_matches('/').split('/').collect::<Vec<_>>();
     match (method, parts.as_slice()) {
+        (&Method::GET, ["api", "local", "chatgpt", "capture", "capabilities"])
+        | (&Method::POST, ["api", "local", "chatgpt", "capture", "turns"]) => true,
         (&Method::GET, ["api", "local", "chatgpt", "requests", _]) => true,
         (&Method::POST, ["api", "local", "subagents", _, "fallback", action]) => {
             matches!(*action, "started" | "result")
@@ -186,7 +188,7 @@ fn extension_route_allowed(method: &Method, path: &str) -> bool {
         (&Method::POST, ["api", "local", "chatgpt", "bridge", _, action]) => {
             matches!(
                 *action,
-                "started" | "identity" | "result" | "browser-completed"
+                "started" | "identity" | "result" | "browser-completed" | "observation"
             )
         }
         (&Method::GET, ["api", "local", "tasks", "approvals", "pending"])

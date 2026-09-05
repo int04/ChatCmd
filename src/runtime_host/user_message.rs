@@ -141,7 +141,17 @@ impl RuntimeHost {
             &context.agent_id,
             &format!("{}\0{}", task_id.as_str(), turn_id.as_str()),
         );
+        let bridge = crate::chatgpt_transcript::request_for_turn(
+            &self.repository,
+            task_id.as_str(),
+            turn_id.as_str(),
+            content,
+        )
+        .await
+        .map_err(|_| RuntimeError::new("storage_error", "browser turn lookup failed"))?;
         let payload = json!({
+            "bridgeRequestId": bridge.as_ref().map(|link| link.request_id.as_str()),
+            "browserTurnId": bridge.as_ref().map(|link| link.browser_turn_id.as_str()),
             "tool": context.tool_name,
             "role": "user",
             "content": content,
@@ -180,6 +190,22 @@ impl RuntimeHost {
                     "the current turnId is already bound to a different user message; use a new turnId for each user message",
                 ));
             }
+        }
+        if let Some(bridge) = &bridge {
+            let mut tx = self.repository.pool().begin().await.map_err(|_| {
+                RuntimeError::new("storage_error", "browser turn transaction failed")
+            })?;
+            crate::chatgpt_transcript::rehome_events(
+                &mut tx,
+                task_id.as_str(),
+                &bridge.request_id,
+                turn_id.as_str(),
+            )
+            .await
+            .map_err(|_| RuntimeError::new("storage_error", "browser turn merge failed"))?;
+            tx.commit()
+                .await
+                .map_err(|_| RuntimeError::new("storage_error", "browser turn commit failed"))?;
         }
         if inserted > 0 {
             self.retire_previous_turn_terminals(context, &task_id, &turn_id)
@@ -269,7 +295,7 @@ impl RuntimeHost {
 
     async fn first_user_turn(&self, task_id: &TaskId) -> RuntimeResult<Option<String>> {
         sqlx::query_scalar::<_, String>(
-            "SELECT turn_id FROM timeline_events WHERE task_id=? AND actor='user' AND kind='message' AND turn_id IS NOT NULL ORDER BY created_at_ms,event_id LIMIT 1",
+            "SELECT turn_id FROM timeline_events WHERE task_id=? AND actor='user' AND kind='message' AND turn_id IS NOT NULL AND COALESCE(json_extract(payload_json,'$.provider'),'')<>'chatgpt_web' ORDER BY created_at_ms,event_id LIMIT 1",
         )
         .bind(task_id.as_str())
         .fetch_optional(self.repository.pool())

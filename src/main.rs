@@ -9,6 +9,7 @@ mod api;
 mod catalog_seed;
 mod chatgpt_message;
 mod chatgpt_queue;
+mod chatgpt_transcript;
 #[cfg(all(not(debug_assertions), any(target_os = "windows", target_os = "macos")))]
 mod desktop_tray;
 #[cfg(feature = "embedded-web")]

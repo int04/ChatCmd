@@ -1,9 +1,13 @@
 {
   "manifest_version": 3,
   "name": "ChatCMD ChatGPT Bridge",
-  "version": "0.1.2",
+  "version": "0.1.6",
   "description": "Bridges the local ChatCMD console to an already signed-in chatgpt.com tab.",
-  "permissions": ["tabs", "storage", "scripting"],
+  "permissions": [
+    "tabs",
+    "storage",
+    "scripting"
+  ],
   "host_permissions": [
     "https://chatgpt.com/*",
     "http://localhost/*",
@@ -14,14 +18,45 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://chatgpt.com/*"],
-      "js": ["content-runtime.js", "content-chatgpt-ui.js", "content-chatgpt-dom.js", "content-chatgpt-approval-ui.js", "content-chatgpt.js"],
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
+        "content-runtime.js",
+        "content-chatgpt-clock.js",
+        "content-chatgpt-render.js",
+        "content-chatgpt-ui.js",
+        "content-chatgpt-dom.js",
+        "content-chatgpt-transcript.js",
+        "content-chatgpt-observer.js",
+        "content-chatgpt-approval-ui.js",
+        "content-chatgpt-monitor.js",
+        "content-chatgpt.js",
+        "content-chatgpt-resume.js",
+        "content-chatgpt-native.js"
+      ],
       "run_at": "document_idle"
     },
     {
-      "matches": ["http://localhost/*", "http://127.0.0.1/*"],
-      "js": ["content-runtime.js", "content-chatcmd.js"],
+      "matches": [
+        "http://localhost/*",
+        "http://127.0.0.1/*"
+      ],
+      "js": [
+        "content-runtime.js",
+        "content-chatcmd.js"
+      ],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
+        "page-chatgpt-render.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
     }
   ]
 }

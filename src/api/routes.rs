@@ -12,10 +12,11 @@ use axum::{
 use crate::websocket::AppState;
 
 use super::{
-    Problem, agents::*, auth::*, chatgpt::*, chatgpt_completion::*, chatgpt_queue::*, crypto,
-    data::*, folders::*, overview::*, plan_questions::*, sessions::*, settings::*, skills::*,
-    subagent_fallback::*, system::*, task_controls::*, task_delete::*, task_execution_mode::*,
-    task_views::*, tunnels::*, workspaces::*,
+    Problem, agents::*, auth::*, chatgpt::*, chatgpt_completion::*, chatgpt_native::*,
+    chatgpt_observation::*, chatgpt_queue::*, chatgpt_result::*, crypto, data::*, folders::*,
+    overview::*, plan_questions::*, sessions::*, settings::*, skills::*, subagent_fallback::*,
+    system::*, task_controls::*, task_delete::*, task_execution_mode::*, task_views::*, tunnels::*,
+    workspaces::*,
 };
 
 pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
@@ -53,6 +54,8 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
             "/workspaces/projects/{id}",
             axum::routing::put(update_workspace_project).delete(delete_workspace_project),
         )
+        .route("/chatgpt/capture/capabilities", get(capture_capabilities))
+        .route("/chatgpt/capture/turns", post(native_turn))
         .route("/chatgpt/requests", post(create_request))
         .route("/chatgpt/requests/{id}", get(request))
         .route("/chatgpt/tasks/{task_id}", get(task_bridge))
@@ -76,6 +79,10 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
             post(bridge_identity),
         )
         .route("/chatgpt/bridge/{request_id}/result", post(bridge_result))
+        .route(
+            "/chatgpt/bridge/{request_id}/observation",
+            post(bridge_observation),
+        )
         .route(
             "/chatgpt/bridge/{request_id}/browser-completed",
             post(bridge_browser_completed),

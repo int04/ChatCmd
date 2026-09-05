@@ -1,3 +1,4 @@
+(() => {
 const AUTO_RETRY_ENABLED = false;
 const MAX_AUTO_RETRIES = 2;
 const RAW_BUBBLE_STABILITY_MS = 1_200;
@@ -12,12 +13,25 @@ const {
 const CONTENT_CONTEXT = globalThis.ChatCmdRuntime.install('chatgpt');
 let activeRequest = null;
 let reconcileScheduled = false;
+const waitForAssistant = globalThis.ChatCmdMonitor.create({
+  get activeRequest() { return activeRequest; },
+  AUTO_RETRY_ENABLED, MAX_AUTO_RETRIES, RAW_BUBBLE_STABILITY_MS, SILENT_RETRY_GRACE_MS, ERROR_INTERRUPT_GRACE_MS, COMPLETION_PING_INTERVAL_MS, INTERRUPTED_PROGRESS_PROMPT,
+  requestState: (...args) => requestState(...args),
+  findComposer: (...args) => findComposer(...args),
+  reportBrowserCompletion: (...args) => reportBrowserCompletion(...args),
+  retryPrompt: (...args) => retryPrompt(...args),
+  unknownRequestState: (...args) => unknownRequestState(...args),
+  isTerminalRequestState: (...args) => isTerminalRequestState(...args),
+  delay: (...args) => delay(...args)
+});
 
 void globalThis.ChatCmdRuntime.sendMessage({ type: 'chatcmd-return-binding-status' }, (response) => {
   if (response?.ok && response.enabled) renderReturnToChatCmd(true);
 });
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => { if (message?.type === 'chatcmd-content-alive' && message.kind === 'chatgpt') { sendResponse({ ok: true, kind: 'chatgpt' }); return false; }
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (!globalThis.ChatCmdRuntime.current(CONTENT_CONTEXT)) return false;
+  if (message?.type === 'chatcmd-content-alive' && message.kind === 'chatgpt') { sendResponse({ ok: true, kind: 'chatgpt', captureProtocol: 2, clockProtocol: globalThis.ChatCmdCaptureClock?.version, renderProtocol: globalThis.ChatCmdRenderBridge?.version, captureReady: Boolean(globalThis.ChatCmdCaptureClock && globalThis.ChatCmdObserver && globalThis.ChatCmdTranscript && globalThis.ChatCmdNativeCapture) }); return false; }
   if (message?.type === 'chatcmd-chatgpt-run') {
     const composer = findComposer();
     if (!composer || findStopButton()) {
@@ -29,9 +43,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => { if (m
       return false;
     }
     if (document.documentElement?.dataset) document.documentElement.dataset.chatcmdRequestId = message.requestId;
+    activeRequest?.observer?.stop();
     activeRequest = { id: message.requestId, stopRequested: false, retryCount: 0, resultReported: false, startedAt: Date.now() };
     void runRequest(message).finally(() => {
-      if (activeRequest?.id === message.requestId) activeRequest = null;
+      if (activeRequest?.id === message.requestId) { activeRequest.observer?.finish(); activeRequest = null; }
     });
     sendResponse({ ok: true });
     return false;
@@ -82,6 +97,7 @@ document.addEventListener('visibilitychange', () => {
 window.addEventListener('focus', scheduleActiveRequestReconcile);
 
 async function runRequest(message) {
+  const owner = activeRequest;
   let started = false;
   let conversationId;
   let conversationUrl;
@@ -89,6 +105,10 @@ async function runRequest(message) {
     const composer = await waitForComposer();
     await selectModel(message.model);
     const assistantCount = assistantNodes().length;
+    if (activeRequest !== owner) return;
+    if (owner) owner.observer = globalThis.ChatCmdObserver?.create(message.requestId, message.submittedContent, {
+      current: () => activeRequest === owner && globalThis.ChatCmdRuntime.current(CONTENT_CONTEXT),
+    });
     setComposerText(composer, message.submittedContent);
     await submitPrompt(composer);
     ({ conversationId, conversationUrl } = await waitForConversationIdentity());
@@ -101,7 +121,10 @@ async function runRequest(message) {
       model: message.model || 'Auto',
       userText: latestMessageText('user') || message.submittedContent,
     });
+    if (requestObservationLost(owner)) return;
+    await owner?.observer?.bind();
     const result = await waitForAssistant(assistantCount, message.requestId, message.submittedContent);
+    if (requestObservationLost(owner)) return;
     const finalIdentity = currentConversationIdentity();
     if (finalIdentity && !isProvisionalConversationId(finalIdentity.conversationId)) {
       conversationId = finalIdentity.conversationId;
@@ -115,19 +138,25 @@ async function runRequest(message) {
       assistantContent: result,
     });
   } catch (error) {
+    if (requestObservationLost(owner)) return;
     await reportRequestResult({
       requestId: message.requestId,
       status: activeRequest?.id === message.requestId && activeRequest.stopRequested ? 'stopped' : 'failed',
       conversationId,
       conversationUrl: conversationUrl || (started ? window.location.href : undefined),
-      assistantContent: started ? latestMessageText('assistant') : undefined,
+      assistantContent: started ? (owner?.observer ? owner.observer.answer : latestMessageText('assistant')) : undefined,
       errorMessage: errorMessage(error),
     });
   }
 }
 
+function requestObservationLost(owner) {
+  owner?.observer?.scan();
+  return activeRequest !== owner || Boolean(owner?.observer && !owner.observer.active);
+}
+
 function scheduleActiveRequestReconcile() {
-  if (reconcileScheduled || !activeRequest?.id) return;
+  if (!globalThis.ChatCmdRuntime.current(CONTENT_CONTEXT) || reconcileScheduled || !activeRequest?.id) return;
   reconcileScheduled = true;
   queueMicrotask(() => {
     reconcileScheduled = false;
@@ -138,6 +167,10 @@ function scheduleActiveRequestReconcile() {
 async function reconcileActiveRequest(requestId) {
   if (!activeRequest || activeRequest.id !== requestId) return { reconciled: false, reason: 'active_request_missing' };
   if (activeRequest.resultReported) return { reconciled: true, reason: 'result_already_reported' };
+  if (activeRequest.observer) {
+    await activeRequest.observer.flush();
+    return { reconciled: false, reason: 'browser_observer_active' };
+  }
   const state = await requestState(requestId);
   if (!state.known) return { reconciled: false, reason: 'request_state_unknown' };
   if (!state.hasFinalResponse || !isTerminalRequestState(state)) return { reconciled: false, reason: state.active ? 'response_not_final' : 'request_not_active' };
@@ -154,11 +187,13 @@ async function reconcileActiveRequest(requestId) {
 }
 
 async function reportRequestResult(payload) {
+  if (activeRequest?.id !== payload.requestId || requestObservationLost(activeRequest)) return;
   if (activeRequest?.id === payload.requestId) {
     if (activeRequest.resultReported) return;
-    activeRequest.resultReported = true;
+    await activeRequest.observer?.flush(payload.status === 'completed');
   }
   await progress({ requestId: payload.requestId, stage: 'result', ...payload });
+  if (activeRequest?.id === payload.requestId) activeRequest.resultReported = true;
 }
 
 async function waitForComposer() {
@@ -337,97 +372,6 @@ function isProvisionalConversationId(value) {
   return /^WEB:/i.test(String(value || ''));
 }
 
-async function waitForAssistant(previousCount, requestId, submittedContent) {
-  let baselineCount = previousCount;
-  let lastText = '';
-  let stableSince = 0;
-  let lastActivityAt = Date.now();
-  let lastStateCheckAt = 0;
-  let lastCompletionPingAt = 0;
-  let lastRequestState = unknownRequestState();
-  let observedProgress = false;
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < 10 * 60_000) {
-    if (!activeRequest || activeRequest.id !== requestId || activeRequest.resultReported) return latestMessageText('assistant');
-    const now = Date.now();
-    const nodes = assistantNodes();
-    const latest = nodes.at(-1);
-    const text = latest?.innerText?.trim() || latest?.textContent?.trim() || '';
-    const stopButton = findStopButton();
-    const threadError = findThreadError();
-
-    if (now - lastStateCheckAt > 800) {
-      lastStateCheckAt = now;
-      lastRequestState = await requestState(requestId);
-      if (lastRequestState.stopRequested && activeRequest?.id === requestId && !activeRequest.stopRequested) {
-        activeRequest.stopRequested = true;
-        clickStopButton();
-        await delay(250);
-        continue;
-      }
-    }
-
-    if (activeRequest?.id === requestId && activeRequest.stopRequested) {
-      clickStopButton();
-      if (!findStopButton() && (lastRequestState.stopRequested || isTerminalRequestState(lastRequestState))) return text;
-    }
-
-    if (stopButton) {
-      observedProgress = true;
-      lastActivityAt = now;
-    }
-    const hasNewAssistantText = nodes.length > baselineCount && Boolean(text);
-    if (hasNewAssistantText) observedProgress = true;
-    if (hasNewAssistantText && !threadError) {
-      if (text !== lastText) {
-        lastText = text;
-        stableSince = now;
-        lastActivityAt = now;
-      } else if (!stableSince) {
-        stableSince = now;
-      }
-
-      const stableMs = stableSince ? now - stableSince : 0;
-      if (!stopButton && stableMs >= RAW_BUBBLE_STABILITY_MS && isTerminalRequestState(lastRequestState)) return text;
-      if (
-        !stopButton && !threadError && findComposer() &&
-        stableMs >= RAW_BUBBLE_STABILITY_MS && now - lastCompletionPingAt >= COMPLETION_PING_INTERVAL_MS
-      ) {
-        lastCompletionPingAt = now;
-        if (await reportBrowserCompletion(requestId, text)) return text;
-      }
-    }
-
-    if (!stopButton && findComposer()) {
-      const idleMs = now - lastActivityAt;
-      const reason = threadError && idleMs >= ERROR_INTERRUPT_GRACE_MS
-        ? 'thread_error'
-        : idleMs >= SILENT_RETRY_GRACE_MS && !hasNewAssistantText
-          ? 'send_ready_without_final'
-          : null;
-      if (reason && AUTO_RETRY_ENABLED) {
-        lastRequestState = await requestState(requestId);
-        if (!lastRequestState.known || lastRequestState.hasFinalResponse || !lastRequestState.active) {
-          await delay(350);
-          continue;
-        }
-        if ((activeRequest?.retryCount || 0) >= MAX_AUTO_RETRIES) {
-          throw new Error(`ChatGPT vẫn chưa có phản hồi cuối sau ${MAX_AUTO_RETRIES} lần tự động gửi lại.`);
-        }
-        baselineCount = nodes.length;
-        lastText = '';
-        stableSince = 0;
-        await retryPrompt(requestId, observedProgress ? INTERRUPTED_PROGRESS_PROMPT : submittedContent, reason, observedProgress);
-        lastActivityAt = Date.now();
-        await delay(650);
-        continue;
-      }
-    }
-    await delay(350);
-  }
-  throw new Error('Quá lâu chưa nhận được phản hồi hoàn tất từ ChatGPT.');
-}
-
 async function requestState(requestId) {
   try {
     if (!globalThis.ChatCmdRuntime.current(CONTENT_CONTEXT)) return unknownRequestState(); const response = await globalThis.ChatCmdRuntime.sendMessage({ type: 'chatcmd-chatgpt-request-status', requestId });
@@ -445,6 +389,8 @@ async function requestState(requestId) {
 }
 
 async function reportBrowserCompletion(requestId, assistantContent) {
+  const recorder = activeRequest?.id === requestId ? activeRequest.observer : null;
+  if (recorder && !await recorder.flush(true)) return false;
   if (!globalThis.ChatCmdRuntime.current(CONTENT_CONTEXT)) return false; const identity = currentConversationIdentity();
   try {
     const response = await globalThis.ChatCmdRuntime.sendMessage({
@@ -488,13 +434,45 @@ async function waitFor(factory, timeoutMs, message) {
 }
 
 async function progress(payload) {
-  if (!globalThis.ChatCmdRuntime.current(CONTENT_CONTEXT)) return; try { await globalThis.ChatCmdRuntime.sendMessage({ type: 'chatcmd-chatgpt-progress', ...payload }); }
-  catch (error) { if (!globalThis.ChatCmdRuntime.invalidated(error)) console.warn('[ChatCMD bridge]', error); }
+  if (!globalThis.ChatCmdRuntime.current(CONTENT_CONTEXT)) throw new Error('Extension context invalidated.');
+  const result = await globalThis.ChatCmdRuntime.sendMessage({ type: 'chatcmd-chatgpt-progress', ...payload });
+  if (!result?.ok) throw new Error(result?.error || 'ChatCMD did not acknowledge browser progress.');
+  return result;
 }
 
 function renderReturnToChatCmd(enabled) {
   globalThis.ChatCmdConversationUi?.renderReturnToChatCmd(enabled);
 }
 
-function delay(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+function delay(ms) { return globalThis.ChatCmdCaptureClock?.sleep(ms) ?? new Promise((resolve) => setTimeout(resolve, ms)); }
 function errorMessage(error) { return error instanceof Error ? error.message : String(error || 'Lỗi khi thao tác ChatGPT.'); }
+
+async function adoptObservedRequest(request, user = null) {
+  if (activeRequest || !globalThis.ChatCmdRuntime.current(CONTENT_CONTEXT)) return;
+  const owner = { id: request.id, stopRequested: request.status === 'stop_requested',
+    resultReported: false, retryCount: 0, startedAt: Date.now() };
+  activeRequest = owner;
+  owner.observer = globalThis.ChatCmdObserver.create(request.id, request.submittedContent, {
+    resumed: !user || Boolean(globalThis.ChatCmdObserver.restore(request.id)), user, current: () => activeRequest === owner && globalThis.ChatCmdRuntime.current(CONTENT_CONTEXT),
+  });
+  try {
+    document.documentElement.dataset.chatcmdRequestId = request.id;
+    await owner.observer?.bind();
+    const result = await waitForAssistant(0, request.id, request.submittedContent);
+    if (requestObservationLost(owner)) return;
+    const identity = currentConversationIdentity();
+    await reportRequestResult({ requestId: request.id, status: owner.stopRequested ? 'stopped' : 'completed',
+      conversationId: identity?.conversationId, conversationUrl: identity?.conversationUrl, assistantContent: result });
+  } catch (error) {
+    globalThis.ChatCmdCaptureStatus?.report('error', errorMessage(error));
+  } finally {
+    owner.observer?.finish();
+    if (activeRequest === owner) activeRequest = null;
+  }
+}
+globalThis.ChatCmdController = Object.freeze({
+  get active() { return activeRequest; },
+  current: () => globalThis.ChatCmdRuntime.current(CONTENT_CONTEXT),
+  adopt: adoptObservedRequest,
+});
+})();

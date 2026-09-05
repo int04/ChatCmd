@@ -8,7 +8,7 @@ const LOG_KEY = 'chatcmd-extension-logs';
 const MAX_LOGS = 200;
 const CHATGPT_HOME = 'https://chatgpt.com/';
 
-importScripts('background-io.js', 'background-tabs.js', 'approval-bridge.js', 'background-recovery.js');
+importScripts('background-io.js', 'background-tabs.js', 'approval-bridge.js', 'background-recovery.js', 'background-capture.js', 'background-clock.js');
 setTimeout(() => void recoverContentScriptsOnStartup(), 200);
 void reconcileOpenChatGptIdentities();
 
@@ -102,6 +102,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         .catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
       return true;
     }
+  }
+  if (message.type === 'chatcmd-chatgpt-observation-resume') {
+    void resumeObservationRequest(sender.tab?.id).then((request) => sendResponse({ ok: true, request }))
+      .catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
+    return true;
   }
   if (message.type === 'chatcmd-chatgpt-progress') {
     void handleProgress(message, sender.tab?.id).then((result) => sendResponse({ ok: true, ...result })).catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));

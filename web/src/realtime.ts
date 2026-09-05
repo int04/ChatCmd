@@ -1,3 +1,4 @@
+import { realtimeEventKey } from './tasks/timelineSnapshots';
 import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { RealtimeState, TimelineEvent } from './types';
 
@@ -92,8 +93,8 @@ export function RealtimeProvider({ children, WebSocketImpl = WebSocket }: { chil
 
             if (typeof data === 'string') throw new Error('Plaintext WebSocket frame is forbidden');
             const event = await decryptEvent(sessionKey, data);
-            if (!event.id || !event.type || seen.has(event.id)) return;
-            seen.add(event.id);
+            if (!event.id || !event.type || seen.has(realtimeEventKey(event))) return;
+            seen.add(realtimeEventKey(event));
             if (seen.size > 2000) seen.delete(seen.values().next().value!);
             for (const listener of listeners) listener(event);
           })

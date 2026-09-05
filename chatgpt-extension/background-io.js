@@ -17,6 +17,14 @@ async function releaseRequest(requestId) {
 }
 
 async function sendToChatGpt(tabId, payload, options = {}) {
+  if (payload?.type === 'chatcmd-chatgpt-run') {
+    try {
+      const health = await chrome.tabs.sendMessage(tabId, { type: 'chatcmd-content-alive', kind: 'chatgpt' });
+      if (health?.ok && (health.captureProtocol !== 2 || health.renderProtocol !== 1 || !health.captureReady)) {
+        throw new Error('Tab ChatGPT đang dùng content script cũ hoặc thiếu bộ capture. Hãy reload extension 0.1.6 và tải lại tab ChatGPT.');
+      }
+    } catch (error) { if (!isMissingReceiverError(error)) throw error; }
+  }
   let lastError;
   let reinjected = false;
   const quiet = options.quiet === true;
@@ -42,7 +50,7 @@ async function sendToChatGpt(tabId, payload, options = {}) {
         reinjected = true;
         try {
           await logExtension('info', 'background', `Inject lại các ChatGPT content scripts vào tab ${tabId}.`);
-          await chrome.scripting.executeScript({ target: { tabId }, files: ['content-chatgpt-ui.js', 'content-chatgpt-dom.js', 'content-chatgpt-approval-ui.js', 'content-chatgpt.js'] });
+          await injectChatGptScripts(tabId);
           await logExtension('info', 'background', `Inject ChatGPT content scripts vào tab ${tabId} thành công.`);
           await delay(150);
           continue;
@@ -114,6 +122,7 @@ async function waitForChatGptReady(tabId) {
 async function postJson(baseUrl, path, body) {
   const response = await fetch(`${baseUrl}${path}`, {
     method: 'POST',
+    signal: AbortSignal.timeout(10_000),
     headers: { 'Content-Type': 'application/json', 'X-ChatCmdClient': 'chatgpt-extension' },
     body: JSON.stringify(body),
   });
@@ -128,6 +137,7 @@ async function postJson(baseUrl, path, body) {
 async function getJson(baseUrl, path) {
   const response = await fetch(`${baseUrl}${path}`, {
     method: 'GET',
+    signal: AbortSignal.timeout(10_000),
     headers: { 'X-ChatCmdClient': 'chatgpt-extension' },
   });
   if (!response.ok) {
@@ -159,6 +169,16 @@ async function handleProgress(message, tabId) {
   const context = await requestContext(message.requestId);
   if (!context) throw new Error('Không tìm thấy ChatCMD request context.');
   if (tabId && context.tabId !== tabId) throw new Error('ChatGPT progress đến từ tab không khớp.');
+  if (message.stage === 'observation') {
+    if (!tabId || context.tabId !== tabId) throw new Error('Observation sender does not own this request.');
+    if (context.mode === 'subagent') return { accepted: false };
+    const tab = await safeTab(tabId);
+    if (conversationIdFromUrl(tab?.url || '') !== message.conversationId) throw new Error('Observation conversation changed.');
+    return postJson(context.localBaseUrl, `/api/local/chatgpt/bridge/${encodeURIComponent(message.requestId)}/observation`, {
+      conversationId: message.conversationId, conversationUrl: message.conversationUrl,
+      userMessageId: message.userMessageId, revision: message.revision, messages: message.messages, completed: message.completed === true,
+    });
+  }
   const identity = await preferredConversationIdentity(context.tabId, message.conversationId, message.conversationUrl);
   if (message.stage === 'retrying') {
     await logExtension('warn', 'recovery', `Tự gửi lại request ${message.requestId}, lần ${Number(message.retryCount) || 1}, lý do ${message.reason || 'send_ready'}.`);
@@ -257,7 +277,8 @@ function conversationIdFromUrl(value) {
   try {
     const url = new URL(value);
     if (url.origin !== 'https://chatgpt.com') return null;
-    return url.pathname.match(/(?:^|\/)c\/([^/?#]+)/)?.[1] || null;
+    const id = url.pathname.match(/(?:^|\/)c\/([^/?#]+)/)?.[1];
+    return id ? decodeURIComponent(id) : null;
   } catch { return null; }
 }
 

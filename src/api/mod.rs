@@ -2,7 +2,14 @@ mod agents;
 mod auth;
 mod chatgpt;
 mod chatgpt_completion;
+mod chatgpt_native;
+#[cfg(test)]
+mod chatgpt_native_tests;
+mod chatgpt_observation;
+#[cfg(test)]
+mod chatgpt_observation_tests;
 mod chatgpt_queue;
+mod chatgpt_result;
 #[cfg(test)]
 mod chatgpt_router_tests;
 mod chatgpt_support;

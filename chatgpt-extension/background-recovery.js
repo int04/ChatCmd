@@ -2,7 +2,7 @@ const CONTENT_SCRIPT_PLANS = [
   {
     kind: 'chatgpt',
     matches: (url) => url.startsWith('https://chatgpt.com/'),
-    files: ['content-runtime.js', 'content-chatgpt-ui.js', 'content-chatgpt-dom.js', 'content-chatgpt-approval-ui.js', 'content-chatgpt.js'],
+    files: chrome.runtime.getManifest().content_scripts.find((entry) => entry.matches.includes('https://chatgpt.com/*')).js,
   },
   {
     kind: 'chatcmd',
@@ -12,6 +12,13 @@ const CONTENT_SCRIPT_PLANS = [
 ];
 const RECOVERY_REQUEST_PREFIX = 'chatcmd-recovery-request:';
 
+async function injectChatGptScripts(tabId) {
+  const entries = chrome.runtime.getManifest().content_scripts.filter((entry) => entry.matches.includes('https://chatgpt.com/*'));
+  for (const entry of [...entries.filter((item) => item.world === 'MAIN'), ...entries.filter((item) => item.world !== 'MAIN')]) {
+    await chrome.scripting.executeScript({ target: { tabId }, world: entry.world || 'ISOLATED', files: entry.js });
+  }
+}
+
 async function recoverContentScriptsOnStartup() {
   const tabs = await chrome.tabs.query({});
   for (const tab of tabs) {
@@ -19,7 +26,8 @@ async function recoverContentScriptsOnStartup() {
     const plan = CONTENT_SCRIPT_PLANS.find((item) => item.matches(tab.url));
     if (!plan || await contentScriptAlive(tab.id, plan.kind)) continue;
     try {
-      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: plan.files });
+      if (plan.kind === 'chatgpt') await injectChatGptScripts(tab.id);
+      else await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: plan.files });
       await logExtension('info', 'background', `Đã khôi phục content script ${plan.kind} trên tab ${tab.id} sau khi extension reload.`);
     } catch (error) {
       await logExtension('warn', 'background', `Không thể khôi phục content script ${plan.kind} trên tab ${tab.id}: ${errorMessage(error)}`);
@@ -30,7 +38,8 @@ async function recoverContentScriptsOnStartup() {
 async function contentScriptAlive(tabId, kind) {
   try {
     const response = await chrome.tabs.sendMessage(tabId, { type: 'chatcmd-content-alive', kind });
-    return response?.ok === true && response.kind === kind;
+    return response?.ok === true && response.kind === kind
+      && (kind !== 'chatgpt' || (response.captureProtocol === 2 && response.clockProtocol === 1 && response.renderProtocol === 1 && response.captureReady === true));
   } catch {
     return false;
   }
@@ -110,4 +119,17 @@ async function persistRecoveredIdentity(tab, probe, requestId, localBaseUrl) {
 
 function normalizeIdentityText(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+async function resumeObservationRequest(tabId) {
+  if (!tabId) return null;
+  const tab = await safeTab(tabId);
+  const conversationId = conversationIdFromUrl(tab?.url || '');
+  if (!conversationId) return null;
+  const stored = await chrome.storage.session.get(null);
+  const matches = Object.entries(stored).filter(([key, value]) => key.startsWith(REQUEST_PREFIX) && value?.tabId === tabId && value.mode !== 'subagent');
+  if (matches.length !== 1) return null;
+  const [key, context] = matches[0];
+  const request = await getJson(context.localBaseUrl, `/api/local/chatgpt/requests/${encodeURIComponent(key.slice(REQUEST_PREFIX.length))}`);
+  return request?.conversationId === conversationId && ['running','completed','stop_requested'].includes(request.status) ? request : null;
 }

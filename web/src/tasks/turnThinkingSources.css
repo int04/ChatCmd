@@ -1,0 +1,23 @@
+.turn-thinking-sources { min-width: 0; }
+.turn-thinking-source-switch { display: inline-flex; flex-wrap: wrap; gap: 4px; padding: 4px; margin: 0 0 14px; border: 1px solid color-mix(in srgb, currentColor 12%, transparent); border-radius: 10px; background: color-mix(in srgb, currentColor 3%, transparent); }
+.turn-thinking-source-switch button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 34px; padding: 7px 12px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: inherit; font: inherit; font-size: 12px; font-weight: 550; cursor: pointer; opacity: .64; transition: background 120ms ease, opacity 120ms ease; }
+.turn-thinking-source-switch button[aria-pressed="true"] { opacity: 1; background: color-mix(in srgb, currentColor 7%, transparent); border-color: color-mix(in srgb, currentColor 13%, transparent); }
+.turn-thinking-source-switch button:hover:not(:disabled), .turn-thinking-source-switch button:focus-visible { opacity: 1; }
+.turn-thinking-source-switch button:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.turn-thinking-source-switch button:disabled { cursor: default; opacity: .36; }
+.turn-thinking-source-switch svg { width: 14px; height: 14px; flex: none; }
+.turn-source-live { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.turn-source-caption { margin: 0 0 16px; font-size: 11px; line-height: 1.6; opacity: .55; }
+.turn-browser-thinking { min-width: 0; }
+.turn-browser-message { overflow-wrap: anywhere; font-size: 13px; line-height: 1.8; }
+.turn-browser-message + .turn-browser-message { margin-top: 14px; padding-top: 14px; border-top: 1px solid color-mix(in srgb, currentColor 8%, transparent); }
+.turn-browser-message.commentary { padding-left: 13px; border-left: 2px solid color-mix(in srgb, currentColor 17%, transparent); opacity: .82; }
+.turn-browser-message > :first-child { margin-top: 0; }
+.turn-browser-message > :last-child { margin-bottom: 0; }
+.turn-browser-message pre { max-width: 100%; overflow: auto; padding: 12px; border-radius: 8px; background: color-mix(in srgb, currentColor 5%, transparent); white-space: pre; }
+.turn-browser-message code { font-size: .92em; }
+.turn-browser-message table { display: block; overflow-x: auto; }
+.turn-source-empty { display: flex; align-items: center; gap: 9px; min-height: 36px; font-size: 12px; opacity: .65; }
+.turn-source-empty svg { width: 15px; height: 15px; }
+@media (max-width: 600px) { .turn-thinking-source-switch { display: flex; } .turn-thinking-source-switch button { flex: 1; padding-inline: 8px; } }
+@media (prefers-reduced-motion: reduce) { .turn-thinking-source-switch button { transition: none; } }

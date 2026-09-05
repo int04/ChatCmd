@@ -82,6 +82,7 @@ pub(super) async fn bridge_browser_completed(
         },
     )
     .await?;
+    super::chatgpt_observation::retain_result(&state, request_id, assistant_content, true).await?;
     let demoted =
         crate::chatgpt_queue::demote_all_immediate(&state.repository, &events.task_id, now_ms())
             .await
@@ -148,22 +149,30 @@ pub(super) async fn persist_browser_completion(
     let submitted = row.get::<String, _>("submitted_content");
     let created_at_ms = row.get::<i64, _>("created_at_ms");
 
-    let completed_messages =
-        completed_turn_messages(&mut transaction, &task_id, created_at_ms).await?;
-    let already_final = completed_messages
-        .iter()
-        .any(|content| crate::chatgpt_message::equivalent(content, &submitted));
-    let mcp_messages = mcp_turn_messages(&mut transaction, &task_id, created_at_ms).await?;
-    let mcp_turn_id = mcp_messages
-        .iter()
-        .find(|(_, content)| crate::chatgpt_message::equivalent(content, &submitted))
-        .map(|(turn_id, _)| turn_id.clone());
+    let mcp_turn_id = crate::chatgpt_transcript::mcp_turn(
+        &mut transaction,
+        &task_id,
+        completion.request_id,
+        created_at_ms,
+        &submitted,
+    )
+    .await
+    .map_err(db_problem)?;
     let final_turn_id = mcp_turn_id.as_deref().unwrap_or(&turn_id);
+    crate::chatgpt_transcript::rehome_events(
+        &mut transaction,
+        &task_id,
+        completion.request_id,
+        final_turn_id,
+    )
+    .await
+    .map_err(db_problem)?;
+    let already_final: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM timeline_events WHERE task_id=? AND turn_id=? AND actor='assistant' AND kind='status' AND json_extract(payload_json,'$.status')='completed')")
+        .bind(&task_id).bind(final_turn_id).fetch_one(&mut *transaction).await.map_err(db_problem)?;
 
-    sqlx::query("UPDATE chatgpt_bridge_requests SET status='completed',conversation_id=COALESCE(?,conversation_id),conversation_url=COALESCE(?,conversation_url),assistant_content=CASE WHEN ? THEN assistant_content ELSE ? END,error_message=NULL,updated_at_ms=?,completed_at_ms=COALESCE(completed_at_ms,?) WHERE id=?")
+    sqlx::query("UPDATE chatgpt_bridge_requests SET status='completed',conversation_id=COALESCE(?,conversation_id),conversation_url=COALESCE(?,conversation_url),assistant_content=?,error_message=NULL,updated_at_ms=?,completed_at_ms=COALESCE(completed_at_ms,?) WHERE id=?")
         .bind(completion.conversation_id)
         .bind(completion.conversation_url)
-        .bind(already_final)
         .bind(completion.assistant_content)
         .bind(completion.now)
         .bind(completion.now)
@@ -171,9 +180,11 @@ pub(super) async fn persist_browser_completion(
         .execute(&mut *transaction)
         .await
         .map_err(db_problem)?;
-    sqlx::query("UPDATE tasks SET status=CASE WHEN status='stopped' THEN status ELSE 'completed' END,updated_at_ms=? WHERE id=?")
+    sqlx::query("UPDATE tasks SET status=CASE WHEN status='stopped' THEN status ELSE 'completed' END,updated_at_ms=? WHERE id=? AND NOT EXISTS(SELECT 1 FROM chatgpt_bridge_requests WHERE task_id=? AND id<>? AND status IN ('queued','running','stop_requested'))")
         .bind(completion.now)
         .bind(&task_id)
+        .bind(&task_id)
+        .bind(completion.request_id)
         .execute(&mut *transaction)
         .await
         .map_err(db_problem)?;
@@ -221,43 +232,6 @@ pub(super) async fn persist_browser_completion(
         user,
         status,
     })
-}
-
-async fn completed_turn_messages(
-    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    task_id: &str,
-    created_at_ms: i64,
-) -> Result<Vec<String>, Problem> {
-    sqlx::query_scalar::<_, String>(
-        r#"SELECT COALESCE(json_extract(user_event.payload_json,'$.submittedContent'),json_extract(user_event.payload_json,'$.content'))
-           FROM timeline_events user_event JOIN timeline_events final_event
-             ON final_event.task_id=user_event.task_id AND final_event.turn_id=user_event.turn_id
-           WHERE user_event.task_id=? AND user_event.actor='user' AND user_event.kind='message'
-             AND json_type(user_event.payload_json,'$.content')='text' AND user_event.created_at_ms>=?
-             AND final_event.actor='assistant' AND final_event.kind='status'
-             AND json_extract(final_event.payload_json,'$.status')='completed'
-           ORDER BY final_event.created_at_ms DESC LIMIT 64"#,
-    )
-    .bind(task_id)
-    .bind(created_at_ms)
-    .fetch_all(&mut **transaction)
-    .await
-    .map_err(db_problem)
-}
-
-async fn mcp_turn_messages(
-    transaction: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
-    task_id: &str,
-    created_at_ms: i64,
-) -> Result<Vec<(String, String)>, Problem> {
-    sqlx::query_as::<_, (String, String)>(
-        "SELECT turn_id,json_extract(payload_json,'$.content') FROM timeline_events WHERE task_id=? AND turn_id IS NOT NULL AND actor='user' AND kind='message' AND json_type(payload_json,'$.content')='text' AND COALESCE(json_extract(payload_json,'$.provider'),'')<>'chatgpt_web' AND created_at_ms>=? ORDER BY created_at_ms DESC,event_id DESC LIMIT 64",
-    )
-    .bind(task_id)
-    .bind(created_at_ms)
-    .fetch_all(&mut **transaction)
-    .await
-    .map_err(db_problem)
 }
 
 async fn insert_browser_user_event(
