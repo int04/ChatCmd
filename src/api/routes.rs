@@ -12,8 +12,8 @@ use axum::{
 use crate::websocket::AppState;
 
 use super::{
-    Problem, agents::*, chatgpt::*, chatgpt_completion::*, chatgpt_queue::*, crypto, data::*,
-    folders::*, overview::*, plan_questions::*, sessions::*, settings::*, skills::*,
+    Problem, agents::*, auth::*, chatgpt::*, chatgpt_completion::*, chatgpt_queue::*, crypto,
+    data::*, folders::*, overview::*, plan_questions::*, sessions::*, settings::*, skills::*,
     subagent_fallback::*, system::*, task_controls::*, task_delete::*, task_execution_mode::*,
     task_views::*, tunnels::*, workspaces::*,
 };
@@ -144,9 +144,18 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route(
             "/diagnostics/user-data",
             axum::routing::delete(delete_all_user_data),
-        );
+        )
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_gui_auth,
+        ));
     let local = Router::new()
         .route("/crypto/handshake", post(crypto::handshake))
+        .route("/auth/status", get(auth_status))
+        .route("/auth/setup", post(setup))
+        .route("/auth/login", post(login))
+        .route("/auth/logout", post(logout))
+        .route("/auth/change-password", post(change_password))
         .route("/system/elevation", get(elevation_status))
         .route("/system/elevation/restart", post(restart_elevated))
         .merge(protected)

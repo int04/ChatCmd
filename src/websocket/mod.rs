@@ -15,6 +15,7 @@ use axum::{
         State, WebSocketUpgrade,
         ws::{Message, WebSocket},
     },
+    http::{HeaderMap, StatusCode, header},
     response::Response,
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -94,6 +95,7 @@ pub(crate) struct AppState {
     pub plan_prompts: crate::runtime_host::PlanPromptRegistry,
     pub telemetry: chatcmd_runtime::ToolTelemetryRegistry,
     pub blob_store: chatcmd_runtime::BlobStore,
+    pub gui_auth: crate::gui_auth::GuiAuth,
     events: broadcast::Sender<AppEvent>,
     connected_clients: AtomicUsize,
     api_crypto_sessions: RwLock<HashMap<String, Arc<Aes256Gcm>>>,
@@ -115,6 +117,7 @@ impl AppState {
         blob_store: chatcmd_runtime::BlobStore,
         events: broadcast::Sender<AppEvent>,
     ) -> Self {
+        let gui_auth = crate::gui_auth::GuiAuth::new(repository.clone());
         Self {
             repository,
             database_path,
@@ -128,6 +131,7 @@ impl AppState {
             plan_prompts,
             telemetry,
             blob_store,
+            gui_auth,
             events,
             connected_clients: AtomicUsize::new(0),
             api_crypto_sessions: RwLock::new(HashMap::new()),
@@ -179,8 +183,15 @@ struct ServerHello {
 pub(crate) async fn ws_handler(
     ws: WebSocketUpgrade,
     State(state): State<Arc<AppState>>,
-) -> Response {
-    ws.on_upgrade(move |socket| handle_socket(socket, state))
+    headers: HeaderMap,
+) -> Result<Response, StatusCode> {
+    let cookie = headers
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok());
+    if !state.gui_auth.authenticate_cookie(cookie).await {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    Ok(ws.on_upgrade(move |socket| handle_socket(socket, state)))
 }
 
 async fn handle_socket(mut socket: WebSocket, state: Arc<AppState>) {

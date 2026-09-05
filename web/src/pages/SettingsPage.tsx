@@ -1,4 +1,4 @@
-import { AlertTriangle, Database, Info, MonitorCog, Save, ShieldCheck, SlidersHorizontal, TerminalSquare, Volume2 } from 'lucide-react';
+import { AlertTriangle, Database, Info, LockKeyhole, MonitorCog, Save, ShieldCheck, SlidersHorizontal, TerminalSquare, Volume2 } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../api';
@@ -6,15 +6,17 @@ import { ErrorState, Loading, Modal, PageHeading, ProblemBanner, StatusBadge } f
 import { applyAppFont, applyTaskFontScale, GOOGLE_FONT_PRESETS, normalizeFontFamily, normalizeTaskFontScale, TASK_FONT_SCALE_PRESETS } from '../fontPreferences';
 import { getAppLanguage, setAppLanguage, tr, translatedStatus } from '../i18n';
 import { DataSettings } from '../settings/DataSettings';
+import { SecuritySettings } from '../settings/SecuritySettings';
 import type { LocalSettings } from '../types';
 import { useLoad } from '../useLoad';
 
-type SettingsTab = 'execution' | 'display' | 'sound' | 'data';
+type SettingsTab = 'execution' | 'display' | 'sound' | 'security' | 'data';
 
 const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; description: string; icon: typeof SlidersHorizontal }> = [
   { id: 'execution', label: 'Execution', description: 'Agent and terminal rules', icon: SlidersHorizontal },
   { id: 'display', label: 'Display', description: 'Theme and language', icon: MonitorCog },
   { id: 'sound', label: 'Sound', description: 'Agent notifications', icon: Volume2 },
+  { id: 'security', label: 'Security', description: 'GUI password and sessions', icon: LockKeyhole },
   { id: 'data', label: 'Data', description: 'SQLite and application logs', icon: Database },
 ];
 
@@ -92,7 +94,7 @@ export function SettingsPage() {
             <span><ActiveIcon aria-hidden="true" /></span>
             <div><p>{tr('SETTINGS CATEGORY')}</p><h2>{tr(activeMeta.label)}</h2><small>{sectionDescription(activeTab)}</small></div>
           </div>
-          {activeTab !== 'data' && <div className="settings-workspace-status">{saved ? <strong>{tr('Settings saved.')}</strong> : <span>{tr('Changes are stored locally after saving.')}</span>}</div>}
+          {activeTab !== 'data' && activeTab !== 'security' && <div className="settings-workspace-status">{saved ? <strong>{tr('Settings saved.')}</strong> : <span>{tr('Changes are stored locally after saving.')}</span>}</div>}
         </header>
 
         <div className="settings-workspace-body">
@@ -131,10 +133,11 @@ export function SettingsPage() {
               <ToggleSetting checked={value.finishedTaskSound} onChange={(checked) => update('finishedTaskSound', checked)} label={tr('Sound when a task finishes')} hint={tr('Play a sound when the Agent sends the final response.')} detail={tr('Useful for long-running tasks so you can switch to other work and return after the Agent finishes.')} />
             </div></div>
           </div>}
+          {activeTab === 'security' && <SecuritySettings />}
           {activeTab === 'data' && <DataSettings />}
         </div>
 
-        {activeTab !== 'data' && <footer className="settings-workspace-footer"><span>{saved ? tr('Saved successfully') : tr('Review changes before applying them.')}</span><button className="button primary"><Save />{tr('Save settings')}</button></footer>}
+        {activeTab !== 'data' && activeTab !== 'security' && <footer className="settings-workspace-footer"><span>{saved ? tr('Saved successfully') : tr('Review changes before applying them.')}</span><button className="button primary"><Save />{tr('Save settings')}</button></footer>}
       </section>
     </form>
 
@@ -170,6 +173,7 @@ function ToggleSetting({ checked, onChange, label, hint, detail }: { checked: bo
 function sectionDescription(tab: SettingsTab) {
   if (tab === 'execution') return tr('Defaults for new tasks and terminal processes.');
   if (tab === 'display') return tr('Stored locally for this browser.');
+  if (tab === 'security') return tr('Protect access to the ChatCMD management interface.');
   if (tab === 'data') return tr('Inspect local SQLite storage and application logs.');
   return tr('Choose a separate notification sound for each Agent event type.');
 }

@@ -7,6 +7,7 @@ export class ApiError extends Error {
 }
 
 export interface ElevationStatus { supported: boolean; elevated: boolean }
+export interface AuthStatus { configured: boolean; authenticated: boolean; idleTimeoutSeconds: number }
 export interface DatabaseDiagnostics { path: string; tableCount: number; totalRows: number; fileSizeBytes: number; pageCount: number; pageSizeBytes: number; freePageCount: number; usedSizeBytes: number; tables: Array<{ name: string; rowCount: number }> }
 export interface DiagnosticLogs { path: string; lineCount: number; lines: string[] }
 export interface SubagentFallbackRequest {
@@ -44,6 +45,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   try { payload = await decodeEncryptedApiResponse<T | ProblemDetails>(path, method, response); }
   catch { /* malformed or non-JSON upstream error */ }
   if (!response.ok) {
+    if (response.status === 401) window.dispatchEvent(new Event('chatcmd-auth-required'));
     const problem = payload as ProblemDetails | undefined;
     const fieldErrors = problem?.errors ? Object.values(problem.errors).flat().join(' ') : '';
     throw new ApiError(fieldErrors || problem?.message || problem?.detail || problem?.title || tr('Request failed ({status})', { status: response.status }), response.status, problem);
@@ -55,6 +57,11 @@ const json = (value: unknown) => JSON.stringify(value);
 const item = (value: string) => encodeURIComponent(value);
 
 export const api = {
+  authStatus: () => request<AuthStatus>('/api/local/auth/status'),
+  setupAuth: (password: string, confirmPassword: string) => request<{ authenticated: boolean }>('/api/local/auth/setup', { method: 'POST', body: json({ password, confirmPassword }) }),
+  login: (password: string) => request<{ authenticated: boolean }>('/api/local/auth/login', { method: 'POST', body: json({ password }) }),
+  logout: () => request<{ authenticated: boolean }>('/api/local/auth/logout', { method: 'POST', body: '{}' }),
+  changePassword: (currentPassword: string, newPassword: string, confirmPassword: string) => request<{ authenticated: boolean }>('/api/local/auth/change-password', { method: 'POST', body: json({ currentPassword, newPassword, confirmPassword }) }),
   overview: () => request<Overview>('/api/local/overview'),
   mcpStatus: () => request<McpStatus>('/api/local/mcp/status'),
   agents: () => request<Agent[]>('/api/local/mcp/agents'),

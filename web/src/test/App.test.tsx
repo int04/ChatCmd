@@ -16,6 +16,7 @@ function at(path: string) { return render(<MemoryRouter initialEntries={[path]}>
 const session = { id: 'session-alpha', shell: 'pwsh', status: 'running', kind: 'terminal', createdAtUtc: '2026-01-01T00:00:00Z', updatedAtUtc: '2026-01-01T00:00:00Z' };
 const defaultFetch = (input: string | URL | Request, _init?: RequestInit) => {
   const path = String(input);
+  if (path.endsWith('/auth/status')) return json({ configured: true, authenticated: true, idleTimeoutSeconds: 1800 });
   if (path.endsWith('/overview')) return json(overview);
   if (path.endsWith('/system/elevation')) return json({ supported: false, elevated: false });
   if (path.endsWith('/workspaces/projects')) return json([]);
@@ -30,6 +31,23 @@ const defaultFetch = (input: string | URL | Request, _init?: RequestInit) => {
   return json([]);
 };
 beforeEach(() => { FakeSocket.instances.length = 0; vi.stubGlobal('fetch', vi.fn(defaultFetch) as typeof fetch); });
+
+describe('GUI authentication', () => {
+  it('asks for password setup on first use', async () => {
+    vi.mocked(fetch).mockImplementation((input, init) => String(input).endsWith('/auth/status') ? json({ configured: false, authenticated: false, idleTimeoutSeconds: 1800 }) as never : defaultFetch(input, init) as never);
+    at('/');
+    expect(await screen.findByRole('heading', { name: 'Create a password' })).toBeInTheDocument();
+    expect(screen.getByText('Confirm password')).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Runtime overview' })).not.toBeInTheDocument();
+  });
+
+  it('asks for login when the saved GUI session is absent', async () => {
+    vi.mocked(fetch).mockImplementation((input, init) => String(input).endsWith('/auth/status') ? json({ configured: true, authenticated: false, idleTimeoutSeconds: 1800 }) as never : defaultFetch(input, init) as never);
+    at('/');
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
+    expect(screen.queryByText('Confirm password')).not.toBeInTheDocument();
+  });
+});
 
 describe('routing and runtime states', () => {
   it.each(['/login', '/register', '/plans', '/account', '/payment'])('replaces legacy %s with overview', async (path) => { at(path); expect(await screen.findByRole('heading', { name: 'Runtime overview' })).toBeInTheDocument(); });

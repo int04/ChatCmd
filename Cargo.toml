@@ -27,6 +27,7 @@ embedded-web = ["dep:rust-embed"]
 [dependencies]
 aes-gcm = "0.10"
 anyhow = "1"
+argon2 = "0.5"
 axum = { version = "0.8", features = ["ws"] }
 base64 = "0.22"
 chatcmd-core = { path = "crates/chatcmd-core" }

@@ -2,6 +2,7 @@ import { Menu, ShieldAlert, Sparkles } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { NavLink, Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom';
 import { api } from './api';
+import { AuthGate } from './auth/AuthGate';
 import { applyAppFont, applyTaskFontScale, DEFAULT_APP_FONT, DEFAULT_TASK_FONT_SCALE } from './fontPreferences';
 import { useAppLanguage, tr } from './i18n';
 import { AgentsPage } from './pages/AgentsPage';
@@ -24,7 +25,7 @@ const legacyPaths = ['/login', '/register', '/plans', '/account', '/payment', '/
 
 export default function App() {
   useAppLanguage();
-  return <><AdminElevationPrompt /><RealtimeProvider><GlobalDocumentTitleBridge /><SoundNotificationsBridge /><GlobalSubagentFallbackBridge /><GlobalConversationApprovalQueue /><GlobalPlanQuestionQueue /><Routes><Route element={<Shell />}><Route index element={<DashboardPage />} /><Route path="tasks/:taskId?" element={<TasksPage />} /><Route path="sessions" element={<SessionsPage />} /><Route path="sessions/terminal/:sessionId" element={<LiveTerminalPage />} /><Route path="sessions/:sessionId" element={<SessionDetailPage />} /><Route path="agents" element={<AgentsPage />} /><Route path="skills" element={<SkillsPage />} /><Route path="settings" element={<SettingsPage />} />{legacyPaths.map((path) => <Route key={path} path={path} element={<Navigate replace to="/" />} />)}<Route path="*" element={<NotFound />} /></Route></Routes></RealtimeProvider></>;
+  return <AuthGate><AdminElevationPrompt /><RealtimeProvider><GlobalDocumentTitleBridge /><SoundNotificationsBridge /><GlobalSubagentFallbackBridge /><GlobalConversationApprovalQueue /><GlobalPlanQuestionQueue /><Routes><Route element={<Shell />}><Route index element={<DashboardPage />} /><Route path="tasks/:taskId?" element={<TasksPage />} /><Route path="sessions" element={<SessionsPage />} /><Route path="sessions/terminal/:sessionId" element={<LiveTerminalPage />} /><Route path="sessions/:sessionId" element={<SessionDetailPage />} /><Route path="agents" element={<AgentsPage />} /><Route path="skills" element={<SkillsPage />} /><Route path="settings" element={<SettingsPage />} />{legacyPaths.map((path) => <Route key={path} path={path} element={<Navigate replace to="/" />} />)}<Route path="*" element={<NotFound />} /></Route></Routes></RealtimeProvider></AuthGate>;
 }
 
 function AdminElevationPrompt() {

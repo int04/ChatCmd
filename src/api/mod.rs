@@ -1,4 +1,5 @@
 mod agents;
+mod auth;
 mod chatgpt;
 mod chatgpt_completion;
 mod chatgpt_queue;

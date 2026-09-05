@@ -13,6 +13,7 @@ mod chatgpt_queue;
 mod desktop_tray;
 #[cfg(feature = "embedded-web")]
 mod embedded_web;
+mod gui_auth;
 mod log_helper;
 mod mutation_journal_bridge;
 mod runtime_host;
