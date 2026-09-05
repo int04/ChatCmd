@@ -2,8 +2,6 @@ name: Adversarial and performance tests
 
 on:
   pull_request:
-  push:
-    branches: [dev]
   schedule:
     - cron: "17 19 * * *"
   workflow_dispatch:
