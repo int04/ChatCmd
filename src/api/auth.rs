@@ -1,6 +1,6 @@
 use axum::{
     Json,
-    extract::{Request, State},
+    extract::{OriginalUri, Request, State},
     http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     middleware::Next,
     response::{IntoResponse, Response},
@@ -138,7 +138,13 @@ pub(super) async fn require_gui_auth(
         .get("x-chatcmdclient")
         .and_then(|value| value.to_str().ok());
     if caller == Some("chatgpt-extension") {
-        if extension_route_allowed(request.method(), request.uri().path()) {
+        // Router::nest strips /api/local from request.uri(); the allowlist uses
+        // the original public path, as does encrypted_local_api's AAD binding.
+        let path = request
+            .extensions()
+            .get::<OriginalUri>()
+            .map_or_else(|| request.uri().path(), |original| original.0.path());
+        if extension_route_allowed(request.method(), path) {
             return Ok(next.run(request).await);
         }
         return Err(Problem::new(

@@ -9,15 +9,15 @@ const {
   assistantNodes, clickStopButton, findSendButton, findStopButton, findThreadError,
   findVisible, isVisible, latestMessageText, normalize,
 } = globalThis.ChatCmdConversationDom;
-
+const CONTENT_CONTEXT = globalThis.ChatCmdRuntime.install('chatgpt');
 let activeRequest = null;
 let reconcileScheduled = false;
 
-void chrome.runtime.sendMessage({ type: 'chatcmd-return-binding-status' }, (response) => {
+void globalThis.ChatCmdRuntime.sendMessage({ type: 'chatcmd-return-binding-status' }, (response) => {
   if (response?.ok && response.enabled) renderReturnToChatCmd(true);
 });
 
-chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => { if (message?.type === 'chatcmd-content-alive' && message.kind === 'chatgpt') { sendResponse({ ok: true, kind: 'chatgpt' }); return false; }
   if (message?.type === 'chatcmd-chatgpt-run') {
     const composer = findComposer();
     if (!composer || findStopButton()) {
@@ -28,6 +28,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       sendResponse({ ok: false, error: 'Tab ChatGPT này đang xử lý một yêu cầu khác.' });
       return false;
     }
+    if (document.documentElement?.dataset) document.documentElement.dataset.chatcmdRequestId = message.requestId;
     activeRequest = { id: message.requestId, stopRequested: false, retryCount: 0, resultReported: false, startedAt: Date.now() };
     void runRequest(message).finally(() => {
       if (activeRequest?.id === message.requestId) activeRequest = null;
@@ -66,6 +67,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       .then((result) => sendResponse({ ok: true, ...result }))
       .catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
     return true;
+  }
+  if (message?.type === 'chatcmd-chatgpt-identity-probe') {
+    const identity = currentConversationIdentity();
+    sendResponse({ ok: true, requestId: document.documentElement?.dataset?.chatcmdRequestId, conversationId: identity?.conversationId, conversationUrl: identity?.conversationUrl, userText: latestMessageText('user') });
+    return false;
   }
   return false;
 });
@@ -424,7 +430,7 @@ async function waitForAssistant(previousCount, requestId, submittedContent) {
 
 async function requestState(requestId) {
   try {
-    const response = await chrome.runtime.sendMessage({ type: 'chatcmd-chatgpt-request-status', requestId });
+    if (!globalThis.ChatCmdRuntime.current(CONTENT_CONTEXT)) return unknownRequestState(); const response = await globalThis.ChatCmdRuntime.sendMessage({ type: 'chatcmd-chatgpt-request-status', requestId });
     if (response?.ok !== true || response.known !== true) return unknownRequestState();
     return {
       known: true,
@@ -439,9 +445,9 @@ async function requestState(requestId) {
 }
 
 async function reportBrowserCompletion(requestId, assistantContent) {
-  const identity = currentConversationIdentity();
+  if (!globalThis.ChatCmdRuntime.current(CONTENT_CONTEXT)) return false; const identity = currentConversationIdentity();
   try {
-    const response = await chrome.runtime.sendMessage({
+    const response = await globalThis.ChatCmdRuntime.sendMessage({
       type: 'chatcmd-chatgpt-progress',
       stage: 'browser-completed',
       requestId,
@@ -453,7 +459,7 @@ async function reportBrowserCompletion(requestId, assistantContent) {
     if (activeRequest?.id === requestId) activeRequest.resultReported = true;
     return true;
   } catch (error) {
-    console.warn('[ChatCMD bridge] Không thể xác nhận raw bubble với backend.', error);
+    if (!globalThis.ChatCmdRuntime.invalidated(error)) console.warn('[ChatCMD bridge] Không thể xác nhận raw bubble với backend.', error);
     return false;
   }
 }
@@ -482,8 +488,8 @@ async function waitFor(factory, timeoutMs, message) {
 }
 
 async function progress(payload) {
-  try { await chrome.runtime.sendMessage({ type: 'chatcmd-chatgpt-progress', ...payload }); }
-  catch (error) { console.warn('[ChatCMD bridge]', error); }
+  if (!globalThis.ChatCmdRuntime.current(CONTENT_CONTEXT)) return; try { await globalThis.ChatCmdRuntime.sendMessage({ type: 'chatcmd-chatgpt-progress', ...payload }); }
+  catch (error) { if (!globalThis.ChatCmdRuntime.invalidated(error)) console.warn('[ChatCMD bridge]', error); }
 }
 
 function renderReturnToChatCmd(enabled) {

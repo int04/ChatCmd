@@ -15,10 +15,11 @@ type BridgeCommand =
   | { action: 'subagent-send'; nonce: string; subagentId: string; childTaskId: string; submittedContent: string; attempt: number; model: string; newConversationUrl?: string; localBaseUrl: string }
   | { action: 'subagent-close'; nonce: string; subagentId: string }
   | { action: 'stop'; nonce: string; requestId: string; localBaseUrl: string }
-  | { action: 'reconcile'; nonce: string; requestId: string };
+  | { action: 'reconcile'; nonce: string; requestId: string }
+  | { action: 'recover-identity'; nonce: string; requestId: string; submittedContent: string; localBaseUrl: string };
 
 export type ChatGptExtensionLog = { at: string; level: 'info' | 'warn' | 'error' | string; source: string; message: string };
-type BridgeResponse = { nonce: string; ok: boolean; error?: string; model?: string; logs?: ChatGptExtensionLog[]; chatGptTabOpen?: boolean; conversationTabOpen?: boolean; conversationReady?: boolean; tabId?: number; tabUrl?: string };
+type BridgeResponse = { nonce: string; ok: boolean; recovered?: boolean; reason?: string; error?: string; model?: string; logs?: ChatGptExtensionLog[]; chatGptTabOpen?: boolean; conversationTabOpen?: boolean; conversationReady?: boolean; tabId?: number; tabUrl?: string };
 export type ChatGptExtensionStatus = { ready: boolean; chatGptTabOpen: boolean; conversationTabOpen: boolean; conversationReady: boolean; tabId?: number; tabUrl?: string };
 
 export async function chatGptExtensionStatus(conversationUrl?: string): Promise<ChatGptExtensionStatus> {
@@ -84,6 +85,10 @@ export async function stopChatGptRequest(requestId: string) {
 
 export async function reconcileChatGptRequest(requestId: string) {
   await bridge({ action: 'reconcile', nonce: nonce(), requestId }, 3_000);
+}
+
+export async function recoverChatGptIdentity(requestId: string, submittedContent: string) {
+  return bridge({ action: 'recover-identity', nonce: nonce(), requestId, submittedContent, localBaseUrl: window.location.origin }, 5_000);
 }
 
 function bridge(command: BridgeCommand, timeoutMs: number) {

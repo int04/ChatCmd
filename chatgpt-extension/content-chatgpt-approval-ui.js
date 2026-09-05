@@ -153,7 +153,7 @@
           payload = { type: 'chatcmd-approval-decision', item: current, answerKind: 'custom', answerText: reason.trim() };
         }
       }
-      const response = await chrome.runtime.sendMessage(payload);
+      const response = await globalThis.ChatCmdRuntime.sendMessage(payload);
       if (!response?.ok) throw new Error(response?.error || 'Không thể gửi quyết định phê duyệt tới ChatCMD.');
       items = items.filter((item) => item.key !== current.key);
       rejecting = false;
@@ -213,7 +213,7 @@
     return false;
   });
 
-  void chrome.runtime.sendMessage({ type: 'chatcmd-approval-state-request' }, (response) => {
+  void globalThis.ChatCmdRuntime.sendMessage({ type: 'chatcmd-approval-state-request' }, (response) => {
     if (response?.ok) render(response.items);
   });
 

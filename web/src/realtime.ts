@@ -21,6 +21,13 @@ const WS_HANDSHAKE_KEY_B = new Uint8Array([
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
+export function webSocketAuthority(endpoint: Pick<Location, 'protocol' | 'hostname' | 'host' | 'port'> = location): string {
+  // The local Rust listener binds IPv4 by default; localhost may resolve to ::1.
+  // Preserve the selected port (including Vite's proxy) and HTTPS certificate host.
+  if (endpoint.protocol !== 'http:' || endpoint.hostname !== 'localhost') return endpoint.host;
+  return endpoint.port ? `127.0.0.1:${endpoint.port}` : '127.0.0.1';
+}
+
 export function RealtimeProvider({ children, WebSocketImpl = WebSocket }: { children: ReactNode; WebSocketImpl?: typeof WebSocket }) {
   const [state, setState] = useState<RealtimeState>('offline');
   const [listeners] = useState(() => new Set<RealtimeListener>());
@@ -36,7 +43,7 @@ export function RealtimeProvider({ children, WebSocketImpl = WebSocket }: { chil
       if (stopped) return;
       setState(attempt ? 'reconnecting' : 'offline');
       const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const currentSocket = new WebSocketImpl(`${protocol}//${location.host}/ws`);
+      const currentSocket = new WebSocketImpl(`${protocol}//${webSocketAuthority()}/ws`);
       socket = currentSocket;
       currentSocket.binaryType = 'arraybuffer';
 
@@ -100,11 +107,11 @@ export function RealtimeProvider({ children, WebSocketImpl = WebSocket }: { chil
         if (stopped) return;
         setState('reconnecting');
         const delay = Math.min(30_000, 500 * 2 ** attempt++);
-        timer = window.setTimeout(connect, delay);
+        timer = window.setTimeout(() => void connect(), delay);
       };
     };
 
-    connect();
+    void connect();
     return () => {
       stopped = true;
       if (timer) window.clearTimeout(timer);

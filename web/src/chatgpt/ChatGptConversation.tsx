@@ -4,7 +4,7 @@ import type { FormEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 import { api } from '../api';
-import { chatGptExtensionAvailable, chatGptExtensionStatus, closeChatGptConversationTab, dispatchChatGptRequest, focusChatGptConversationTab, openChatGptConversationTab, prepareChatGptModelTab, reconcileChatGptRequest, stopChatGptRequest } from '../chatgptBridge';
+import { chatGptExtensionAvailable, chatGptExtensionStatus, closeChatGptConversationTab, dispatchChatGptRequest, focusChatGptConversationTab, openChatGptConversationTab, prepareChatGptModelTab, reconcileChatGptRequest, recoverChatGptIdentity, stopChatGptRequest } from '../chatgptBridge';
 import { Modal } from '../components';
 import { tr } from '../i18n';
 import { canonicalProjectPath } from '../tasks/workspaceProjects';
@@ -189,6 +189,8 @@ export function NewChatGptConversation() {
 export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
   const bridge = useLoad(() => api.chatGptBridge(taskId), [taskId]);
   const reloadBridge = bridge.reload;
+  const [identitySyncError, setIdentitySyncError] = useState<{ taskId: string; message: string } | null>(null);
+  const syncError = identitySyncError?.taskId === taskId ? identitySyncError.message : '';
   const [content, setContent] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -196,6 +198,7 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
   const [chatGptTabOpen, setChatGptTabOpen] = useState<boolean | null>(null);
   const [chatGptReady, setChatGptReady] = useState<boolean | null>(null);
   const [queueMode, setQueueMode] = useState<ChatGptQueueMode | null>(null);
+  const conversationUrl = bridge.data?.conversationUrl || undefined;
   const active = Boolean(bridge.data?.activeRequestId && ['queued', 'running', 'stop_requested'].includes(bridge.data.activeStatus ?? ''));
   const answerCompletedWaitingForUi = active && bridge.data?.taskStatus === 'completed' && chatGptReady !== true;
 
@@ -231,11 +234,40 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
     const timer = window.setInterval(refresh, 1_000);
     return () => { disposed = true; window.clearInterval(timer); };
   }, [bridge.data?.activeRequestId, reloadBridge]);
+  useEffect(() => {
+    if (conversationUrl) return;
+    const requestId = bridge.data?.latestRequestId;
+    const submittedContent = bridge.data?.latestSubmittedContent;
+    if (!requestId || !submittedContent) return;
+    let disposed = false;
+    let recovering = false;
+    const recover = () => void (async () => {
+      if (disposed || recovering) return;
+      recovering = true;
+      try {
+        const result = await recoverChatGptIdentity(requestId, submittedContent);
+        if (!disposed) setIdentitySyncError(result.recovered === false ? {
+          taskId,
+          message: `${tr('ChatGPT conversation identity is still syncing.')} (${result.reason || 'identity_not_confirmed'})`,
+        } : null);
+      } catch (reason) {
+        if (!disposed) setIdentitySyncError({ taskId, message: errorText(reason) });
+      } finally {
+        // Another callback may have persisted the URL even if recovery failed.
+        if (!disposed) await reloadBridge();
+        recovering = false;
+      }
+    })();
+    recover();
+    const timer = window.setInterval(recover, 2_000);
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, [taskId, bridge.data?.latestRequestId, bridge.data?.latestSubmittedContent, conversationUrl, reloadBridge]);
   const sendContent = async (message: string, clearComposer = true): Promise<boolean> => {
     if (!bridge.data) return false;
     setBusy(true); setError('');
     try {
-      const status = await chatGptExtensionStatus(bridge.data.conversationUrl);
+      if (!conversationUrl) throw new Error(tr('ChatGPT conversation identity is still syncing.'));
+      const status = await chatGptExtensionStatus(conversationUrl);
       setExtensionReady(status.ready);
       setChatGptTabOpen(status.ready && status.conversationTabOpen);
       setChatGptReady(status.ready && status.conversationTabOpen && status.conversationReady);
@@ -243,7 +275,7 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
       if (!status.conversationTabOpen) throw new Error(tr('This conversation’s ChatGPT tab is no longer open. Reopen the ChatGPT conversation and try again.'));
       if (!status.conversationReady) throw new Error(tr('ChatGPT is not ready for another message yet.'));
       const request = await api.sendChatGptMessage(taskId, { model: DEFAULT_MODEL, content: message });
-      await dispatchChatGptRequest({ requestId: request.id, submittedContent: request.submittedContent, model: request.model, conversationUrl: bridge.data.conversationUrl });
+      await dispatchChatGptRequest({ requestId: request.id, submittedContent: request.submittedContent, model: request.model, conversationUrl });
       const latest = await waitForDispatchState(request.id);
       if (latest.status === 'failed') throw new Error(latest.errorMessage || tr('Could not send the message to ChatGPT.'));
       if (clearComposer) setContent('');
@@ -275,27 +307,27 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
   };
 
   const openTab = async () => {
-    if (!bridge.data || busy) return;
+    if (!bridge.data || !conversationUrl || busy) return;
     setError('');
     try {
-      await openChatGptConversationTab(bridge.data.conversationUrl);
+      await openChatGptConversationTab(conversationUrl);
       setChatGptTabOpen(true);
       setChatGptReady(false);
     } catch (reason) { setError(errorText(reason)); }
   };
 
   const focusTab = async () => {
-    if (!bridge.data || busy) return;
+    if (!bridge.data || !conversationUrl || busy) return;
     setError('');
-    try { await focusChatGptConversationTab(bridge.data.conversationUrl); }
+    try { await focusChatGptConversationTab(conversationUrl); }
     catch (reason) { setError(errorText(reason)); }
   };
 
   const closeTab = async () => {
-    if (!bridge.data || busy) return;
+    if (!bridge.data || !conversationUrl || busy) return;
     setError('');
     try {
-      await closeChatGptConversationTab(bridge.data.conversationUrl);
+      await closeChatGptConversationTab(conversationUrl);
       setChatGptTabOpen(false);
       setChatGptReady(false);
     } catch (reason) { setError(errorText(reason)); }
@@ -303,6 +335,10 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
 
   if (bridge.loading) return <div className="chatgpt-composer loading"><LoaderCircle className="spin" /><span>{tr('Loading ChatGPT bridge…')}</span></div>;
   if (!bridge.data) return <div className="chatgpt-composer error"><CircleAlert /><span>{bridge.error || tr('ChatGPT bridge information is unavailable.')}</span></div>;
+  if (!conversationUrl) {
+    const recoveryError = bridge.error || syncError;
+    return <div className={`chatgpt-composer ${recoveryError ? 'error' : 'loading'}`} role={recoveryError ? 'alert' : 'status'}>{recoveryError ? <CircleAlert /> : <LoaderCircle className="spin" />}<span>{recoveryError || tr('ChatGPT conversation identity is still syncing.')}</span></div>;
+  }
   if (extensionReady === false) return <div className="chatgpt-tab-required error" role="alert"><Unplug /><div><strong>{tr('Could not connect to ChatGPT Bridge')}</strong><span>{tr('Enable or reload the extension, then return to this conversation.')}</span></div></div>;
   if (chatGptTabOpen === false) return <div className="chatgpt-tab-required" role="alert"><CircleAlert /><div><strong>{tr('This conversation’s ChatGPT tab is closed')}</strong><span>{tr('ChatCMD must keep this exact ChatGPT tab open to send messages and track response status. Reopen the conversation and keep the tab open in your browser.')}</span><button type="button" onClick={() => void openTab()} disabled={busy}><ExternalLink />{tr('Open ChatGPT conversation')}</button></div></div>;
   return <>
@@ -332,8 +368,14 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
 
 export function ChatGptTaskCard({ taskId }: { taskId: string }) {
   const bridge = useLoad(() => api.chatGptBridge(taskId), [taskId]);
+  const refreshBridge = bridge.refresh;
+  useEffect(() => {
+    if (bridge.data?.conversationUrl) return;
+    const timer = window.setInterval(() => void refreshBridge(), 2_000);
+    return () => window.clearInterval(timer);
+  }, [bridge.data?.conversationUrl, refreshBridge]);
   if (!bridge.data) return null;
-  return <section className="task-info-section chatgpt-task-card"><strong>ChatGPT.com</strong><div><Bot /><span><b>{bridge.data.model}</b><small>{bridge.data.conversationId}</small></span></div><a href={bridge.data.conversationUrl} target="_blank" rel="noreferrer noopener"><ExternalLink />{tr('Open original conversation')}</a></section>;
+  return <section className="task-info-section chatgpt-task-card"><strong>ChatGPT.com</strong><div><Bot /><span><b>{bridge.data.model}</b><small>{bridge.data.conversationId || 'Đang đồng bộ conversation ID…'}</small></span></div>{bridge.data.conversationUrl && <a href={bridge.data.conversationUrl} target="_blank" rel="noreferrer noopener"><ExternalLink />{tr('Open original conversation')}</a>}</section>;
 }
 
 function ExtensionState({ ready }: { ready: boolean | null }) {
@@ -343,8 +385,8 @@ function ExtensionState({ ready }: { ready: boolean | null }) {
 async function waitForTaskBinding(requestId: string) {
   for (let index = 0; index < 240; index++) {
     const request = await api.chatGptRequest(requestId);
-    if (request.taskId) return request.taskId;
     if (request.status === 'failed') throw new Error(request.errorMessage || tr('ChatGPT extension could not create the conversation.'));
+    if (request.taskId) return request.taskId;
     await new Promise((resolve) => window.setTimeout(resolve, 500));
   }
   throw new Error(tr('Sent to ChatGPT but no conversation ID was received. Open the ChatGPT tab to verify sign-in and try again.'));

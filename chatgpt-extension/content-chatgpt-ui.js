@@ -78,7 +78,7 @@
       button.disabled = true;
       button.style.opacity = '.7';
       copy.querySelector('small').textContent = 'Đang quay lại…';
-      chrome.runtime.sendMessage({ type: 'chatcmd-return-to-source' }, () => {
+      globalThis.ChatCmdRuntime.sendMessage({ type: 'chatcmd-return-to-source' }, () => {
         button.disabled = false;
         button.style.opacity = '';
         copy.querySelector('small').textContent = 'Bấm để trở về';

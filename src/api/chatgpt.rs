@@ -101,21 +101,13 @@ pub(super) async fn task_bridge(
     State(state): State<Arc<AppState>>,
     Path(task_id): Path<String>,
 ) -> Result<Json<Value>, Problem> {
-    let row = sqlx::query("SELECT c.task_id,c.conversation_id,c.conversation_url,c.model,c.active_request_id,t.status AS task_status,r.status AS active_status,r.submitted_content AS active_submitted_content FROM chatgpt_conversations c JOIN tasks t ON t.id=c.task_id LEFT JOIN chatgpt_bridge_requests r ON r.id=c.active_request_id WHERE c.task_id=?")
-        .bind(task_id.trim())
-        .fetch_optional(state.repository.pool())
-        .await
-        .map_err(db_problem)?
-        .ok_or_else(not_found_chat)?;
+    let row = sqlx::query("SELECT t.id AS task_id,COALESCE(c.conversation_id,r.conversation_id) AS conversation_id,COALESCE(c.conversation_url,r.conversation_url) AS conversation_url,COALESCE(c.model,r.model,'Auto') AS model,CASE WHEN r.status IN ('queued','running','stop_requested') THEN r.id END AS active_request_id,r.id AS latest_request_id,t.status AS task_status,r.status AS active_status,r.submitted_content AS active_submitted_content,r.submitted_content AS latest_submitted_content FROM tasks t LEFT JOIN chatgpt_conversations c ON c.task_id=t.id LEFT JOIN chatgpt_bridge_requests r ON r.id=COALESCE(c.active_request_id,(SELECT id FROM chatgpt_bridge_requests WHERE task_id=t.id ORDER BY updated_at_ms DESC,id DESC LIMIT 1)) WHERE t.id=? AND t.source='chatgpt_web'")
+        .bind(task_id.trim()).fetch_optional(state.repository.pool()).await.map_err(db_problem)?.ok_or_else(not_found_chat)?;
     Ok(Json(json!({
-        "taskId": row.get::<String, _>("task_id"),
-        "conversationId": row.get::<String, _>("conversation_id"),
-        "conversationUrl": row.get::<String, _>("conversation_url"),
-        "model": row.get::<String, _>("model"),
-        "activeRequestId": row.get::<Option<String>, _>("active_request_id"),
-        "taskStatus": row.get::<String, _>("task_status"),
-        "activeStatus": row.get::<Option<String>, _>("active_status"),
-        "activeSubmittedContent": row.get::<Option<String>, _>("active_submitted_content"),
+        "taskId": row.get::<String, _>("task_id"), "conversationId": row.get::<Option<String>, _>("conversation_id"),
+        "conversationUrl": row.get::<Option<String>, _>("conversation_url"), "model": row.get::<String, _>("model"),
+        "activeRequestId": row.get::<Option<String>, _>("active_request_id"), "latestRequestId": row.get::<Option<String>, _>("latest_request_id"), "taskStatus": row.get::<String, _>("task_status"),
+        "activeStatus": row.get::<Option<String>, _>("active_status"), "activeSubmittedContent": row.get::<Option<String>, _>("active_submitted_content"), "latestSubmittedContent": row.get::<Option<String>, _>("latest_submitted_content"),
     })))
 }
 
@@ -358,11 +350,14 @@ pub(super) async fn bridge_identity(
         .execute(state.repository.pool())
         .await
         .map_err(db_problem)?;
-    sqlx::query("UPDATE chatgpt_conversations SET conversation_id=?,conversation_url=?,updated_at_ms=? WHERE task_id=?")
+    let model = row.get::<String, _>("model");
+    sqlx::query("INSERT INTO chatgpt_conversations(task_id,conversation_id,conversation_url,model,active_request_id,created_at_ms,updated_at_ms) VALUES(?,?,?,?,NULL,?,?) ON CONFLICT(task_id) DO UPDATE SET conversation_id=excluded.conversation_id,conversation_url=excluded.conversation_url,model=excluded.model,updated_at_ms=excluded.updated_at_ms")
+        .bind(&task_id)
         .bind(input.conversation_id.trim())
         .bind(input.conversation_url.trim())
+        .bind(&model)
         .bind(now)
-        .bind(&task_id)
+        .bind(now)
         .execute(state.repository.pool())
         .await
         .map_err(db_problem)?;

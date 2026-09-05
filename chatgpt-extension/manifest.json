@@ -15,12 +15,12 @@
   "content_scripts": [
     {
       "matches": ["https://chatgpt.com/*"],
-      "js": ["content-chatgpt-ui.js", "content-chatgpt-dom.js", "content-chatgpt-approval-ui.js", "content-chatgpt.js"],
+      "js": ["content-runtime.js", "content-chatgpt-ui.js", "content-chatgpt-dom.js", "content-chatgpt-approval-ui.js", "content-chatgpt.js"],
       "run_at": "document_idle"
     },
     {
       "matches": ["http://localhost/*", "http://127.0.0.1/*"],
-      "js": ["content-chatcmd.js"],
+      "js": ["content-runtime.js", "content-chatcmd.js"],
       "run_at": "document_idle"
     }
   ]

@@ -8,7 +8,9 @@ const LOG_KEY = 'chatcmd-extension-logs';
 const MAX_LOGS = 200;
 const CHATGPT_HOME = 'https://chatgpt.com/';
 
-importScripts('background-io.js', 'background-tabs.js', 'approval-bridge.js');
+importScripts('background-io.js', 'background-tabs.js', 'approval-bridge.js', 'background-recovery.js');
+setTimeout(() => void recoverContentScriptsOnStartup(), 200);
+void reconcileOpenChatGptIdentities();
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message !== 'object') return false;
@@ -94,6 +96,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         .catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
       return true;
     }
+    if (message.action === 'recover-identity') {
+      void recoverRequestIdentity(message)
+        .then((result) => sendResponse({ ok: true, ...result }))
+        .catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
+      return true;
+    }
   }
   if (message.type === 'chatcmd-chatgpt-progress') {
     void handleProgress(message, sender.tab?.id).then((result) => sendResponse({ ok: true, ...result })).catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
@@ -126,7 +134,9 @@ chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (!changeInfo.url || !isChatGptUrl(changeInfo.url)) return;
-  void refreshConversationAliases(tabId, tab?.url || changeInfo.url);
+  const tabUrl = tab?.url || changeInfo.url;
+  void refreshConversationAliases(tabId, tabUrl);
+  void syncRequestIdentityFromTab(tabId, tabUrl);
 });
 
 async function startRequest(message) {
@@ -143,6 +153,7 @@ async function startRequest(message) {
       conversationUrl: message.conversationUrl || null,
     },
   });
+  await rememberRecoveryRequest(message.requestId, { localBaseUrl: message.localBaseUrl, tabId: tab.id, submittedContent: message.submittedContent });
   await sendToChatGpt(tab.id, {
     type: 'chatcmd-chatgpt-run',
     requestId: message.requestId,
@@ -343,6 +354,46 @@ async function preferredConversationIdentity(tabId, conversationId, conversation
     return { conversationId: liveId, conversationUrl: tab.url };
   }
   return { conversationId, conversationUrl };
+}
+
+async function reconcileOpenChatGptIdentities() {
+  try {
+    const tabs = await chatGptTabs();
+    for (const tab of tabs) {
+      if (!tab?.id || !tab.url) continue;
+      await refreshConversationAliases(tab.id, tab.url);
+      await syncRequestIdentityFromTab(tab.id, tab.url);
+    }
+  } catch (error) {
+    await logExtension('warn', 'background', `Không thể khôi phục ChatGPT conversation identity khi extension khởi động: ${errorMessage(error)}`);
+  }
+}
+
+async function syncRequestIdentityFromTab(tabId, tabUrl) {
+  const liveId = conversationIdFromUrl(tabUrl || '');
+  if (!tabId || !liveId || isProvisionalConversationId(liveId)) return;
+  const stored = await chrome.storage.session.get(null);
+  for (const [key, context] of Object.entries(stored)) {
+    if (!key.startsWith(REQUEST_PREFIX) || !context || context.tabId !== tabId || !context.localBaseUrl) continue;
+    const requestId = key.slice(REQUEST_PREFIX.length);
+    try {
+      if (context.mode === 'subagent' && context.subagentId && context.attempt) {
+        await postJson(context.localBaseUrl, `/api/local/subagents/${encodeURIComponent(context.subagentId)}/fallback/started`, {
+          attempt: Number(context.attempt),
+          conversationId: liveId,
+          conversationUrl: tabUrl,
+        });
+      } else {
+        await postJson(context.localBaseUrl, `/api/local/chatgpt/bridge/${encodeURIComponent(requestId)}/identity`, {
+          conversationId: liveId,
+          conversationUrl: tabUrl,
+        });
+      }
+      await logExtension('info', 'background', `Đã đồng bộ conversation ID ${liveId} trực tiếp từ tab ${tabId}.`);
+    } catch (error) {
+      await logExtension('warn', 'background', `Chưa đồng bộ được conversation ID ${liveId} từ tab ${tabId}: ${errorMessage(error)}`);
+    }
+  }
 }
 
 async function refreshConversationAliases(tabId, tabUrl) {

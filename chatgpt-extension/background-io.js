@@ -204,6 +204,7 @@ async function handleProgress(message, tabId) {
       conversationId: identity.conversationId, conversationUrl: identity.conversationUrl,
       model: message.model, userText: message.userText,
     });
+    if (identity.conversationId && identity.conversationUrl) await forgetRecoveryRequest(message.requestId);
     return { stage: 'started' };
   }
   if (message.stage === 'browser-completed') {
