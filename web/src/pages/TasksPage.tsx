@@ -1,4 +1,4 @@
-import { CheckCircle2, CircleAlert, Clock3, LoaderCircle, MessageSquareText } from 'lucide-react';
+import { CheckCircle2, CircleAlert, Clock3, LoaderCircle, MessageSquareText, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 
@@ -100,11 +100,17 @@ function TaskDetailContent({ detail, realtime, onTaskChanged, hasOlder, loadingO
   const startedAt = task.createdAtUtc ?? turns[0]?.startedAtUtc ?? task.updatedAtUtc;
   const chatRef = useRef<HTMLElement>(null);
   const nearBottomRef = useRef(true);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('chatcmd.layout.taskDetailSidebarCollapsed.v1') === 'true');
   const sidebarResize = useResizableWidth({ storageKey: 'chatcmd.layout.taskDetailSidebarWidth.v1', cssVariable: '--task-detail-sidebar-width', defaultWidth: typeof window !== 'undefined' && window.innerWidth <= 1180 ? 300 : 340, minWidth: 280, maxWidth: 520, direction: -1 });
   const activeTaskRef = useRef<string | null>(null);
   const lastEvent = events.at(-1); const lastTurn = turns.at(-1);
   const updateKey = `${events.length}:${lastEvent?.id ?? 'empty'}:${turns.length}:${lastTurn?.id ?? 'empty'}:${lastTurn?.status ?? 'empty'}:${lastTurn?.completedAtUtc ?? ''}`;
   useLayoutEffect(() => { const root = chatRef.current; if (!root) return; const taskChanged = activeTaskRef.current !== task.id; activeTaskRef.current = task.id; if (!taskChanged && !nearBottomRef.current) return; const frame = window.requestAnimationFrame(() => { root.scrollTop = root.scrollHeight; }); return () => window.cancelAnimationFrame(frame); }, [task.id, updateKey]);
+  const toggleSidebar = () => setSidebarCollapsed((current) => {
+    const next = !current;
+    localStorage.setItem('chatcmd.layout.taskDetailSidebarCollapsed.v1', String(next));
+    return next;
+  });
   const updateChatScrollPosition = () => {
     const root = chatRef.current; if (!root) return;
     nearBottomRef.current = root.scrollHeight - root.scrollTop - root.clientHeight < 96;
@@ -116,8 +122,8 @@ function TaskDetailContent({ detail, realtime, onTaskChanged, hasOlder, loadingO
     }));
   };
 
-  return <div className="task-detail-shell">
-    <header className="task-detail-topbar"><div><h1>{conversationName(task)}</h1><p>{tr('{count} agent turns · generation {generation} · {realtime} · updated {time}', { count: turns.length, generation: task.generation ?? 1, realtime: realtime === 'online' ? translatedStatus('online') : realtime, time: formatTime(task.updatedAtUtc) })}</p></div><StatusBadge state={task.status} /></header>
+  return <div className={`task-detail-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
+    <header className="task-detail-topbar"><div><h1>{conversationName(task)}</h1><p>{tr('{count} agent turns · generation {generation} · {realtime} · updated {time}', { count: turns.length, generation: task.generation ?? 1, realtime: realtime === 'online' ? translatedStatus('online') : realtime, time: formatTime(task.updatedAtUtc) })}</p></div><div className="task-detail-topbar-actions"><StatusBadge state={task.status} /><button className="task-detail-sidebar-toggle" type="button" aria-label={sidebarCollapsed ? 'Mở thông tin task' : 'Đóng thông tin task'} title={sidebarCollapsed ? 'Mở thông tin task' : 'Đóng thông tin task'} onClick={toggleSidebar}>{sidebarCollapsed ? <PanelRightOpen /> : <PanelRightClose />}</button></div></header>
     <div className="task-detail-body">
       <div className={`task-chat-pane${chatGpt ? ' has-chatgpt-footer' : ''}`}>
         <main ref={chatRef} className="task-chat-column" onScroll={updateChatScrollPosition}><h2 className="sr-only">{tr('Activity timeline')}</h2>
@@ -129,7 +135,7 @@ function TaskDetailContent({ detail, realtime, onTaskChanged, hasOlder, loadingO
         </main>
         {chatGpt && <footer className="task-chat-footer"><ChatGptTaskComposer taskId={task.id} /></footer>}
       </div>
-      <aside className="task-detail-sidebar" aria-label={tr('Task information')}>
+      {!sidebarCollapsed && <aside className="task-detail-sidebar" aria-label={tr('Task information')}>
         <div className="panel-resize-handle task-sidebar-resize-handle" role="separator" aria-label={tr('Resize task information')} aria-orientation="vertical" aria-valuemin={280} aria-valuemax={520} aria-valuenow={sidebarResize.width} tabIndex={0} onPointerDown={sidebarResize.onPointerDown} onKeyDown={sidebarResize.onKeyDown} />
         <header className="task-info-header"><span className={`task-info-state ${task.status}`}>{task.status === 'running' ? <LoaderCircle className="spin" /> : task.status === 'failed' ? <CircleAlert /> : <CheckCircle2 />}</span><div><h2>{conversationName(task)}</h2><p><code>#{task.id}</code> · {translatedStatus(task.status)} · {tr('{count} agent turns', { count: turns.length })}</p></div></header>
         <div className="task-info-duration"><Clock3 /><span>{formatTime(startedAt)} → {formatTime(task.updatedAtUtc)}</span></div>
@@ -137,7 +143,7 @@ function TaskDetailContent({ detail, realtime, onTaskChanged, hasOlder, loadingO
         {(chatGpt || task.isSubagent) && <ChatGptTaskCard taskId={task.id} />}
         <TaskAccessCard taskId={detail.executionModeSourceTaskId ?? task.id} grantTaskId={task.id} defaultMode={detail.executionMode ?? 'allowAll'} grants={detail.approvalGrants} />
         {!chatGpt && <TaskConversationStopCard taskId={task.id} taskStatus={task.status} onStopped={onTaskChanged} />}
-      </aside>
+      </aside>}
     </div>
   </div>;
 }
