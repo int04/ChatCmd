@@ -6,11 +6,13 @@
 .turn-thinking-source-switch button:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 .turn-thinking-source-switch button:disabled { cursor: default; opacity: .36; }
 .turn-thinking-source-switch svg { width: 14px; height: 14px; flex: none; }
-.turn-source-live { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.turn-source-live { width: 5px; height: 5px; border-radius: 50%; background: currentColor; animation: turn-source-live-pulse 1.25s ease-in-out infinite; }
 .turn-source-caption { margin: 0 0 16px; font-size: 11px; line-height: 1.6; opacity: .55; }
-.turn-browser-thinking { min-width: 0; }
+.turn-browser-thinking { min-width: 0; animation: turn-thinking-pane-in 180ms cubic-bezier(.16,1,.3,1) both; }
+.turn-browser-message-shell { min-width: 0; overflow: visible; }
+.turn-browser-message-shell + .turn-browser-message-shell { margin-top: 14px; padding-top: 14px; border-top: 1px solid color-mix(in srgb, currentColor 8%, transparent); }
 .turn-browser-message { overflow-wrap: anywhere; font-size: 13px; line-height: 1.8; }
-.turn-browser-message + .turn-browser-message { margin-top: 14px; padding-top: 14px; border-top: 1px solid color-mix(in srgb, currentColor 8%, transparent); }
+.turn-browser-message.live { animation: turn-browser-message-in 220ms cubic-bezier(.16,1,.3,1) both; will-change: transform, opacity; }
 .turn-browser-message.commentary { padding-left: 13px; border-left: 2px solid color-mix(in srgb, currentColor 17%, transparent); opacity: .82; }
 .turn-browser-message > :first-child { margin-top: 0; }
 .turn-browser-message > :last-child { margin-bottom: 0; }
@@ -19,4 +21,8 @@
 .turn-browser-message table { display: block; overflow-x: auto; }
 .turn-source-empty { display: flex; align-items: center; gap: 9px; min-height: 36px; font-size: 12px; opacity: .65; }
 .turn-source-empty svg { width: 15px; height: 15px; }
+@keyframes turn-thinking-pane-in { from { opacity: .58; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes turn-browser-message-in { from { opacity: .72; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes turn-source-live-pulse { 0%, 100% { opacity: .45; transform: scale(.82); } 50% { opacity: 1; transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) { .turn-browser-thinking, .turn-browser-message.live, .turn-source-live { animation: none; } }
 @media (max-width: 600px) { .turn-thinking-source-switch { display: flex; } .turn-thinking-source-switch button { flex: 1; padding-inline: 8px; } }
