@@ -1,8 +1,6 @@
 import { BrainCircuit, Cpu, LoaderCircle } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
-import ReactMarkdown from 'react-markdown';
-import rehypeSanitize from 'rehype-sanitize';
-import remarkGfm from 'remark-gfm';
+import { ChatRichText } from './rich-text/ChatRichText';
 import { appLocale } from '../i18n';
 import type { BrowserThinking } from './chatGptThinking';
 import './turnThinkingSources.css';
@@ -31,7 +29,7 @@ export function TurnThinkingSources({ browser, hasMcp, running, children, enable
         ? (hasMcp ? 'Nội dung ChatGPT đã hiển thị trên trang, được lưu riêng với MCP.' : 'Hiển thị từ ChatGPT trong khi chưa có nội dung MCP. Bản ghi này vẫn được giữ lại.')
         : (hasMcp ? 'Public ChatGPT page content, saved separately from MCP.' : 'Showing ChatGPT while no MCP content is available. This transcript is retained.')}</p>
       {browser.messages.length ? browser.messages.map((message) => <div className={`turn-browser-message ${message.kind}`} key={message.id}>
-        <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]} components={{ a: ({ children: text, ...props }) => <a {...props} target="_blank" rel="noreferrer noopener">{text}</a> }}>{message.content}</ReactMarkdown>
+        <ChatRichText content={message.content} />
       </div>) : <div className="turn-source-empty" role="status">
         {running && <LoaderCircle className="spin" aria-hidden="true" />}
         <span>{vi ? (running ? 'Đang chờ nội dung hiển thị từ ChatGPT…' : 'Lượt này chưa có bản ghi từ trình duyệt.')

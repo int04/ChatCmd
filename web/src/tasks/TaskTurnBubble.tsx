@@ -2,9 +2,7 @@ import { TurnThinkingSources } from './TurnThinkingSources';
 import { browserThinking, isBrowserEvent } from './chatGptThinking';
 import { BookOpen, Bot, CheckCircle2, ChevronDown, CircleAlert, CircleStop, Clock3, ExternalLink, FileCode2, FilePenLine, GitBranch, LoaderCircle, MessageSquareText, Search, TerminalSquare, Wrench } from 'lucide-react';
 import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import rehypeSanitize from 'rehype-sanitize';
-import remarkGfm from 'remark-gfm';
+import { ChatRichText } from './rich-text/ChatRichText';
 import { api } from '../api';
 import { Modal } from '../components';
 import { appLocale, formatAppNumber, tr } from '../i18n';
@@ -71,7 +69,7 @@ export function TaskTurnBubble({ turn, taskId, subagents = [], agentLabel = 'Cod
   return <div className="turn-item">
     {userMessage && <article className="turn-user-message">
       <header><strong>{tr('You')}</strong><BubbleTime value={userMessage.event.occurredAt} /></header>
-      <div className="turn-user-content"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>{visibleUserMessage}</ReactMarkdown></div>
+      <div className="turn-user-content"><ChatRichText content={visibleUserMessage ?? ''} /></div>
     </article>}
     <div className={`turn-end-status ${status}`} role={status === 'running' ? 'status' : undefined}>
       {status === 'running'
@@ -243,7 +241,7 @@ function ProgressMessage({ event }: { event: TimelineEvent }) {
 }
 
 function RichText({ content }: { content: string }) {
-  return <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]} components={{ a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer noopener" /> }}>{content}</ReactMarkdown>;
+  return <ChatRichText content={content} />;
 }
 
 function ActivityRow({ activity, taskId, onStop }: { activity: ToolActivity; taskId: string; onStop: (activity: ToolActivity) => void }) {
