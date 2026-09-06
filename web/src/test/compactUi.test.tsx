@@ -83,6 +83,63 @@ describe('Compact & Resume task UI', () => {
     expect(resumeChatGptCompact).not.toHaveBeenCalled();
   });
 
+  it('mounts the confirmation directly in body, outside a clipping footer, and removes it on task unmount', async () => {
+    const view = mountTask(); await flush();
+    const trigger = screen.getByRole('button', { name: 'Compact & resume now' });
+    const footer = trigger.closest('footer')!;
+    expect(footer).toHaveClass('task-chat-footer');
+    // Simulate the containment that used to trap the inline backdrop in the footer.
+    Object.assign(footer.style, { overflow: 'hidden', transform: 'translateZ(0)', contain: 'paint' });
+    trigger.focus(); fireEvent.click(trigger);
+    const dialog = screen.getByRole('dialog', { name: 'Compact & resume now' });
+    const backdrop = dialog.closest('.modal-backdrop')!;
+    expect(backdrop.parentElement === document.body).toBe(true);
+    expect(view.container.contains(backdrop)).toBe(false);
+    expect(footer.contains(dialog)).toBe(false);
+    expect(dialog.closest('form')).toBeNull();
+    expect(dialog).toHaveAccessibleDescription(compactConfirmation);
+    const checkbox = within(dialog).getByRole('checkbox', { name: compactText('continueAfterCompact') });
+    expect(checkbox).not.toBeChecked();
+    fireEvent.mouseDown(checkbox); fireEvent.click(checkbox);
+    expect(checkbox).toBeChecked();
+    expect(dialog).toBeInTheDocument();
+    expect(api.startChatGptCompact).not.toHaveBeenCalled();
+    expect(api.sendChatGptMessage).not.toHaveBeenCalled();
+    view.unmount();
+    expect(backdrop).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('retains keyboard focus and backdrop/close dismissal without submitting the composer from the portal', async () => {
+    mountTask(); await flush();
+    const input = screen.getByRole('textbox', { name: tr('Next message to ChatGPT') });
+    fireEvent.change(input, { target: { value: 'Draft must not be submitted by a dialog button' } });
+    const trigger = screen.getByRole('button', { name: 'Compact & resume now' });
+    trigger.focus(); fireEvent.click(trigger);
+    const dialog = screen.getByRole('dialog', { name: 'Compact & resume now' });
+    const first = within(dialog).getByRole('button', { name: tr('Close dialog') });
+    const last = within(dialog).getByRole('button', { name: compactText('confirm') });
+    expect(first).toHaveFocus();
+    fireEvent.keyDown(first, { key: 'Tab', shiftKey: true });
+    expect(last).toHaveFocus();
+    fireEvent.keyDown(last, { key: 'Tab' });
+    expect(first).toHaveFocus();
+    fireEvent.mouseDown(dialog);
+    expect(dialog).toBeInTheDocument();
+    fireEvent.mouseDown(dialog.closest('.modal-backdrop')!);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+    fireEvent.click(trigger);
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: tr('Close dialog') }));
+    await flush();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+    expect(input).toHaveValue('Draft must not be submitted by a dialog button');
+    expect(api.startChatGptCompact).not.toHaveBeenCalled();
+    expect(api.sendChatGptMessage).not.toHaveBeenCalled();
+    expect(dispatchChatGptRequest).not.toHaveBeenCalled();
+  });
+
   it('shows all four steps above input and locks conflicting actions while retaining the draft', async () => {
     mountTask(); await flush();
     const input = screen.getByRole('textbox', { name: tr('Next message to ChatGPT') });

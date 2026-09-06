@@ -1,5 +1,6 @@
 import { Check, CircleAlert, Layers3, LoaderCircle, RefreshCw } from 'lucide-react';
 import { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Modal } from '../../components';
 import { tr } from '../../i18n';
 import { useCompact } from './CompactProvider';
@@ -16,7 +17,8 @@ export function CompactAction({ disabled = false }: { disabled?: boolean }) {
     <button type="button" className="compact-action" disabled={unavailable} onClick={() => { setContinueAfterCompact(false); setConfirming(true); }}>
       <Layers3 aria-hidden="true" />Compact &amp; resume now
     </button>
-    {confirming && <Modal title="Compact & resume now" description={compactConfirmation} className="compact-confirmation" close={() => setConfirming(false)}>
+    {/* Keep the confirmation outside the footer's clipping/stacking context and composer form. */}
+    {confirming && createPortal(<Modal title="Compact & resume now" description={compactConfirmation} className="compact-confirmation" close={() => setConfirming(false)}>
       <label className="compact-continue-option">
         <input type="checkbox" checked={continueAfterCompact} disabled={unavailable} aria-describedby="compact-continue-hint" onChange={(event) => setContinueAfterCompact(event.target.checked)} />
         <span>{compactText('continueAfterCompact')}</span>
@@ -30,7 +32,7 @@ export function CompactAction({ disabled = false }: { disabled?: boolean }) {
           void compact.create(continueAfterCompact);
         }}>{compactText('confirm')}</button>
       </div>
-    </Modal>}
+    </Modal>, document.body)}
   </>;
 }
 
