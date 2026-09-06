@@ -9,6 +9,8 @@ async function handleNativeTurn(message, sender) {
   if (!id || id !== message.conversationId || conversationIdFromUrl(message.conversationUrl || '') !== id) {
     throw new Error('The ChatGPT conversation changed before capture.');
   }
+  if (globalThis.ChatCmdCompactProtocol?.parse(message.content)
+      || (typeof compactOwnsTab === 'function' && await compactOwnsTab(tabId, id))) return { ignored: true };
   const bindings = await conversationBindings();
   const binding = bindings[conversationKey(id)];
   const localBaseUrl = localOrigin(binding?.localBaseUrl || approvalBaseUrl);

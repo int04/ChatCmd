@@ -34,6 +34,20 @@ pub(super) async fn bridge_result(
         ));
     }
     let row = bridge_request_row(&state, request_id.trim()).await?;
+    let mut conn = state
+        .repository
+        .pool()
+        .acquire()
+        .await
+        .map_err(db_problem)?;
+    chatcmd_storage::compact::guard_callback(
+        &mut conn,
+        request_id.trim(),
+        input.conversation_id.as_deref(),
+    )
+    .await
+    .map_err(super::storage_problem)?;
+    drop(conn);
     super::chatgpt_observation::retain_result(
         &state,
         request_id.trim(),
@@ -77,7 +91,19 @@ pub(super) async fn bridge_result(
         (Some(id), Some(url)) if !is_provisional_conversation_id(id) => (Some(id), Some(url)),
         _ => (None, None),
     };
-    let mut transaction = state.repository.pool().begin().await.map_err(db_problem)?;
+    let mut transaction = state
+        .repository
+        .pool()
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(db_problem)?;
+    chatcmd_storage::compact::guard_callback(
+        &mut transaction,
+        request_id.trim(),
+        input.conversation_id.as_deref(),
+    )
+    .await
+    .map_err(super::storage_problem)?;
     let mcp_authoritative = crate::chatgpt_transcript::mcp_turn(
         &mut transaction,
         &task_id,
@@ -88,7 +114,6 @@ pub(super) async fn bridge_result(
     .await
     .map_err(db_problem)?
     .is_some();
-    transaction.commit().await.map_err(db_problem)?;
     sqlx::query("UPDATE chatgpt_bridge_requests SET status=?,conversation_id=COALESCE(?,conversation_id),conversation_url=COALESCE(?,conversation_url),assistant_content=?,error_message=?,updated_at_ms=?,completed_at_ms=? WHERE id=?")
         .bind(&input.status)
         .bind(result_conversation_id)
@@ -98,7 +123,7 @@ pub(super) async fn bridge_result(
         .bind(now)
         .bind(now)
         .bind(request_id.trim())
-        .execute(state.repository.pool())
+        .execute(&mut *transaction)
         .await
         .map_err(db_problem)?;
     if !mcp_authoritative {
@@ -113,7 +138,7 @@ pub(super) async fn bridge_result(
             .bind(&task_id)
             .bind(&task_id)
             .bind(request_id.trim())
-            .execute(state.repository.pool())
+            .execute(&mut *transaction)
             .await
             .map_err(db_problem)?;
     }
@@ -123,9 +148,10 @@ pub(super) async fn bridge_result(
         .bind(now)
         .bind(&task_id)
         .bind(request_id.trim())
-        .execute(state.repository.pool())
+        .execute(&mut *transaction)
         .await
         .map_err(db_problem)?;
+    transaction.commit().await.map_err(db_problem)?;
     let demoted = crate::chatgpt_queue::demote_all_immediate(&state.repository, &task_id, now)
         .await
         .map_err(db_problem)?;

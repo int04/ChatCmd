@@ -314,11 +314,7 @@ mod tests {
 }
 
 pub(super) fn openai_scope(conversation_id: &str) -> String {
-    let material = format!("openai\0{}", conversation_id.trim());
-    format!(
-        "openai:{}",
-        Uuid::new_v5(&Uuid::NAMESPACE_OID, material.as_bytes())
-    )
+    chatcmd_storage::compact::openai_scope(conversation_id)
 }
 
 pub(super) fn bridge_task_id(agent_id: &str, scope: &str, first_message: &str) -> String {

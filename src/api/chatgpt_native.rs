@@ -76,6 +76,9 @@ pub(super) async fn enroll(
         .begin_with("BEGIN IMMEDIATE")
         .await
         .map_err(db_problem)?;
+    chatcmd_storage::compact::guard_native(&mut tx, &input.conversation_id)
+        .await
+        .map_err(super::storage_problem)?;
     // A ChatCMD-dispatched turn may already have been captured before a page reload.
     // Only its exact browser user identity can reuse it; repeated prompt text is not identity.
     let prior: Option<String> = sqlx::query_scalar("SELECT r.id FROM chatgpt_bridge_requests r LEFT JOIN timeline_events e ON e.event_id='chatgpt-think-'||r.id WHERE r.conversation_id=? AND (r.id=? OR json_extract(e.payload_json,'$.browserUserId')=?) LIMIT 1")

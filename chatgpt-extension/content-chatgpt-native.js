@@ -37,6 +37,7 @@
     const user = dom.latestUser();
     const key = keyFor(user);
     if (!key || !user.content.trim()) return;
+    if (globalThis.ChatCmdCompact?.busy || globalThis.ChatCmdCompactProtocol?.parse(user.content)) return;
     if (controller.active) {
       if (controller.active.observer?.userMessageId === user.id && controller.active.observer.active) remember(key);
       else if (controller.active.observer?.userMessageId) retry(500);
@@ -49,6 +50,7 @@
         conversationId: dom.conversationId(), conversationUrl: location.href,
         userMessageId: user.id, content: user.content });
       if (stopped || !controller.current() || keyFor(dom.latestUser()) !== key || controller.active) return;
+      if (response?.ok && response.ignored) { remember(key); return; }
       if (!response?.ok || !response.request) throw new Error(response?.error || 'ChatCMD did not acknowledge the browser turn.');
       report('recording');
       remember(key);

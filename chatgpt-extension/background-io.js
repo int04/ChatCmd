@@ -17,6 +17,9 @@ async function releaseRequest(requestId) {
 }
 
 async function sendToChatGpt(tabId, payload, options = {}) {
+  if (payload?.type?.startsWith('chatcmd-compact-') && !await contentScriptAlive(tabId, 'chatgpt')) {
+    await injectChatGptScripts(tabId);
+  }
   if (payload?.type === 'chatcmd-chatgpt-run') {
     try {
       const health = await chrome.tabs.sendMessage(tabId, { type: 'chatcmd-content-alive', kind: 'chatgpt' });

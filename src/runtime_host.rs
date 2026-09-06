@@ -6,6 +6,7 @@ mod approval_regression_tests;
 mod chatgpt_identity;
 #[cfg(test)]
 mod command_tests;
+mod compact;
 mod completion_report;
 mod dispatch;
 mod filesystem_dispatch;
@@ -402,10 +403,7 @@ impl RuntimeApi for RuntimeHost {
         context: OperationContext,
         arguments: Value,
     ) -> BoxFuture<'a, RuntimeResult<Value>> {
-        Box::pin(async move {
-            let output = self.call_persisted(tool, context, arguments).await?;
-            Ok(output)
-        })
+        Box::pin(self.call_compact_checked(tool, context, arguments))
     }
 
     fn local_device(&self) -> DeviceDescriptor {

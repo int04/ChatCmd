@@ -4,6 +4,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useParams } from 'react-router-dom';
 
 import { api } from '../api';
+import { CompactProvider } from '../chatgpt/compact/CompactProvider';
+import { CompactHistoryCard } from '../chatgpt/compact/CompactHistoryCard';
 import { ChatGptTaskCard, ChatGptTaskComposer, NewChatGptConversation } from '../chatgpt/ChatGptConversation';
 import { ErrorState, Loading, StatusBadge, formatTime } from '../components';
 import { tr, translatedStatus } from '../i18n';
@@ -123,7 +125,7 @@ function TaskDetailContent({ detail, realtime, onTaskChanged, hasOlder, loadingO
     }));
   };
 
-  return <div className={`task-detail-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
+  return <CompactProvider taskId={task.id} enabled={chatGpt}><div className={`task-detail-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
     <header className="task-detail-topbar"><div><h1>{conversationName(task)}</h1><p>{tr('{count} agent turns · generation {generation} · {realtime} · updated {time}', { count: turns.length, generation: task.generation ?? 1, realtime: realtime === 'online' ? translatedStatus('online') : realtime, time: formatTime(task.updatedAtUtc) })}</p></div><div className="task-detail-topbar-actions"><StatusBadge state={task.status} /><button className="task-detail-sidebar-toggle" type="button" aria-label={sidebarCollapsed ? 'Mở thông tin task' : 'Đóng thông tin task'} title={sidebarCollapsed ? 'Mở thông tin task' : 'Đóng thông tin task'} onClick={toggleSidebar}>{sidebarCollapsed ? <PanelRightOpen /> : <PanelRightClose />}</button></div></header>
     <div className="task-detail-body">
       <div className={`task-chat-pane${chatGpt ? ' has-chatgpt-footer' : ''}`}>
@@ -143,10 +145,11 @@ function TaskDetailContent({ detail, realtime, onTaskChanged, hasOlder, loadingO
         <TaskTerminalSection taskId={task.id} turnId={lastTurn?.id} />
         {(chatGpt || task.isSubagent) && <ChatGptTaskCard taskId={task.id} />}
         <TaskAccessCard taskId={detail.executionModeSourceTaskId ?? task.id} grantTaskId={task.id} defaultMode={detail.executionMode ?? 'allowAll'} grants={detail.approvalGrants} />
+        {chatGpt && <CompactHistoryCard />}
         {!chatGpt && <TaskConversationStopCard taskId={task.id} taskStatus={task.status} onStopped={onTaskChanged} />}
       </aside>}
     </div>
-  </div>;
+  </div></CompactProvider>;
 }
 
 

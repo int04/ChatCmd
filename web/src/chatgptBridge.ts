@@ -4,6 +4,7 @@ const REQUEST_TYPE = 'chatcmd-chatgpt-extension-request';
 const RESPONSE_TYPE = 'chatcmd-chatgpt-extension-response';
 
 type BridgeCommand =
+  | { action: 'compact-resume'; nonce: string; jobId: string; taskId: string; localBaseUrl: string }
   | { action: 'ping'; nonce: string; conversationUrl?: string }
   | { action: 'prepare-tab'; nonce: string; newConversationUrl?: string }
   | { action: 'open-tab'; nonce: string; conversationUrl: string }
@@ -89,6 +90,10 @@ export async function reconcileChatGptRequest(requestId: string) {
 
 export async function recoverChatGptIdentity(requestId: string, submittedContent: string) {
   return bridge({ action: 'recover-identity', nonce: nonce(), requestId, submittedContent, localBaseUrl: window.location.origin }, 5_000);
+}
+
+export async function resumeChatGptCompact(jobId: string, taskId: string) {
+  await bridge({ action: 'compact-resume', nonce: nonce(), jobId, taskId, localBaseUrl: window.location.origin }, 5_000);
 }
 
 function bridge(command: BridgeCommand, timeoutMs: number) {

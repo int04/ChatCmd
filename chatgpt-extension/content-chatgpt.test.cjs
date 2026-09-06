@@ -201,7 +201,7 @@ test('backend final response completes without a browser ping or retry', async (
 });
 
 test('background exposes browser completion and the known status contract', async () => {
-  assert.match(backgroundSource, /importScripts\('background-io\.js', 'background-tabs\.js', 'approval-bridge\.js', 'background-recovery\.js', 'background-capture\.js', 'background-clock\.js'\)/);
+  assert.match(backgroundSource, /importScripts\('background-io\.js', 'background-tabs\.js', 'approval-bridge\.js', 'background-recovery\.js', 'background-capture\.js', 'background-clock\.js', 'compact-protocol\.js', 'background-compact-destination\.js', 'background-compact\.js'\)/);
   assert.match(backgroundIoSource, /stage === 'browser-completed'/);
   assert.match(backgroundIoSource, /\/browser-completed/);
   assert.match(backgroundTabsSource, /conversationReady: ready/);
@@ -262,7 +262,7 @@ test('a stop-like button outside the unified composer does not mark ChatGPT as g
 
 test('content scripts load helpers before the request runner', () => {
   const entry = manifest.content_scripts.find((item) => item.matches.includes('https://chatgpt.com/*'));
-  assert.deepEqual(entry.js, ['content-runtime.js', 'content-chatgpt-clock.js', 'content-chatgpt-render.js', 'content-chatgpt-ui.js', 'content-chatgpt-dom.js', 'content-chatgpt-transcript.js', 'content-chatgpt-observer.js', 'content-chatgpt-approval-ui.js', 'content-chatgpt-monitor.js', 'content-chatgpt.js', 'content-chatgpt-resume.js', 'content-chatgpt-native.js']);
+  assert.deepEqual(entry.js, ['content-runtime.js', 'content-chatgpt-clock.js', 'content-chatgpt-render.js', 'content-chatgpt-ui.js', 'content-chatgpt-dom.js', 'content-chatgpt-transcript.js', 'content-chatgpt-observer.js', 'content-chatgpt-approval-ui.js', 'content-chatgpt-monitor.js', 'content-chatgpt.js', 'compact-protocol.js', 'content-chatgpt-compact.js', 'content-chatgpt-resume.js', 'content-chatgpt-native.js']);
 });
 
 test('new project tabs wait for a stable ChatGPT composer before sending', () => {
@@ -299,8 +299,9 @@ test('identity recovery binds by request id before falling back to prompt text',
 });
 
 test('local UI keeps failed dispatches for explicit user control', () => {
-  assert.doesNotMatch(localUiSource, /RETRY_DELAY_SECONDS|retryTimer/);
-  assert.match(localUiSource, /catch \(reason\) \{ setError\(errorText\(reason\)\); \}/);
+  const composer = readFileSync(join(extensionRoot, '..', 'web', 'src', 'chatgpt', 'ChatGptTaskComposer.tsx'), 'utf8');
+  assert.doesNotMatch(localUiSource + composer, /RETRY_DELAY_SECONDS|retryTimer/);
+  assert.match(composer, /catch \(reason\) \{\s*setError\(errorText\(reason\)\);\s*return false;/);
 });
 
 test('local UI does not block sending on the polling-only conversationReady signal', () => {

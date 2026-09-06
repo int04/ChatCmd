@@ -31,10 +31,10 @@ void globalThis.ChatCmdRuntime.sendMessage({ type: 'chatcmd-return-binding-statu
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!globalThis.ChatCmdRuntime.current(CONTENT_CONTEXT)) return false;
-  if (message?.type === 'chatcmd-content-alive' && message.kind === 'chatgpt') { sendResponse({ ok: true, kind: 'chatgpt', captureProtocol: 2, clockProtocol: globalThis.ChatCmdCaptureClock?.version, renderProtocol: globalThis.ChatCmdRenderBridge?.version, captureReady: Boolean(globalThis.ChatCmdCaptureClock && globalThis.ChatCmdObserver && globalThis.ChatCmdTranscript && globalThis.ChatCmdNativeCapture) }); return false; }
+  if (message?.type === 'chatcmd-content-alive' && message.kind === 'chatgpt') { sendResponse({ ok: true, kind: 'chatgpt', captureProtocol: 2, compactProtocol: globalThis.ChatCmdCompact?.version, clockProtocol: globalThis.ChatCmdCaptureClock?.version, renderProtocol: globalThis.ChatCmdRenderBridge?.version, captureReady: Boolean(globalThis.ChatCmdCaptureClock && globalThis.ChatCmdObserver && globalThis.ChatCmdTranscript && globalThis.ChatCmdNativeCapture) }); return false; }
   if (message?.type === 'chatcmd-chatgpt-run') {
     const composer = findComposer();
-    if (!composer || findStopButton()) {
+    if (!composer || findStopButton() || globalThis.ChatCmdCompact?.busy) {
       sendResponse({ ok: false, error: 'Tab ChatGPT chưa sẵn sàng nhận tin nhắn mới.' });
       return false;
     }
@@ -474,5 +474,11 @@ globalThis.ChatCmdController = Object.freeze({
   get active() { return activeRequest; },
   current: () => globalThis.ChatCmdRuntime.current(CONTENT_CONTEXT),
   adopt: adoptObservedRequest,
+  findComposer, setComposerText, submitPrompt, selectModel,
+  async pauseForCompact() {
+    const owner = activeRequest;
+    if (owner?.observer) { try { await owner.observer.flush?.(); } catch { /* compact now fences old callbacks */ } owner.observer.stop(); }
+    if (activeRequest === owner) activeRequest = null;
+  },
 });
 })();

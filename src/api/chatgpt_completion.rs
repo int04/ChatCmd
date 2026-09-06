@@ -129,6 +129,13 @@ pub(super) async fn persist_browser_completion(
         .begin_with("BEGIN IMMEDIATE")
         .await
         .map_err(db_problem)?;
+    chatcmd_storage::compact::guard_callback(
+        &mut transaction,
+        completion.request_id,
+        completion.conversation_id,
+    )
+    .await
+    .map_err(super::storage_problem)?;
     let row = sqlx::query("SELECT task_id,turn_id,user_content,submitted_content,status,created_at_ms FROM chatgpt_bridge_requests WHERE id=?")
         .bind(completion.request_id)
         .fetch_optional(&mut *transaction)

@@ -108,13 +108,20 @@ pub(super) async fn continue_message(
 ) -> Result<Json<Value>, Problem> {
     validate_message(&input.content)?;
     let task_id = task_id.trim();
+    ensure_no_active_request(&state, task_id).await?;
+    let mut transaction = state
+        .repository
+        .pool()
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(db_problem)?;
+    super::chatgpt_compact::guard_send(&mut transaction, task_id).await?;
     let row = sqlx::query("SELECT c.conversation_id,c.conversation_url,c.model,t.agent_id,t.project_folder,a.name FROM chatgpt_conversations c JOIN tasks t ON t.id=c.task_id JOIN mcp_agents a ON a.id=t.agent_id WHERE c.task_id=?")
         .bind(task_id)
-        .fetch_optional(state.repository.pool())
+        .fetch_optional(&mut *transaction)
         .await
         .map_err(db_problem)?
         .ok_or_else(not_found_chat)?;
-    ensure_no_active_request(&state, task_id).await?;
     let agent_id = row.get::<String, _>("agent_id");
     let agent_name = row.get::<String, _>("name");
     let model = input
@@ -140,7 +147,7 @@ pub(super) async fn continue_message(
         .bind(row.get::<String, _>("conversation_url"))
         .bind(now)
         .bind(now)
-        .execute(state.repository.pool())
+        .execute(&mut *transaction)
         .await
         .map_err(db_problem)?;
     sqlx::query("UPDATE chatgpt_conversations SET model=?,active_request_id=?,updated_at_ms=? WHERE task_id=?")
@@ -148,15 +155,16 @@ pub(super) async fn continue_message(
         .bind(&request_id)
         .bind(now)
         .bind(task_id)
-        .execute(state.repository.pool())
+        .execute(&mut *transaction)
         .await
         .map_err(db_problem)?;
     sqlx::query("UPDATE tasks SET status='running',stopped_at_ms=NULL,updated_at_ms=? WHERE id=?")
         .bind(now)
         .bind(task_id)
-        .execute(state.repository.pool())
+        .execute(&mut *transaction)
         .await
         .map_err(db_problem)?;
+    transaction.commit().await.map_err(db_problem)?;
     request_json(&state, &request_id).await
 }
 
@@ -245,7 +253,18 @@ pub(super) async fn persist_bridge_started_binding(
     repository: &SqliteRepository,
     binding: &BridgeStartedBinding<'_>,
 ) -> Result<String, Problem> {
-    let mut transaction = repository.pool().begin().await.map_err(db_problem)?;
+    let mut transaction = repository
+        .pool()
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(db_problem)?;
+    chatcmd_storage::compact::guard_callback(
+        &mut transaction,
+        binding.request_id,
+        Some(binding.conversation_id),
+    )
+    .await
+    .map_err(super::storage_problem)?;
     let candidate_created = sqlx::query("INSERT INTO tasks(id,agent_id,device_id,status,created_at_ms,updated_at_ms) VALUES(?,?,?,'running',?,?) ON CONFLICT(id) DO NOTHING")
         .bind(binding.candidate_task_id)
         .bind(binding.agent_id)
@@ -282,7 +301,7 @@ pub(super) async fn persist_bridge_started_binding(
             .await
             .map_err(db_problem)?;
     }
-    sqlx::query("INSERT INTO tasks(id,agent_id,device_id,conversation_scope_hash,title,source,project_folder,allow_execute,status,active_session_id,generation,stopped_at_ms,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,'chatgpt_web',?,1,'running',NULL,1,NULL,?,?) ON CONFLICT(id) DO UPDATE SET conversation_scope_hash=excluded.conversation_scope_hash,title=COALESCE(tasks.title,excluded.title),source='chatgpt_web',project_folder=COALESCE(excluded.project_folder,tasks.project_folder),allow_execute=1,status='running',stopped_at_ms=NULL,updated_at_ms=excluded.updated_at_ms")
+    sqlx::query("INSERT INTO tasks(id,agent_id,device_id,conversation_scope_hash,title,source,project_folder,allow_execute,status,active_session_id,generation,stopped_at_ms,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,'chatgpt_web',?,1,'running',NULL,1,NULL,?,?) ON CONFLICT(id) DO UPDATE SET conversation_scope_hash=excluded.conversation_scope_hash,title=COALESCE(tasks.title,excluded.title),source='chatgpt_web',project_folder=CASE WHEN EXISTS(SELECT 1 FROM chatgpt_compact_jobs j WHERE j.task_id=tasks.id AND j.phase='completed') THEN tasks.project_folder ELSE COALESCE(excluded.project_folder,tasks.project_folder) END,allow_execute=CASE WHEN EXISTS(SELECT 1 FROM chatgpt_compact_jobs j WHERE j.task_id=tasks.id AND j.phase='completed') THEN tasks.allow_execute ELSE 1 END,status='running',stopped_at_ms=NULL,updated_at_ms=excluded.updated_at_ms")
         .bind(&task_id)
         .bind(binding.agent_id)
         .bind(binding.device_id)
@@ -331,13 +350,26 @@ pub(super) async fn bridge_identity(
             "ChatGPT conversation not bound",
             "The ChatGPT bridge request must be bound to a task before its durable identity can be updated.",
         ))?;
+    let mut transaction = state
+        .repository
+        .pool()
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(db_problem)?;
+    chatcmd_storage::compact::guard_callback(
+        &mut transaction,
+        request_id,
+        Some(input.conversation_id.trim()),
+    )
+    .await
+    .map_err(super::storage_problem)?;
     let now = now_ms();
     sqlx::query("UPDATE chatgpt_bridge_requests SET conversation_id=?,conversation_url=?,updated_at_ms=? WHERE id=?")
         .bind(input.conversation_id.trim())
         .bind(input.conversation_url.trim())
         .bind(now)
         .bind(request_id)
-        .execute(state.repository.pool())
+        .execute(&mut *transaction)
         .await
         .map_err(db_problem)?;
     let model = row.get::<String, _>("model");
@@ -348,8 +380,9 @@ pub(super) async fn bridge_identity(
         .bind(&model)
         .bind(now)
         .bind(now)
-        .execute(state.repository.pool())
+        .execute(&mut *transaction)
         .await
         .map_err(db_problem)?;
+    transaction.commit().await.map_err(db_problem)?;
     request_json(&state, request_id).await
 }

@@ -1,5 +1,6 @@
 import { decodeEncryptedApiResponse, encryptedApiFetch } from './apiCrypto';
 import { tr } from './i18n';
+import type { CompactHistory, CompactJob } from './chatgpt/compact/types';
 import type { Agent, AgentInput, ChatGptBridge, ChatGptQueuedMessage, ChatGptRequest, CommandExecutionMode, LiveTerminalOutput, LocalSettings, McpStatus, Overview, PlanQuestion, PlanQuestionAnswer, PluginLink, ProblemDetails, SecretResult, Session, SessionDetail, Skill, SkillInstallPreview, SkillInstallResult, SkillOptionValue, Task, TaskActivityDetail, TaskDetail, TaskPage, Tool, ToolPreset, Tunnel, TunnelTestResult, UserSkill, WorkspaceProject } from './types';
 
 export class ApiError extends Error {
@@ -57,6 +58,10 @@ const json = (value: unknown) => JSON.stringify(value);
 const item = (value: string) => encodeURIComponent(value);
 
 export const api = {
+  chatGptCompact: (taskId: string) => request<CompactHistory>(`/api/local/tasks/${item(taskId)}/chatgpt/compact`),
+  startChatGptCompact: (taskId: string, continueAfterCompact = false) => request<CompactJob>(`/api/local/tasks/${item(taskId)}/chatgpt/compact`, { method: 'POST', body: json({ continueAfterCompact }) }),
+  chatGptCompactJob: (jobId: string) => request<CompactJob>(`/api/local/chatgpt/compact/${item(jobId)}`),
+  cancelChatGptCompact: (jobId: string, expectedRevision: number) => request<CompactJob>(`/api/local/chatgpt/compact/${item(jobId)}/checkpoint`, { method: 'POST', body: json({ expectedRevision, phase: 'cancelled' }) }),
   authStatus: () => request<AuthStatus>('/api/local/auth/status'),
   setupAuth: (password: string, confirmPassword: string) => request<{ authenticated: boolean }>('/api/local/auth/setup', { method: 'POST', body: json({ password, confirmPassword }) }),
   login: (password: string) => request<{ authenticated: boolean }>('/api/local/auth/login', { method: 'POST', body: json({ password }) }),

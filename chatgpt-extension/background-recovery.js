@@ -39,7 +39,7 @@ async function contentScriptAlive(tabId, kind) {
   try {
     const response = await chrome.tabs.sendMessage(tabId, { type: 'chatcmd-content-alive', kind });
     return response?.ok === true && response.kind === kind
-      && (kind !== 'chatgpt' || (response.captureProtocol === 2 && response.clockProtocol === 1 && response.renderProtocol === 1 && response.captureReady === true));
+      && (kind !== 'chatgpt' || (response.captureProtocol === 2 && response.compactProtocol === 3 && response.clockProtocol === 1 && response.renderProtocol === 1 && response.captureReady === true));
   } catch {
     return false;
   }

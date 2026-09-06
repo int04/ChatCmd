@@ -14,12 +14,14 @@ export function ChatGptMessageQueuePanel({
   openMode,
   onOpenModeChange,
   canAutoSend,
+  paused = false,
   onAutoSend,
 }: {
   taskId: string;
   openMode: ChatGptQueueMode | null;
   onOpenModeChange: (mode: ChatGptQueueMode | null) => void;
   canAutoSend: boolean;
+  paused?: boolean;
   onAutoSend: (content: string) => Promise<boolean>;
 }) {
   const queue = useLoad(() => api.chatGptQueue(taskId), [taskId]);
@@ -60,7 +62,7 @@ export function ChatGptMessageQueuePanel({
   });
 
   useEffect(() => {
-    if (!canAutoSend || autoSendingId || busyId || editingId) return;
+    if (paused || !canAutoSend || autoSendingId || busyId || editingId) return;
     const next = queueData?.[0];
     if (!next || next.mode !== 'queued') return;
     setAutoSendingId(next.id);
@@ -75,11 +77,11 @@ export function ChatGptMessageQueuePanel({
         await refreshQueue();
       }
     })();
-  }, [autoSendingId, busyId, canAutoSend, editingId, onAutoSend, queueData, refreshQueue, taskId]);
+  }, [paused, autoSendingId, busyId, canAutoSend, editingId, onAutoSend, queueData, refreshQueue, taskId]);
 
   const create = async () => {
     const content = draft.trim();
-    if (!openMode || !content || creating) return;
+    if (paused || !openMode || !content || creating) return;
     setCreating(true);
     setError('');
     try {
@@ -95,7 +97,7 @@ export function ChatGptMessageQueuePanel({
   };
 
   const update = async (message: ChatGptQueuedMessage, input: { content?: string; mode?: ChatGptQueueMode }) => {
-    if (busyId) return;
+    if (paused || busyId) return;
     setBusyId(message.id);
     setError('');
     try {
@@ -114,7 +116,7 @@ export function ChatGptMessageQueuePanel({
   };
 
   const remove = async (message: ChatGptQueuedMessage) => {
-    if (busyId) return;
+    if (paused || busyId) return;
     setBusyId(message.id);
     setError('');
     try {
@@ -135,7 +137,7 @@ export function ChatGptMessageQueuePanel({
   const move = async (index: number, offset: -1 | 1) => {
     const messages = queue.data ?? [];
     const target = index + offset;
-    if (target < 0 || target >= messages.length || busyId) return;
+    if (target < 0 || target >= messages.length || paused || busyId) return;
     const reordered = [...messages];
     [reordered[index], reordered[target]] = [reordered[target], reordered[index]];
     queue.setData(reordered);
@@ -156,7 +158,7 @@ export function ChatGptMessageQueuePanel({
   return <>
     {(messages.length > 0 || queue.error || error) && <section className="chatgpt-message-queue" aria-label={tr('Queued ChatGPT messages')}>
       {messages.map((message, index) => {
-        const pending = busyId === message.id || autoSendingId === message.id;
+        const pending = paused || busyId === message.id || autoSendingId === message.id;
         const editing = editingId === message.id;
         return <div className={`chatgpt-queue-item ${message.mode}`} key={message.id}>
           <span className="chatgpt-queue-state" title={message.mode === 'immediate' ? tr('Waiting for AI to receive immediately') : tr('Waiting to send')}>
@@ -196,7 +198,7 @@ export function ChatGptMessageQueuePanel({
       <textarea rows={5} value={draft} onChange={(event) => setDraft(event.target.value)} autoFocus placeholder={tr('Enter message…')} disabled={creating} />
       <div className="modal-actions">
         <button className="button secondary" type="button" onClick={() => onOpenModeChange(null)} disabled={creating}>{tr('Cancel')}</button>
-        <button className="button primary" type="button" onClick={() => void create()} disabled={creating || !draft.trim()}>
+        <button className="button primary" type="button" onClick={() => void create()} disabled={paused || creating || !draft.trim()}>
           {creating && <LoaderCircle className="spin" />}{openMode === 'immediate' ? tr('Send immediately') : tr('Add to queue')}
         </button>
       </div>

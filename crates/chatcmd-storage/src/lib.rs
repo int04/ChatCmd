@@ -2,6 +2,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod compact;
 mod device_identity;
 mod importer;
 mod path;

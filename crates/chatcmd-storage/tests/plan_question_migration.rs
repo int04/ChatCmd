@@ -22,31 +22,31 @@ fn checked_in_migrations_use_stable_lf_line_endings() {
 async fn schema_twenty_upgrades_additively_without_inventing_consent() {
     let directory = TempDir::new().expect("temporary directory");
     let path = directory.path().join("upgrade.db");
-    let (repository, _) = SqliteRepository::open(&path, 1)
+    let repository = SqliteRepository::connect(&path, 1)
         .await
-        .expect("bootstrap current schema");
+        .expect("connect old schema");
+    let mut migrations = sqlx::migrate::Migrator::new(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("migrations"),
+    )
+    .await
+    .expect("load migrations");
+    migrations.migrations = migrations
+        .migrations
+        .into_owned()
+        .into_iter()
+        .filter(|migration| migration.version <= 20)
+        .collect::<Vec<_>>()
+        .into();
+    migrations
+        .run(repository.pool())
+        .await
+        .expect("install genuine schema twenty");
     sqlx::query(
         "INSERT INTO settings(key,value_json,updated_at_ms) VALUES('migration-marker','42',1)",
     )
     .execute(repository.pool())
     .await
     .expect("legacy marker");
-    sqlx::query("DROP TABLE plan_questions")
-        .execute(repository.pool())
-        .await
-        .expect("simulate schema twenty");
-    sqlx::query("DELETE FROM _sqlx_migrations WHERE version IN (21,22)")
-        .execute(repository.pool())
-        .await
-        .expect("remove migration markers");
-    sqlx::query("ALTER TABLE workspace_projects DROP COLUMN chatgpt_project_url")
-        .execute(repository.pool())
-        .await
-        .expect("simulate pre-project-link schema");
-    sqlx::query("UPDATE schema_version SET version=20 WHERE singleton_id=1")
-        .execute(repository.pool())
-        .await
-        .expect("restore schema version");
     repository.pool().close().await;
 
     let (upgraded, report) = SqliteRepository::open(&path, 1)

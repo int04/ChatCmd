@@ -13,7 +13,7 @@
   };
   function plainText(node) {
     if (node.nodeType === Node.TEXT_NODE) return node.textContent || '';
-    if (!(node instanceof Element) || node.matches(EXCLUDED)) return '';
+    if (!(node instanceof Element) || hidden(node)) return '';
     const text = [...node.childNodes].map(plainText).join('');
     return /^(P|DIV|SECTION|LI|BR|PRE)$/.test(node.tagName) ? '\n' + text + '\n' : text;
   }
@@ -49,10 +49,10 @@
   }
   function markdown(node) {
     if (node.nodeType === Node.TEXT_NODE) return node.textContent || '';
-    if (!(node instanceof Element) || node.matches(EXCLUDED)) return '';
+    if (!(node instanceof Element) || hidden(node)) return '';
     const tag = node.tagName.toLowerCase();
     if (tag === 'pre') {
-      const text = (node.querySelector('code') || node).textContent || '';
+      const text = plainText(node.querySelector('code') || node);
       const fence = '`'.repeat(Math.max(3, ...[...text.matchAll(/`+/g)].map((match) => match[0].length + 1)));
       return `\n\n${fence}\n${text.trimEnd()}\n${fence}\n\n`;
     }
@@ -99,5 +99,5 @@
         messageId: node.closest('[data-message-id]')?.getAttribute('data-message-id') || '' }))
       .filter((part) => part.content);
   }
-  globalThis.ChatCmdTranscript = Object.freeze({ latestUser, readParts, normalize, conversationId });
+  globalThis.ChatCmdTranscript = Object.freeze({ latestUser, userText, readParts, normalize, conversationId });
 })();

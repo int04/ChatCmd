@@ -36,7 +36,8 @@ async function dispatch(listeners, message, sender) {
 const stubEvent = { addListener() {}, removeListener() {} };
 const chrome = {
   storage: { local: storage({ 'chatcmd-approval-base-url': base }), session: storage() },
-  runtime: { id: 'capture-integration', getManifest: () => manifest, onMessage: { addListener: (listener) => backgrounds.push(listener) } },
+  runtime: { id: 'capture-integration', getManifest: () => manifest, onStartup: stubEvent, onInstalled: stubEvent, onMessage: { addListener: (listener) => backgrounds.push(listener) } },
+  alarms: { onAlarm: stubEvent, async get() { return undefined; }, async create() {} },
   tabs: {
     async get(id) { const page = pages.get(id); return { id, url: page.window.location.href, status: 'complete' }; },
     async query() { return [...pages.keys()].map((id) => ({ id, url: pages.get(id).window.location.href })); },
@@ -78,7 +79,7 @@ function page(id, conversation, load = true) {
   window.clearTimeout = () => {};
   window.clearInterval = () => {};
   window.Element.prototype.getBoundingClientRect = () => ({ width: 10, height: 10 });
-  window.chrome = { runtime: { id: chrome.runtime.id, onMessage: { addListener: (fn) => listeners.push(fn) },
+  window.chrome = { runtime: { id: chrome.runtime.id, onMessage: { addListener: (fn) => listeners.push(fn), removeListener: (fn) => { const index = listeners.indexOf(fn); if (index >= 0) listeners.splice(index, 1); } },
     sendMessage(message, callback) {
       const result = dispatch(backgrounds, message, { tab: { id, url: window.location.href }, frameId: 0 });
       if (callback) { void result.then(callback, () => callback({ ok: false })); return; }
