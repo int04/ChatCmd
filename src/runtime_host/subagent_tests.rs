@@ -14,6 +14,8 @@ const PARENT_TURN_ID: &str = "turn-subagent-parent";
 
 async fn parent_fixture() -> (RuntimeHost, OperationContext, TempDir) {
     let (host, agent_id, directory) = test_host().await;
+    sqlx::query("INSERT INTO settings(key,value_json,updated_at_ms) VALUES('ui_subagentConcurrency','5',0) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json")
+        .execute(host.repository.pool()).await.expect("enable delegation fixture");
     let now = now_ms();
     sqlx::query("INSERT INTO tasks(id,agent_id,device_id,title,source,status,generation,created_at_ms,updated_at_ms) VALUES(?,?,?,'Sub-agent parent','mcp','running',1,?,?)")
         .bind(PARENT_TASK_ID)
@@ -236,3 +238,5 @@ async fn extension_fallback_stays_pending_and_parent_wait_remains_active() {
                 .starts_with("Sử dụng plugin @User message sync test để thực hiện yêu cầu sau:"))
     );
 }
+
+mod regression;

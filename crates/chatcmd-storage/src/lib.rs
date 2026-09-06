@@ -7,6 +7,7 @@ mod device_identity;
 mod importer;
 mod path;
 mod repository;
+pub mod subagent_tree;
 mod writer;
 
 pub use importer::LegacyImporter;

@@ -30,13 +30,10 @@ pub(super) async fn task_subagent_data(
         name: row.get("name"),
     });
 
-    let rows = sqlx::query(
-        "SELECT r.id,r.parent_turn_id,r.child_task_id,r.name,r.request,r.status AS registered_status,r.created_at_ms,r.updated_at_ms,r.completed_at_ms,r.worker_id,r.attempt,r.lease_expires_at_ms,r.last_heartbeat_at_ms,r.max_runtime_ms,r.started_at_ms,r.terminal_reason,t.status AS task_status FROM subagent_runs r LEFT JOIN tasks t ON t.id=r.child_task_id WHERE r.parent_task_id=? ORDER BY r.created_at_ms,r.id",
-    )
-    .bind(task_id)
-    .fetch_all(state.repository.pool())
-    .await
-    .map_err(db_problem)?;
+    let rows =
+        chatcmd_storage::subagent_tree::descendant_runs(state.repository.pool(), task_id, None)
+            .await
+            .map_err(db_problem)?;
 
     let runs = rows
         .iter()
@@ -50,6 +47,9 @@ pub(super) async fn task_subagent_data(
             json!({
                 "id": row.get::<String, _>("id"),
                 "parentTurnId": row.get::<String, _>("parent_turn_id"),
+                "parentTaskId": row.get::<String, _>("parent_task_id"),
+                "rootTurnId": row.get::<String, _>("root_turn_id"),
+                "parentName": row.get::<Option<String>, _>("parent_name"),
                 "taskId": row.get::<Option<String>, _>("child_task_id"),
                 "name": row.get::<String, _>("name"),
                 "request": row.get::<String, _>("request"),
@@ -74,13 +74,15 @@ pub(super) async fn pending_subagent_approvals(
     state: &AppState,
     parent_task_id: &str,
 ) -> Result<Vec<Value>, Problem> {
-    let rows = sqlx::query(
-        "SELECT a.id AS activity_id,a.task_id AS child_task_id,a.request_json,a.created_at_ms,r.id AS subagent_id,r.parent_turn_id,r.name FROM approvals a JOIN subagent_runs r ON r.child_task_id=a.task_id WHERE r.parent_task_id=? AND a.state='pending' ORDER BY a.created_at_ms,a.id",
-    )
-    .bind(parent_task_id)
-    .fetch_all(state.repository.pool())
-    .await
-    .map_err(db_problem)?;
+    let sql = format!(
+        "{} SELECT a.id AS activity_id,a.task_id AS child_task_id,a.request_json,a.created_at_ms,r.id AS subagent_id,r.parent_turn_id,r.parent_task_id,d.root_turn_id,p.title AS parent_name,r.name FROM approvals a JOIN subagent_runs r ON r.child_task_id=a.task_id JOIN descendants d ON d.id=r.id LEFT JOIN tasks p ON p.id=r.parent_task_id WHERE a.state='pending' ORDER BY a.created_at_ms,a.id",
+        chatcmd_storage::subagent_tree::DESCENDANTS_CTE
+    );
+    let rows = sqlx::query(&sql)
+        .bind(parent_task_id)
+        .fetch_all(state.repository.pool())
+        .await
+        .map_err(db_problem)?;
     Ok(rows
         .iter()
         .map(|row| {
@@ -92,6 +94,9 @@ pub(super) async fn pending_subagent_approvals(
                 "subagentId": row.get::<String, _>("subagent_id"),
                 "agentName": row.get::<String, _>("name"),
                 "parentTurnId": row.get::<String, _>("parent_turn_id"),
+                "parentTaskId": row.get::<String, _>("parent_task_id"),
+                "rootTurnId": row.get::<String, _>("root_turn_id"),
+                "parentName": row.get::<Option<String>, _>("parent_name"),
                 "childTurnId": request.get("turnId").cloned().unwrap_or(Value::Null),
                 "tool": request.get("tool").cloned().unwrap_or(Value::Null),
                 "input": request.get("input").cloned().unwrap_or(Value::Null),
@@ -235,7 +240,11 @@ pub(super) async fn interrupt_active_child_subagents(
     state: &AppState,
     parent_task_id: &str,
 ) -> Result<(), Problem> {
-    let rows = sqlx::query("SELECT id,parent_turn_id,child_task_id,name,attempt FROM subagent_runs WHERE parent_task_id=? AND status IN ('pending','running')")
+    let sql = format!(
+        "{} SELECT r.id,r.parent_task_id,r.parent_turn_id,r.child_task_id,r.name,r.attempt FROM subagent_runs r JOIN descendants d ON d.id=r.id WHERE r.status IN ('pending','running')",
+        chatcmd_storage::subagent_tree::DESCENDANTS_CTE
+    );
+    let rows = sqlx::query(&sql)
         .bind(parent_task_id)
         .fetch_all(state.repository.pool())
         .await
@@ -267,7 +276,7 @@ pub(super) async fn interrupt_active_child_subagents(
                 "attempt": row.get::<i64, _>("attempt")
             }),
         );
-        event.task_id = Some(parent_task_id.to_owned());
+        event.task_id = Some(row.get::<String, _>("parent_task_id"));
         event.turn_id = Some(row.get::<String, _>("parent_turn_id"));
         state.publish(event);
     }
@@ -287,3 +296,7 @@ fn effective_status<'a>(registered: &'a str, task_status: Option<&'a str>) -> &'
         _ => registered,
     }
 }
+
+#[cfg(test)]
+#[path = "subagent_tree_tests.rs"]
+mod tests;

@@ -37,6 +37,9 @@ pub(super) struct SubagentFallbackResult {
 pub(super) async fn pending_subagent_fallbacks(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<Value>>, Problem> {
+    if !heartbeat::creation_enabled(&state).await? {
+        return Ok(Json(Vec::new()));
+    }
     let rows = sqlx::query(
         "SELECT r.id,r.parent_task_id,r.parent_turn_id,r.child_task_id,r.name,r.request,r.fallback_attempts,r.fallback_conversation_id,r.fallback_conversation_url,a.name AS agent_name,p.project_folder AS parent_project_folder FROM subagent_runs r LEFT JOIN tasks t ON t.id=r.child_task_id LEFT JOIN mcp_agents a ON a.id=t.agent_id LEFT JOIN tasks p ON p.id=r.parent_task_id WHERE r.status='pending' AND r.fallback_state IN ('requested','started') AND r.fallback_attempts BETWEEN 1 AND ? ORDER BY r.updated_at_ms,r.id",
     )
@@ -461,3 +464,7 @@ fn clean_optional(value: Option<&str>) -> Option<&str> {
 #[cfg(test)]
 #[path = "subagent_fallback_tests.rs"]
 mod tests;
+
+#[path = "subagent_fallback_heartbeat.rs"]
+mod heartbeat;
+pub(super) use heartbeat::subagent_fallback_heartbeat;

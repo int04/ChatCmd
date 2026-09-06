@@ -221,6 +221,12 @@ async fn first_message_seeds_task_id_and_only_first_final_can_name_chat() {
 #[tokio::test]
 async fn repeated_subagent_registration_is_idempotent_with_new_request_id() {
     let (host, agent_id, _directory) = test_host().await;
+    sqlx::query(
+        "INSERT INTO settings(key,value_json,updated_at_ms) VALUES('ui_subagentConcurrency','1',0)",
+    )
+    .execute(host.repository.pool())
+    .await
+    .expect("enable one child slot");
     let scope = "conversation-subagent-idempotency";
     let turn = "turn-subagent-idempotency";
     let parent = host

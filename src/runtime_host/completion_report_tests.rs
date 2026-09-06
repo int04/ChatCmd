@@ -241,6 +241,12 @@ async fn delegated_child_evidence_requires_current_parent_integration_state() {
     use chatcmd_runtime::{CommandRunRequest, OperationContext};
 
     let (host, agent_id, directory) = test_host().await;
+    sqlx::query(
+        "INSERT INTO settings(key,value_json,updated_at_ms) VALUES('ui_subagentConcurrency','5',0)",
+    )
+    .execute(host.repository.pool())
+    .await
+    .expect("enable child agents for this delegation fixture");
     let project = directory.path().join("delegated-quality");
     std::fs::create_dir(&project).expect("project");
     crate::catalog_seed::seed_catalog(&host.repository)

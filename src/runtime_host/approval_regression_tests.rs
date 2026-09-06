@@ -155,6 +155,12 @@ async fn policy_revoke_while_approval_pending_wins_dispatch_recheck() {
 #[tokio::test]
 async fn nested_child_uses_root_execution_policy() {
     let (host, agent_id, _directory) = user_message_tests::test_host().await;
+    sqlx::query(
+        "INSERT INTO settings(key,value_json,updated_at_ms) VALUES('ui_subagentConcurrency','5',0)",
+    )
+    .execute(host.repository.pool())
+    .await
+    .expect("enable child agents for this delegation fixture");
     let root = task_context(&host, &agent_id, "nested-root").await;
     let root_id = root.task_id.clone().expect("root");
     let child = host

@@ -259,11 +259,17 @@ impl RuntimeHost {
         } else {
             Value::Null
         };
+        let subagent_limit = self.subagent_concurrency_limit().await?;
         let intent_hint = intent_hint(content);
         Ok(json!({
             "accepted": true,
             "duplicate": inserted == 0,
             "userMessageSynced": true,
+            "subagentPolicy": {
+                "enabled": subagent_limit > 0,
+                "maxConcurrent": subagent_limit,
+                "instruction": if subagent_limit == 0 { "Sub-agents are disabled by the user. Do not call agent_subagent_start or delegate to any child; perform the work in this conversation." } else { "Use registered children within the global limit. All descendants remain attached to the root turn. If a nested child cannot acquire a slot, continue locally rather than waiting for another child." }
+            },
             "planMode": is_plan_mode_request(content),
             "intentHint": intent_hint,
             "isFirstMessage": is_first_message,

@@ -6,8 +6,8 @@ use tokio::time::sleep;
 
 use super::RuntimeHost;
 
-pub(super) const DEFAULT_SUBAGENT_CONCURRENCY: i64 = 2;
-pub(super) const MIN_SUBAGENT_CONCURRENCY: i64 = 1;
+pub(super) const DEFAULT_SUBAGENT_CONCURRENCY: i64 = 0;
+pub(super) const MIN_SUBAGENT_CONCURRENCY: i64 = 0;
 pub(super) const MAX_SUBAGENT_CONCURRENCY: i64 = 5;
 const SLOT_RECHECK_DELAY: Duration = Duration::from_millis(100);
 

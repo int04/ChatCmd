@@ -46,6 +46,12 @@ impl RuntimeHost {
             return Ok(json!({ "attempt": current_attempt, "status": status }));
         }
 
+        if self.subagent_concurrency_limit().await? == 0 {
+            return Err(RuntimeError::new(
+                "subagents_disabled",
+                "Browser child dispatch is disabled by the user.",
+            ));
+        }
         let attempt =
             if matches!(fallback_state.as_str(), "requested" | "started") && current_attempt > 0 {
                 current_attempt

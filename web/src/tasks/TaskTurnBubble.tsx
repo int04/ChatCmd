@@ -1,3 +1,4 @@
+import { subagentLabel, subagentTreeRows } from './subagentPresentation';
 import { TurnThinkingSources } from './TurnThinkingSources';
 import { browserThinking, isBrowserEvent } from './chatGptThinking';
 import { BookOpen, Bot, CheckCircle2, ChevronDown, CircleAlert, CircleStop, Clock3, ExternalLink, FileCode2, FilePenLine, GitBranch, LoaderCircle, MessageSquareText, Search, TerminalSquare, Wrench } from 'lucide-react';
@@ -190,7 +191,7 @@ function ActivityDiffModal({ activity, close }: { activity: ToolActivity; close:
 function SubagentList({ agents }: { agents: SubagentRun[] }) {
   return <section className="turn-subagents" aria-label={tr('Subagents')}>
     <div className="turn-subagents-heading"><Bot aria-hidden="true" /><strong>{tr('Subagents')}</strong><span>{agents.length}</span></div>
-    <div className="turn-subagents-list">{agents.map((agent) => <SubagentItem agent={agent} key={agent.id} />)}</div>
+    <div className="turn-subagents-list">{subagentTreeRows(agents).map(({ agent, depth }) => <div className="turn-subagent-branch" key={agent.id} data-depth={depth} style={{ paddingInlineStart: Math.min(depth, 5) * 14 }}>{depth > 0 && <small className="turn-subagent-parent">{subagentLabel('parent')}: {agent.parentName || agent.parentTaskId}</small>}<SubagentItem agent={agent} /></div>)}</div>
   </section>;
 }
 

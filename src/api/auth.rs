@@ -196,7 +196,7 @@ fn extension_route_allowed(method: &Method, path: &str) -> bool {
         | (&Method::POST, ["api", "local", "chatgpt", "capture", "turns"]) => true,
         (&Method::GET, ["api", "local", "chatgpt", "requests", _]) => true,
         (&Method::POST, ["api", "local", "subagents", _, "fallback", action]) => {
-            matches!(*action, "started" | "result")
+            matches!(*action, "started" | "result" | "heartbeat")
         }
         (&Method::POST, ["api", "local", "chatgpt", "bridge", _, action]) => {
             matches!(
@@ -275,6 +275,14 @@ mod tests {
 
     #[test]
     fn extension_access_is_limited_to_bridge_routes() {
+        assert!(extension_route_allowed(
+            &Method::POST,
+            "/api/local/subagents/child/fallback/heartbeat"
+        ));
+        assert!(!extension_route_allowed(
+            &Method::GET,
+            "/api/local/subagents/child/fallback/heartbeat"
+        ));
         assert!(extension_route_allowed(
             &Method::POST,
             "/api/local/chatgpt/bridge/request-1/result"

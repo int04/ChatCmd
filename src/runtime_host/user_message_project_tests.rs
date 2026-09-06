@@ -152,6 +152,12 @@ async fn relative_filesystem_path_uses_task_project_folder_outside_configured_ro
 #[tokio::test]
 async fn delegated_child_inherits_project_folder_and_keeps_internal_user_message_sync() {
     let (host, agent_id, directory) = test_host().await;
+    sqlx::query(
+        "INSERT INTO settings(key,value_json,updated_at_ms) VALUES('ui_subagentConcurrency','5',0)",
+    )
+    .execute(host.repository.pool())
+    .await
+    .expect("enable child agents for this delegation fixture");
     let project = directory.path().join("delegated-project");
     std::fs::create_dir_all(&project).expect("create delegated project");
     let parent_scope = "conversation-subagent-internal-sync";

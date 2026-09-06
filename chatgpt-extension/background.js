@@ -8,7 +8,7 @@ const LOG_KEY = 'chatcmd-extension-logs';
 const MAX_LOGS = 200;
 const CHATGPT_HOME = 'https://chatgpt.com/';
 
-importScripts('background-io.js', 'background-tabs.js', 'approval-bridge.js', 'background-recovery.js', 'background-capture.js', 'background-clock.js', 'compact-protocol.js', 'background-compact-destination.js', 'background-compact.js');
+importScripts('background-io.js', 'background-tabs.js', 'approval-bridge.js', 'background-recovery.js', 'background-capture.js', 'background-clock.js', 'background-subagent-heartbeat.js', 'compact-protocol.js', 'background-compact-destination.js', 'background-compact.js');
 setTimeout(() => void recoverContentScriptsOnStartup(), 200);
 void reconcileOpenChatGptIdentities();
 
@@ -167,7 +167,22 @@ async function startRequest(message) {
   });
 }
 
+const subagentStarts = new Map();
 async function startSubagentRequest(message) {
+  const key = message.subagentId;
+  const previous = subagentStarts.get(key);
+  if (previous?.attempt === message.attempt) return previous.work;
+  const work = (async () => {
+    if (previous) await previous.work.catch(() => undefined);
+    await startSubagentRequestOnce(message);
+  })();
+  subagentStarts.set(key, { attempt: message.attempt, work });
+  try { return await work; } finally {
+    if (subagentStarts.get(key)?.work === work) subagentStarts.delete(key);
+  }
+}
+
+async function startSubagentRequestOnce(message) {
   if (!message.subagentId || !message.childTaskId || !message.submittedContent || !Number.isInteger(Number(message.attempt))) {
     throw new Error('Yêu cầu fallback sub-agent không hợp lệ.');
   }
@@ -176,13 +191,13 @@ async function startSubagentRequest(message) {
   const stored = await chrome.storage.session.get(subagentKey);
   const existing = stored[subagentKey];
   if (existing?.attempt === attempt && existing?.tabId && await safeTab(existing.tabId)) return;
-  if (existing) await closeSubagentRequest(message.subagentId);
+  const state = await postJson(message.localBaseUrl, `/api/local/subagents/${encodeURIComponent(message.subagentId)}/fallback/heartbeat`, { attempt });
+  if (!state.active || state.status !== 'pending') return;
+  if (existing) await closeSubagentRequest(message.subagentId, existing.attempt);
 
   const target = normalizeNewConversationUrl(message.newConversationUrl);
   const tab = await chrome.tabs.create({ url: target, active: false });
   if (!tab?.id) throw new Error('Không thể mở tab ChatGPT cho sub-agent.');
-  await waitForTab(tab.id);
-  await waitForChatGptReady(tab.id);
   const requestId = `subagent:${message.subagentId}:${attempt}`;
   await chrome.storage.session.set({
     [requestKey(requestId)]: {
@@ -196,6 +211,8 @@ async function startSubagentRequest(message) {
     },
     [subagentKey]: { requestId, tabId: tab.id, attempt },
   });
+  await waitForTab(tab.id);
+  await waitForChatGptReady(tab.id);
   await sendToChatGpt(tab.id, {
     type: 'chatcmd-chatgpt-run',
     requestId,
@@ -204,12 +221,22 @@ async function startSubagentRequest(message) {
   });
 }
 
-async function closeSubagentRequest(subagentId) {
+const subagentClosures = new Map();
+async function closeSubagentRequest(subagentId, expectedAttempt) {
+  const previous = subagentClosures.get(subagentId) || Promise.resolve();
+  const work = previous.catch(() => undefined).then(() => closeSubagentRequestOnce(subagentId, expectedAttempt));
+  subagentClosures.set(subagentId, work);
+  try { return await work; } finally {
+    if (subagentClosures.get(subagentId) === work) subagentClosures.delete(subagentId);
+  }
+}
+
+async function closeSubagentRequestOnce(subagentId, expectedAttempt) {
   if (!subagentId) return;
   const key = `${SUBAGENT_PREFIX}${subagentId}`;
   const stored = await chrome.storage.session.get(key);
   const binding = stored[key];
-  if (!binding) return;
+  if (!binding || (expectedAttempt !== undefined && Number(binding.attempt) !== Number(expectedAttempt))) return;
   const context = binding.requestId ? await requestContext(binding.requestId) : null;
   const tab = binding.tabId ? await safeTab(binding.tabId) : null;
   const conversationUrl = tab?.url || '';

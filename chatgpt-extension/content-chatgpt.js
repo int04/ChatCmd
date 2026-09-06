@@ -382,6 +382,7 @@ async function requestState(requestId) {
       stopRequested: response.stopRequested === true,
       hasFinalResponse: response.hasFinalResponse === true,
       active: response.active === true,
+      deadlineAtMs: Number.isFinite(response.deadlineAtMs) ? response.deadlineAtMs : undefined,
     };
   } catch {
     return unknownRequestState();

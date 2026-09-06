@@ -57,7 +57,9 @@ export function GlobalSubagentFallbackBridge() {
       if (fallback) void dispatchFallback(fallback);
       return;
     }
-    if (event.type === 'subagent.fallback_claimed') {
+    // Claim means work has started, not finished. Closing here used to kill live children.
+    // Completed children close themselves only after the browser captures the final answer.
+    if (event.type === 'subagent.status' && ['failed', 'stopped', 'timedOut', 'interrupted'].includes(stringValue(payload.status))) {
       const subagentId = stringValue(payload.subagentId);
       if (subagentId) void closeSubagentFallbackTab(subagentId).catch(() => undefined);
     }

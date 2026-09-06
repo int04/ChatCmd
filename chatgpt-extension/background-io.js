@@ -158,7 +158,9 @@ async function bridgeRequestState(requestId, tabId) {
     return { known: false, running: null, stopRequested: false, hasFinalResponse: false, active: null };
   }
   if (context.mode === 'subagent') {
-    return { known: true, running: true, stopRequested: false, hasFinalResponse: false, active: true };
+    const state = await subagentHeartbeatState(context);
+    const failed = ['failed', 'stopped', 'interrupted', 'timedOut'].includes(state.status);
+    return { known: state.status !== 'unavailable', running: state.active === true, stopRequested: failed, hasFinalResponse: state.status === 'completed', active: state.active === true, deadlineAtMs: state.deadlineAtMs };
   }
   const request = await getJson(context.localBaseUrl, `/api/local/chatgpt/requests/${encodeURIComponent(requestId)}`);
   const running = request?.status === 'running';
@@ -197,6 +199,7 @@ async function handleProgress(message, tabId) {
     });
   }
   if (context.mode === 'subagent') {
+    if (identity.conversationId) await chrome.storage.session.set({ [requestKey(message.requestId)]: { ...context, ...identity } });
     if (message.stage === 'started') {
       await postJson(context.localBaseUrl, `/api/local/subagents/${encodeURIComponent(context.subagentId)}/fallback/started`, {
         attempt: context.attempt,
@@ -215,10 +218,14 @@ async function handleProgress(message, tabId) {
         assistantContent: message.assistantContent,
         errorMessage: message.errorMessage,
       });
+      if (result?.accepted !== true && ['pending', 'running'].includes(result?.status)) {
+        return { stage: message.stage, completed: false, browserCompleted: false, hasFinalResponse: false, status: result.status, reason: result.reason };
+      }
       await releaseRequest(message.requestId);
       await chrome.storage.session.remove(`${SUBAGENT_PREFIX}${context.subagentId}`);
       if (context.tabId) setTimeout(() => void safeTab(context.tabId).then((tab) => tab?.id && chrome.tabs.remove(tab.id).catch(() => undefined)), 100);
-      return { stage: message.stage, completed: result?.completed === true, retryScheduled: result?.retryScheduled === true };
+      const completed = result?.completed === true || result?.status === 'completed';
+      return { stage: message.stage, completed, browserCompleted: completed, hasFinalResponse: completed, retryScheduled: result?.retryScheduled === true, status: result?.status, reason: result?.reason };
     }
     throw new Error(`ChatGPT sub-agent progress stage không được hỗ trợ: ${message.stage || 'missing'}.`);
   }

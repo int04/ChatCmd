@@ -1,3 +1,4 @@
+import { subagentLabel } from '../tasks/subagentPresentation';
 import { mergeTimelineEvents, snapshotRevision } from '../tasks/timelineSnapshots';
 import { CheckCircle2, CircleAlert, Clock3, LoaderCircle, MessageSquareText, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -34,7 +35,7 @@ function TasksWorkspace() {
     if (event.type === 'system.connected') { if (connectedOnce.current) setDetailVersion((value) => value + 1); connectedOnce.current = true; return; }
     if (event.type === 'system.resync_required') { setDetailVersion((value) => value + 1); return; }
     if (event.type === 'subagent.status' || event.type === 'subagent.approval_pending' || event.type === 'subagent.approval_resolved') {
-      const childTaskId = subagentChildTaskId(event); if (childTaskId) hideSubagentTask(childTaskId); if (event.taskId === taskId) setDetailVersion((value) => value + 1); return;
+      const childTaskId = subagentChildTaskId(event); if (childTaskId) hideSubagentTask(childTaskId); if (event.taskId === taskId || (event.taskId && hiddenSubagentTaskIds.current.has(event.taskId))) setDetailVersion((value) => value + 1); return;
     }
     if (!event.taskId) return;
     if (event.taskId === taskId && event.type === 'approval.resolved') {
@@ -78,7 +79,7 @@ function TaskConversationDetail({ taskId, refreshVersion, realtime, liveEvents, 
   useEffect(() => { if (!olderEvents.length) setNextCursor(result.data?.nextCursor); }, [olderEvents.length, result.data?.nextCursor]);
   useEffect(() => { if (refreshVersion > 0) void refresh(); }, [refreshVersion, refresh]);
   useEffect(() => { if (result.data?.task.isSubagent) onSubagentTask(result.data.task.id); for (const subagent of result.data?.subagents ?? []) if (subagent.taskId) onSubagentTask(subagent.taskId); }, [onSubagentTask, result.data?.subagents, result.data?.task.id, result.data?.task.isSubagent]);
-  const approvalPolling = result.data?.task.allowExecute === null || (result.data?.executionMode === 'approval' && (result.data.task.status === 'running' || (result.data.subagents ?? []).some((subagent) => subagent.status === 'pending' || subagent.status === 'running')));
+  const approvalPolling = (result.data?.subagents ?? []).some((agent) => agent.status === 'pending' || agent.status === 'running') || result.data?.task.allowExecute === null || (result.data?.executionMode === 'approval' && (result.data.task.status === 'running' || (result.data.subagents ?? []).some((subagent) => subagent.status === 'pending' || subagent.status === 'running')));
   useEffect(() => { if (!approvalPolling) return; const timer = window.setInterval(() => void refresh(), 1500); return () => window.clearInterval(timer); }, [approvalPolling, refresh]);
   const loadOlder = useCallback(async () => {
     if (!nextCursor || loadingOlder) return;
@@ -126,14 +127,14 @@ function TaskDetailContent({ detail, realtime, onTaskChanged, hasOlder, loadingO
   };
 
   return <CompactProvider taskId={task.id} enabled={chatGpt}><div className={`task-detail-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
-    <header className="task-detail-topbar"><div><h1>{conversationName(task)}</h1><p>{tr('{count} agent turns · generation {generation} · {realtime} · updated {time}', { count: turns.length, generation: task.generation ?? 1, realtime: realtime === 'online' ? translatedStatus('online') : realtime, time: formatTime(task.updatedAtUtc) })}</p></div><div className="task-detail-topbar-actions"><StatusBadge state={task.status} /><button className="task-detail-sidebar-toggle" type="button" aria-label={sidebarCollapsed ? 'Mở thông tin task' : 'Đóng thông tin task'} title={sidebarCollapsed ? 'Mở thông tin task' : 'Đóng thông tin task'} onClick={toggleSidebar}>{sidebarCollapsed ? <PanelRightOpen /> : <PanelRightClose />}</button></div></header>
     <div className="task-detail-body">
       <div className={`task-chat-pane${chatGpt ? ' has-chatgpt-footer' : ''}`}>
+      <header className="task-detail-topbar" tabIndex={0} aria-label={subagentLabel('header')}><div><h1>{conversationName(task)}</h1><p>{tr('{count} agent turns · generation {generation} · {realtime} · updated {time}', { count: turns.length, generation: task.generation ?? 1, realtime: realtime === 'online' ? translatedStatus('online') : realtime, time: formatTime(task.updatedAtUtc) })}</p></div><div className="task-detail-topbar-actions"><StatusBadge state={task.status} /><button className="task-detail-sidebar-toggle" type="button" aria-label={sidebarCollapsed ? 'Mở thông tin task' : 'Đóng thông tin task'} title={sidebarCollapsed ? 'Mở thông tin task' : 'Đóng thông tin task'} onClick={toggleSidebar}>{sidebarCollapsed ? <PanelRightOpen /> : <PanelRightClose />}</button></div></header>
         <main ref={chatRef} className="task-chat-column" onScroll={updateChatScrollPosition}><h2 className="sr-only">{tr('Activity timeline')}</h2>
           <SubagentApprovalQueue approvals={detail.subagentApprovals ?? []} onResolved={(activityId) => onTaskChanged({ ...detail, subagentApprovals: (detail.subagentApprovals ?? []).filter((item) => item.activityId !== activityId) })} />
           {loadingOlder && <div className="task-history-skeleton" role="status" aria-label={tr('Loading older conversation')}><span /><span /><span /></div>}
           <section className="task-bubble-timeline turn-timeline" aria-label={tr('Conversation activity')}>
-            {turns.length ? turns.map((turn) => <TaskTurnBubble turn={turn} taskId={task.id} agentLabel={chatGpt ? 'ChatGPT' : tr('Codex Agent')} subagents={(detail.subagents ?? []).filter((agent) => agent.parentTurnId === turn.id)} key={turn.id} />) : <div className="task-awaiting-first-response" role="status" aria-live="polite"><span className="task-awaiting-first-response-icon"><LoaderCircle /></span><span>{tr('The conversation is connected, ChatGPT is thinking about the answer...')}</span></div>}
+            {turns.length ? turns.map((turn) => <TaskTurnBubble turn={turn} taskId={task.id} agentLabel={chatGpt ? 'ChatGPT' : tr('Codex Agent')} subagents={(detail.subagents ?? []).filter((agent) => (agent.rootTurnId ?? agent.parentTurnId) === turn.id)} key={turn.id} />) : <div className="task-awaiting-first-response" role="status" aria-live="polite"><span className="task-awaiting-first-response-icon"><LoaderCircle /></span><span>{tr('The conversation is connected, ChatGPT is thinking about the answer...')}</span></div>}
           </section>
         </main>
         {chatGpt && <footer className="task-chat-footer"><ChatGptTaskComposer taskId={task.id} /></footer>}

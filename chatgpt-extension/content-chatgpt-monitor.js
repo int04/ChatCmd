@@ -10,7 +10,9 @@ globalThis.ChatCmdMonitor = Object.freeze({ create(api) {
   let lastRequestState = api.unknownRequestState();
   let observedProgress = false;
   const startedAt = Date.now();
-  while (Date.now() - startedAt < 10 * 60_000) {
+  const isSubagent = requestId.startsWith('subagent:');
+  let deadlineAt = startedAt + (isSubagent ? 30 : 10) * 60_000;
+  while (Date.now() < deadlineAt) {
     if (!api.activeRequest || api.activeRequest.id !== requestId || api.activeRequest.resultReported) return latestMessageText('assistant');
     const now = Date.now();
     const nodes = assistantNodes();
@@ -28,6 +30,7 @@ globalThis.ChatCmdMonitor = Object.freeze({ create(api) {
     if (now - lastStateCheckAt > 800) {
       lastStateCheckAt = now;
       lastRequestState = await api.requestState(requestId);
+      if (isSubagent && Number.isFinite(lastRequestState.deadlineAtMs)) deadlineAt = Math.min(lastRequestState.deadlineAtMs, startedAt + 24 * 60 * 60_000);
       if (lastRequestState.stopRequested && api.activeRequest?.id === requestId && !api.activeRequest.stopRequested) {
         api.activeRequest.stopRequested = true;
         clickStopButton();
@@ -80,6 +83,7 @@ globalThis.ChatCmdMonitor = Object.freeze({ create(api) {
           : null;
       if (reason && api.AUTO_RETRY_ENABLED) {
         lastRequestState = await api.requestState(requestId);
+      if (isSubagent && Number.isFinite(lastRequestState.deadlineAtMs)) deadlineAt = Math.min(lastRequestState.deadlineAtMs, startedAt + 24 * 60 * 60_000);
         if (!lastRequestState.known || lastRequestState.hasFinalResponse || !lastRequestState.active) {
           await api.delay(350);
           continue;

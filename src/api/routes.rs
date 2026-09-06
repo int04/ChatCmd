@@ -107,6 +107,10 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
             post(subagent_fallback_started),
         )
         .route(
+            "/subagents/{id}/fallback/heartbeat",
+            post(subagent_fallback_heartbeat),
+        )
+        .route(
             "/subagents/{id}/fallback/result",
             post(subagent_fallback_result),
         )
