@@ -1,14 +1,18 @@
-import { CircleAlert, CircleStop, ExternalLink, LoaderCircle, Send, Unplug } from 'lucide-react';
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { CircleAlert, CircleStop, ExternalLink, FolderOpen, LoaderCircle, PlugZap, Send, Unplug, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { createPortal } from 'react-dom';
 import { api } from '../api';
 import { chatGptExtensionAvailable, chatGptExtensionStatus, closeChatGptConversationTab, dispatchChatGptRequest, focusChatGptConversationTab, openChatGptConversationTab, reconcileChatGptRequest, recoverChatGptIdentity, stopChatGptRequest } from '../chatgptBridge';
+import { Modal } from '../components';
 import { tr } from '../i18n';
+import { canonicalProjectPath } from '../tasks/workspaceProjects';
 import { useLoad } from '../useLoad';
 import { ChatGptMessageQueuePanel, type ChatGptQueueMode } from './ChatGptMessageQueue';
 import { CompactAction, CompactStatusCard } from './compact/CompactControls';
 import { useCompact } from './compact/CompactProvider';
 import { useCompactBridgeSync } from './compact/useCompactBridgeSync';
 import { compactText } from './compact/copy';
+import { prepareChatGptMessage } from './messageAttachments';
 const DEFAULT_MODEL = 'Auto';
 
 export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
@@ -26,6 +30,15 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
   const [chatGptTabOpen, setChatGptTabOpen] = useState<boolean | null>(null);
   const [chatGptReady, setChatGptReady] = useState<boolean | null>(null);
   const [queueMode, setQueueMode] = useState<ChatGptQueueMode | null>(null);
+  const agents = useLoad(api.agents, []);
+  const projects = useLoad(api.workspaceProjects, []);
+  const enabledAgents = useMemo(() => (agents.data ?? []).filter((agent) => agent.enabled), [agents.data]);
+  const [attachedAgentId, setAttachedAgentId] = useState('');
+  const [attachedProjectFolder, setAttachedProjectFolder] = useState('');
+  const [pluginMenuOpen, setPluginMenuOpen] = useState(false);
+  const [folderMenuOpen, setFolderMenuOpen] = useState(false);
+  const [folderPicking, setFolderPicking] = useState(false);
+  const attachedPlugin = enabledAgents.find((agent) => agent.id === attachedAgentId);
   const previousExtensionReady = useRef<boolean | null>(null);
   const resumeCompact = compact?.resume;
   useEffect(() => {
@@ -96,6 +109,28 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
     const timer = window.setInterval(recover, 2_000);
     return () => { disposed = true; window.clearInterval(timer); };
   }, [taskId, bridge.data?.latestRequestId, bridge.data?.latestSubmittedContent, conversationUrl, compactPaused, reloadBridge]);
+  const prepareMessage = (message: string) => prepareChatGptMessage(message, {
+    pluginName: attachedPlugin?.name,
+    projectFolder: attachedProjectFolder,
+  });
+  const clearAttachments = () => {
+    setAttachedAgentId('');
+    setAttachedProjectFolder('');
+  };
+  const pickFolder = async () => {
+    if (busy || folderPicking) return;
+    setFolderPicking(true); setError('');
+    try {
+      const result = await api.pickProjectFolder();
+      if (result.path) {
+        setAttachedProjectFolder(result.path);
+        setFolderMenuOpen(false);
+      }
+    } catch (reason) {
+      setError(errorText(reason));
+    } finally { setFolderPicking(false); }
+  };
+
   const sendContent = async (message: string, clearComposer = true): Promise<boolean> => {
     if (!bridge.data || busy || compact?.isBlocked() || bridgeSync) return false;
     setBusy(true); setError('');
@@ -126,7 +161,8 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
     event.preventDefault();
     const message = content.trim();
     if (!message || busy || active || compactPaused || bridgeSync || extensionReady !== true || chatGptTabOpen !== true || chatGptReady !== true || !bridge.data) return;
-    await sendContent(message);
+    const sent = await sendContent(prepareMessage(message));
+    if (sent) clearAttachments();
   };
 
   const stop = async () => {
@@ -190,8 +226,14 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
       paused={compactPaused || bridgeSync}
       canAutoSend={!compactPaused && !bridgeSync && !active && !busy && extensionReady === true && chatGptTabOpen === true && chatGptReady === true}
       onAutoSend={(message) => sendContent(message, false)}
+      prepareMessage={prepareMessage}
+      onMessageCreated={clearAttachments}
     />
     <form className="chatgpt-composer" hidden={!conversationUrl} onSubmit={(event) => void send(event)}>
+      {(attachedPlugin || attachedProjectFolder) && <div className="chatgpt-message-attachments" aria-label={'Đính kèm cho tin nhắn tiếp theo'}>
+        {attachedPlugin && <span><PlugZap />@{attachedPlugin.name}<button type="button" aria-label="Bỏ plugin đính kèm" onClick={() => setAttachedAgentId('')}><X /></button></span>}
+        {attachedProjectFolder && <span title={attachedProjectFolder}><FolderOpen />{attachedProjectFolder}<button type="button" aria-label="Bỏ dự án đính kèm" onClick={() => setAttachedProjectFolder('')}><X /></button></span>}
+      </div>}
       <div className="chatgpt-composer-row">
         <textarea aria-label={tr('Next message to ChatGPT')} rows={2} value={content} onChange={(event) => setContent(event.target.value)} disabled={active || busy || compactPaused || bridgeSync || extensionReady === false || chatGptTabOpen === false} placeholder={answerCompletedWaitingForUi ? tr('Answer completed; waiting for the ChatGPT UI before continuing.') : active ? tr('ChatGPT is responding…') : tr('Continue the ChatGPT conversation…')} />
         {active ? <button type="button" className="chatgpt-stop-button" onClick={() => void stop()} disabled={busy || compactPaused || bridgeSync || bridge.data?.activeStatus === 'stop_requested'}><CircleStop /><span>{bridge.data?.activeStatus === 'stop_requested' ? tr('Stopping…') : tr('Stop')}</span></button>
@@ -201,11 +243,15 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
         <button type="button" onClick={() => void closeTab()} disabled={busy || compactPaused || bridgeSync}>{tr('Close this tab')}</button><span aria-hidden="true">|</span>
         <button type="button" onClick={() => void focusTab()} disabled={busy || compactPaused || bridgeSync}>{tr('Change model')}</button><span aria-hidden="true">|</span>
         <button type="button" onClick={() => setQueueMode('queued')} disabled={busy || compactPaused || bridgeSync}>{tr('Queue another message')}</button><span aria-hidden="true">|</span>
-        <button type="button" onClick={() => setQueueMode('immediate')} disabled={busy || compactPaused || bridgeSync}>{tr('Send immediate message')}</button>
+        <button type="button" onClick={() => setQueueMode('immediate')} disabled={busy || compactPaused || bridgeSync}>{tr('Send immediate message')}</button><span aria-hidden="true">|</span>
+        <button type="button" onClick={() => { setFolderMenuOpen(true); void projects.reload(); }} disabled={busy || compactPaused || bridgeSync}>Đính kèm dự án</button><span aria-hidden="true">|</span>
+        <button type="button" onClick={() => { setPluginMenuOpen(true); void agents.reload(); }} disabled={busy || compactPaused || bridgeSync}>Đính kèm plugin</button>
         <span aria-hidden="true">|</span><CompactAction disabled={busy || bridgeSync || !conversationUrl} />
       </div>
       {error && <p className="chatgpt-form-error" role="alert"><CircleAlert />{error}</p>}
     </form>
+    {folderMenuOpen && createPortal(<Modal className="workspace-folder-modal" title="Chọn thư mục dự án" description="Chọn một dự án đã lưu hoặc mở trình chọn folder trên máy." close={() => !folderPicking && setFolderMenuOpen(false)}><div className="workspace-folder-choices"><div className="workspace-folder-project-list">{projects.loading ? <p className="workspace-folder-empty"><LoaderCircle className="spin" /> Đang tải dự án…</p> : projects.data?.length ? projects.data.map((project) => <button className={`workspace-folder-project ${canonicalProjectPath(attachedProjectFolder) === canonicalProjectPath(project.path) ? 'selected' : ''}`} type="button" onClick={() => { setAttachedProjectFolder(project.path); setFolderMenuOpen(false); }} key={project.id}><strong>{project.name}</strong><small>{project.path}</small></button>) : <p className="workspace-folder-empty">{projects.error || 'Chưa có dự án đã lưu.'}</p>}</div><button className="workspace-folder-browse" type="button" onClick={() => void pickFolder()} disabled={folderPicking}>{folderPicking ? <LoaderCircle className="spin" /> : <FolderOpen />}<span><strong>Chọn folder</strong><small>Mở trình chọn thư mục trên máy</small></span></button></div></Modal>, document.body)}
+    {pluginMenuOpen && createPortal(<Modal className="workspace-folder-modal" title="Chọn plugin" description="Chọn plugin chỉ áp dụng cho tin nhắn tiếp theo." close={() => setPluginMenuOpen(false)}><div className="workspace-folder-choices"><div className="workspace-folder-project-list">{agents.loading ? <p className="workspace-folder-empty"><LoaderCircle className="spin" /> Đang tải plugin…</p> : enabledAgents.length ? enabledAgents.map((agent) => <button className={`workspace-folder-project ${attachedAgentId === agent.id ? 'selected' : ''}`} type="button" onClick={() => { setAttachedAgentId(agent.id); setPluginMenuOpen(false); }} key={agent.id}><strong>@{agent.name}</strong><small>Plugin đang bật</small></button>) : <p className="workspace-folder-empty">{agents.error || 'Không có plugin đang bật.'}</p>}</div></div></Modal>, document.body)}
   </>;
 }
 
