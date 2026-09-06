@@ -123,14 +123,13 @@ pub(super) async fn continue_message(
         .map_err(db_problem)?
         .ok_or_else(not_found_chat)?;
     let agent_id = row.get::<String, _>("agent_id");
-    let agent_name = row.get::<String, _>("name");
     let model = input
         .model
         .as_deref()
         .map(|value| normalize_model(Some(value)))
         .unwrap_or_else(|| row.get::<String, _>("model"));
     let project_folder = row.get::<Option<String>, _>("project_folder");
-    let submitted = wrapped_message(&agent_name, project_folder.as_deref(), input.content.trim());
+    let submitted = input.content.trim().to_owned();
     let request_id = Uuid::new_v4().to_string();
     let turn_id = format!("chatgpt-turn-{}", Uuid::new_v4());
     let now = now_ms();

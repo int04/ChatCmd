@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { ArrowDown, ArrowUp, Check, Clock3, LoaderCircle, Pencil, Trash2, X, Zap } from 'lucide-react';
 import { api } from '../api';
 import { Modal } from '../components';
@@ -16,6 +17,8 @@ export function ChatGptMessageQueuePanel({
   canAutoSend,
   paused = false,
   onAutoSend,
+  prepareMessage = (content) => content.trim(),
+  onMessageCreated,
 }: {
   taskId: string;
   openMode: ChatGptQueueMode | null;
@@ -23,6 +26,8 @@ export function ChatGptMessageQueuePanel({
   canAutoSend: boolean;
   paused?: boolean;
   onAutoSend: (content: string) => Promise<boolean>;
+  prepareMessage?: (content: string) => string;
+  onMessageCreated?: () => void;
 }) {
   const queue = useLoad(() => api.chatGptQueue(taskId), [taskId]);
   const queueData = queue.data;
@@ -80,7 +85,7 @@ export function ChatGptMessageQueuePanel({
   }, [paused, autoSendingId, busyId, canAutoSend, editingId, onAutoSend, queueData, refreshQueue, taskId]);
 
   const create = async () => {
-    const content = draft.trim();
+    const content = prepareMessage(draft);
     if (paused || !openMode || !content || creating) return;
     setCreating(true);
     setError('');
@@ -88,6 +93,7 @@ export function ChatGptMessageQueuePanel({
       await api.createChatGptQueuedMessage(taskId, { content, mode: openMode });
       onOpenModeChange(null);
       setDraft('');
+      onMessageCreated?.();
       await queue.refresh();
     } catch (reason) {
       setError(errorText(reason));
@@ -187,7 +193,7 @@ export function ChatGptMessageQueuePanel({
       })}
       {(queue.error || error) && <p className="chatgpt-queue-error" role="alert">{error || queue.error}</p>}
     </section>}
-    {openMode && <Modal
+    {openMode && createPortal(<Modal
       className="chatgpt-queue-modal"
       title={openMode === 'immediate' ? tr('Send immediate message') : tr('Queue another message')}
       description={openMode === 'immediate'
@@ -202,7 +208,7 @@ export function ChatGptMessageQueuePanel({
           {creating && <LoaderCircle className="spin" />}{openMode === 'immediate' ? tr('Send immediately') : tr('Add to queue')}
         </button>
       </div>
-    </Modal>}
+    </Modal>, document.body)}
   </>;
 }
 

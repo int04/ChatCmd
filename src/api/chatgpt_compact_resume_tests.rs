@@ -19,6 +19,7 @@ async fn compact_resumed_bridge_started_preserves_permissions_project_and_task()
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(sent["taskId"], "task-a");
+    assert_eq!(sent["submittedContent"], "Resume ordinary work");
     let id = sent["id"].as_str().expect("new request id");
     // Simulate a delayed request snapshot after the user updates the task project.
     sqlx::query("UPDATE chatgpt_bridge_requests SET project_folder='D:\\stale-project' WHERE id=?")
