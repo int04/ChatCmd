@@ -5,11 +5,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../App';
 import { FakeSocket } from './setup';
 
-vi.mock('../apiCrypto', () => ({
-  encryptedApiFetch: (path: string, init: RequestInit) => fetch(path, init),
-  decodeEncryptedApiResponse: async <T,>(_path: string, _method: string, response: Response) => response.json() as Promise<T>,
-}));
-
 const overview = { app: { version: '1.0', startedAtUtc: '2026-01-01T00:00:00Z', state: 'ready' }, device: { id: 'device-001', name: 'Workstation', platform: 'Windows', architecture: 'x64' }, mcp: { state: 'listening', endpoint: 'http://127.0.0.1:5310/mcp/{token}', connectedClients: 1 }, database: { state: 'ready', path: 'C:\\data\\cmd.db', schemaVersion: '3' }, terminal: { defaultShell: 'pwsh', activeSessions: 1, totalSessions: 2, failedSessions: 0 }, tasks: { running: 1, completed: 4, failed: 0, approvals: 0 }, recentEvents: [] };
 const json = (data: unknown, status = 200) => Promise.resolve(new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json' } }));
 function at(path: string) { return render(<MemoryRouter initialEntries={[path]}><App /></MemoryRouter>); }

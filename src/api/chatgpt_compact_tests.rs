@@ -153,7 +153,7 @@ async fn compact_routes_complete_existing_task_and_hide_history_handoff() {
 }
 
 #[tokio::test]
-async fn compact_auth_keeps_extension_allowlist_and_encrypted_gui_sessions() {
+async fn compact_auth_keeps_extension_allowlist_and_gui_sessions() {
     let (state, app, _dir) = fixture().await;
     for path in [TASK_PATH, "/api/local/chatgpt/compact/pending"] {
         expect_json(
@@ -174,7 +174,7 @@ async fn compact_auth_keeps_extension_allowlist_and_encrypted_gui_sessions() {
             )
             .await
             .expect("response");
-        assert_eq!(response.status(), StatusCode::UPGRADE_REQUIRED);
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         let response = app
             .clone()
             .oneshot(

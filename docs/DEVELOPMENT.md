@@ -166,8 +166,8 @@ After changing DOM selectors, also load the unpacked extension in a dedicated br
 ## API and frontend conventions
 
 - Management routes live under `/api/local` and use RFC 7807-style problem details for errors.
-- Add frontend calls through `web/src/api.ts`; do not bypass the encrypted API wrapper for JSON management data.
-- Decide explicitly how binary, streamed, image, multipart, or SSE responses interact with API encryption.
+- Add frontend calls through `web/src/api.ts`; management data uses ordinary JSON with the local caller marker and existing authentication.
+- Decide explicitly how binary, streamed, image, multipart, or SSE responses fit the local API contract; do not add custom application-layer encryption wrappers.
 - Keep real-time payloads bounded and avoid sending entire large files or terminal histories.
 - Sanitize rendered Markdown and preserve keyboard/accessibility behavior.
 

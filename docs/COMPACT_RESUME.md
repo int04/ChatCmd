@@ -67,7 +67,7 @@ If ChatGPT refuses to generate a handoff (for example, a server-side restriction
 - `POST .../{jobId}/checkpoint`: revision-checked progress and atomic completion.
 - `POST .../{jobId}/resume`: idempotent post-attachment working request.
 
-UI routes retain encrypted local API/session handling; extension routes are explicitly allowlisted, not a blanket management bypass. List/history responses omit the handoff body. Realtime `chatgpt_compact_updated` notifications are hints; polling and database revision remain authoritative.
+UI routes retain local GUI authentication/session handling; extension routes are explicitly allowlisted, not a blanket management bypass. List/history responses omit the handoff body. Realtime `chatgpt_compact_updated` notifications are hints; polling and database revision remain authoritative.
 
 Main modules: `crates/chatcmd-storage/src/compact/`, `src/api/chatgpt_compact*.rs`, `src/runtime_host/compact.rs`, `web/src/chatgpt/compact/`, `chatgpt-extension/compact-protocol.js`, `content-chatgpt-compact.js`, `background-compact.js` and `background-compact-destination.js`.
 

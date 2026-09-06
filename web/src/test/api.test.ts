@@ -1,14 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('../apiCrypto', () => ({
-  encryptedApiFetch: (path: string, init: RequestInit) => {
-    const headers = new Headers(init.headers);
-    headers.set('X-ChatCmdClient', 'local-ui');
-    return fetch(path, { ...init, headers });
-  },
-  decodeEncryptedApiResponse: <T,>(_path: string, _method: string, response: Response) => response.json() as Promise<T>,
-}));
-
 import { api } from '../api';
 
 describe('local API client', () => {

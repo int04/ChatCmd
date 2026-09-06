@@ -8,7 +8,7 @@ This directory contains technical and operational documentation for the open-sou
 - [Troubleshooting](TROUBLESHOOTING.md)
 - [MCP method reference](mcp_method.md)
 - [Diagnostic logs](logs.md)
-- [Encryption protocol](ENCRYPTION_PROTOCOL.md)
+- [Local transport protocol](ENCRYPTION_PROTOCOL.md)
 - [Workspace path safety and traversal policy](workspace-path-safety.md)
 
 ## Contributors and maintainers

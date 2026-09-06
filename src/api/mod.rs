@@ -29,7 +29,6 @@ mod chatgpt_router_tests;
 mod chatgpt_support;
 #[cfg(test)]
 mod chatgpt_tests;
-mod crypto;
 mod data;
 mod folders;
 mod overview;

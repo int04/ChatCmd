@@ -102,7 +102,7 @@ Approval mode pauses sensitive operations. Review the exact tool and input, then
 - allow similar requests in the supported scope;
 - reject.
 
-If no dialog is visible, reload the management page and check pending approvals, the task timeline, the encrypted WebSocket connection, and application logs.
+If no dialog is visible, reload the management page and check pending approvals, the task timeline, the WebSocket connection, and application logs.
 
 ## A terminal is busy or input is locked
 
@@ -126,12 +126,12 @@ loss, reuse the same idempotency key so the runtime can observe the original in-
 An HTTP handler may have succeeded while the browser failed to decrypt the response. Check:
 
 - `X-ChatCmd-Crypto: 1` on the response;
-- whether the Rust backend restarted and the browser performed one session reset/retry;
-- method, full `/api/local/...` path, query ordering, and status used as AES-GCM associated data;
+- whether the Rust backend restarted and the browser reconnected;
+- method, full `/api/local/...` path, query ordering, caller marker, and GUI authentication state;
 - proxy or middleware changes that modified the request URI/body;
 - browser console errors.
 
-See [ENCRYPTION_PROTOCOL.md](ENCRYPTION_PROTOCOL.md) for the full checklist.
+See [local transport protocol](ENCRYPTION_PROTOCOL.md) for the current transport contract.
 
 ## The database cannot open or migrate
 

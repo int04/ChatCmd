@@ -8,7 +8,7 @@ This implementation is scoped to `web/`. Rust persistence/checkpoints and the br
 
 `TasksPage.tsx` mounts one task-scoped `CompactProvider` around the existing chat and sidebar. `ChatGptTaskComposer.tsx` hosts `CompactAction` and `CompactStatusCard`; `CompactHistoryCard` sits immediately after `TaskAccessCard`.
 
-`CompactSession.ts` owns server state, task validation, revision-aware merging, polling and extension recovery. The composer and history share one snapshot, avoiding duplicate pollers. Existing API encryption remains in `api.ts` / `apiCrypto.ts`.
+`CompactSession.ts` owns server state, task validation, revision-aware merging, polling and extension recovery. The composer and history share one snapshot, avoiding duplicate pollers. API calls remain centralized in `api.ts` and use ordinary JSON; no application-layer crypto session is created.
 
 ## Backend contract consumed
 

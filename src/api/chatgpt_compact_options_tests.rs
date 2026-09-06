@@ -63,7 +63,7 @@ async fn compact_default_and_explicit_off_never_create_a_working_message() {
 }
 
 #[tokio::test]
-async fn compact_encrypted_gui_explicit_opt_in_is_retained_in_all_views() {
+async fn compact_plaintext_gui_explicit_opt_in_is_retained_in_all_views() {
     let (state, app, _dir) = fixture().await;
     let auth = cookie(&state).await;
     let (status, job) = gui_post(

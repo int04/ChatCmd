@@ -1,4 +1,3 @@
-import { decodeEncryptedApiResponse, encryptedApiFetch } from './apiCrypto';
 import { tr } from './i18n';
 import type { CompactHistory, CompactJob } from './chatgpt/compact/types';
 import type { UpdateStatus } from './updates/types';
@@ -37,14 +36,16 @@ export interface SubagentFallbackResult {
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const method = (init.method ?? 'GET').toUpperCase();
+  const headers = new Headers(init.headers);
+  headers.set('X-ChatCmdClient', 'local-ui');
+  if (typeof init.body === 'string' && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   let response: Response;
-  try { response = await encryptedApiFetch(path, init); }
+  try { response = await fetch(path, { ...init, headers }); }
   catch { throw new ApiError(tr('Local API is unavailable. Check that ChatCMD is running.')); }
   if (response.status === 204) return undefined as T;
 
   let payload: T | ProblemDetails | undefined;
-  try { payload = await decodeEncryptedApiResponse<T | ProblemDetails>(path, method, response); }
+  try { payload = await response.json() as T | ProblemDetails; }
   catch { /* malformed or non-JSON upstream error */ }
   if (!response.ok) {
     if (response.status === 401) window.dispatchEvent(new Event('chatcmd-auth-required'));

@@ -33,8 +33,7 @@ reads and owner-scoped stop/cleanup controls remain available so a denied task c
 state and release resources.
 
 MCP callers cannot change task execution mode. `task_set_execution_mode` remains available as a
-compatibility adapter but returns `permission_change_requires_user`; only the encrypted,
-management-header-protected local UI API may persist a mode change. A UI change writes a
+compatibility adapter but returns `permission_change_requires_user`; only the management-header-protected local UI API may persist a mode change. A UI change writes a
 server-generated audit event, cancels pending approvals, and revokes active grants for the task and
 its descendants. An approved shell runs with the operating-system rights of the ChatCMD process.
 Working-directory validation and approval are not an OS filesystem or network sandbox.

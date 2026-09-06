@@ -13,8 +13,8 @@ use crate::websocket::AppState;
 
 use super::{
     Problem, agents::*, auth::*, chatgpt::*, chatgpt_compact::*, chatgpt_completion::*,
-    chatgpt_native::*, chatgpt_observation::*, chatgpt_queue::*, chatgpt_result::*, crypto,
-    data::*, folders::*, overview::*, plan_questions::*, sessions::*, settings::*, skills::*,
+    chatgpt_native::*, chatgpt_observation::*, chatgpt_queue::*, chatgpt_result::*, data::*,
+    folders::*, overview::*, plan_questions::*, sessions::*, settings::*, skills::*,
     subagent_fallback::*, system::*, task_controls::*, task_delete::*, task_execution_mode::*,
     task_views::*, tunnels::*, updates::*, workspaces::*,
 };
@@ -176,7 +176,6 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
             require_gui_auth,
         ));
     let local = Router::new()
-        .route("/crypto/handshake", post(crypto::handshake))
         .route("/auth/status", get(auth_status))
         .route("/auth/setup", post(setup))
         .route("/auth/login", post(login))
@@ -185,10 +184,6 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/system/elevation", get(elevation_status))
         .route("/system/elevation/restart", post(restart_elevated))
         .merge(protected)
-        .layer(middleware::from_fn_with_state(
-            state,
-            crypto::encrypted_local_api,
-        ))
         .layer(middleware::from_fn(management_header));
     Router::new()
         .route("/ping", get(ping))

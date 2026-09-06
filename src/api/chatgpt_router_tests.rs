@@ -1,10 +1,6 @@
 //! Exercise the real nested API router, including extension authorization.
 use std::sync::Arc;
 
-use aes_gcm::{
-    Aes256Gcm, KeyInit, Nonce,
-    aead::{Aead, Payload},
-};
 use axum::{
     Router,
     body::{Body, to_bytes},
@@ -16,9 +12,6 @@ use tempfile::TempDir;
 use tower::ServiceExt;
 
 use crate::{runtime_host::user_message_tests::test_host, websocket::AppState};
-
-const CRYPTO_KEY: [u8; 32] = [7; 32];
-const CRYPTO_SESSION: &str = "bridge-router-test-session";
 
 pub(super) async fn fixture(status: &str) -> (Arc<AppState>, Router, TempDir) {
     let (host, agent_id, directory) = test_host().await;
@@ -35,12 +28,6 @@ pub(super) async fn fixture(status: &str) -> (Arc<AppState>, Router, TempDir) {
             .bind(format!("turn-{suffix}")).bind(&agent_id).bind(status).bind(now).bind(now)
             .execute(state.repository.pool()).await.expect("seed request without identity");
     }
-    state
-        .put_api_crypto_session(
-            CRYPTO_SESSION.to_owned(),
-            Aes256Gcm::new_from_slice(&CRYPTO_KEY).expect("test cipher"),
-        )
-        .await;
     // Match main.rs -> api::router -> /local nesting, not a direct handler call.
     let app = Router::new()
         .nest("/api", super::router(state.clone()))
@@ -89,9 +76,7 @@ pub(super) async fn expect_json(response: Response, status: StatusCode) -> Value
 pub(super) async fn gui_get(app: &Router, path: &str, cookie: Option<&str>) -> (StatusCode, Value) {
     let mut request = Request::builder()
         .uri(path)
-        .header("X-ChatCmdClient", "local-ui")
-        .header("X-Chatcmd-Crypto", "1")
-        .header("X-Chatcmd-Crypto-Session", CRYPTO_SESSION);
+        .header("X-ChatCmdClient", "local-ui");
     if let Some(cookie) = cookie {
         request = request.header("Cookie", cookie);
     }
@@ -101,26 +86,10 @@ pub(super) async fn gui_get(app: &Router, path: &str, cookie: Option<&str>) -> (
         .await
         .expect("GUI response");
     let status = response.status();
-    assert_eq!(response.headers()["x-chatcmd-crypto"], "1");
-    let packet = to_bytes(response.into_body(), 128 * 1024)
+    let body = to_bytes(response.into_body(), 128 * 1024)
         .await
-        .expect("encrypted response");
-    assert_eq!(packet[0], 1);
-    let aad = format!("chatcmd/api/v1|response|GET|{path}|{}", status.as_u16());
-    let cipher = Aes256Gcm::new_from_slice(&CRYPTO_KEY).expect("test cipher");
-    let plaintext = cipher
-        .decrypt(
-            Nonce::from_slice(&packet[1..13]),
-            Payload {
-                msg: &packet[13..],
-                aad: aad.as_bytes(),
-            },
-        )
-        .expect("decrypt GUI response using original path");
-    (
-        status,
-        serde_json::from_slice(&plaintext).expect("GUI JSON"),
-    )
+        .expect("response body");
+    (status, serde_json::from_slice(&body).expect("GUI JSON"))
 }
 
 #[tokio::test]
@@ -265,7 +234,7 @@ async fn extension_approval_and_subagent_routes_survive_nesting() {
 }
 
 #[tokio::test]
-async fn gui_session_and_api_encryption_remain_required() {
+async fn gui_session_and_local_client_marker_remain_required() {
     let (_state, app, _directory) = fixture("completed").await;
     let path = "/api/local/chatgpt/tasks/task-a";
     let (status, _) = gui_get(&app, path, None).await;
@@ -281,7 +250,7 @@ async fn gui_session_and_api_encryption_remain_required() {
             .await
             .expect("response")
             .status(),
-        StatusCode::UPGRADE_REQUIRED
+        StatusCode::UNAUTHORIZED
     );
     let anonymous = Request::builder()
         .uri(path)
