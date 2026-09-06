@@ -46,6 +46,7 @@ mod task_delete;
 mod task_execution_mode;
 pub(crate) mod task_views;
 mod tunnels;
+mod updates;
 mod workspaces;
 
 use overview::default_shell;

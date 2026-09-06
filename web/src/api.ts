@@ -1,6 +1,7 @@
 import { decodeEncryptedApiResponse, encryptedApiFetch } from './apiCrypto';
 import { tr } from './i18n';
 import type { CompactHistory, CompactJob } from './chatgpt/compact/types';
+import type { UpdateStatus } from './updates/types';
 import type { Agent, AgentInput, ChatGptBridge, ChatGptQueuedMessage, ChatGptRequest, CommandExecutionMode, LiveTerminalOutput, LocalSettings, McpStatus, Overview, PlanQuestion, PlanQuestionAnswer, PluginLink, ProblemDetails, SecretResult, Session, SessionDetail, Skill, SkillInstallPreview, SkillInstallResult, SkillOptionValue, Task, TaskActivityDetail, TaskDetail, TaskPage, Tool, ToolPreset, Tunnel, TunnelTestResult, UserSkill, WorkspaceProject } from './types';
 
 export class ApiError extends Error {
@@ -136,6 +137,10 @@ export const api = {
   deleteSkill: (id: string) => request<void>(`/api/local/skills/${item(id)}`, { method: 'DELETE' }),
   settings: () => request<LocalSettings>('/api/local/settings'),
   saveSettings: (value: LocalSettings) => request<LocalSettings>('/api/local/settings', { method: 'PUT', body: json(value) }),
+  updateStatus: () => request<UpdateStatus>('/api/local/updates/status'),
+  checkForUpdate: () => request<UpdateStatus>('/api/local/updates/check', { method: 'POST', body: '{}' }),
+  startUpdate: () => request<UpdateStatus>('/api/local/updates/start', { method: 'POST', body: '{}' }),
+  restartForUpdate: () => request<UpdateStatus>('/api/local/updates/restart', { method: 'POST', body: '{}' }),
   databaseDiagnostics: () => request<DatabaseDiagnostics>('/api/local/diagnostics/database'),
   diagnosticLogs: () => request<DiagnosticLogs>('/api/local/diagnostics/logs'),
   deleteAllUserData: () => request<void>('/api/local/diagnostics/user-data', { method: 'DELETE' }),

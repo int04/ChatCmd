@@ -297,6 +297,14 @@ mod tests {
         ));
         assert!(!extension_route_allowed(
             &Method::GET,
+            "/api/local/updates/status"
+        ));
+        assert!(!extension_route_allowed(
+            &Method::POST,
+            "/api/local/updates/start"
+        ));
+        assert!(!extension_route_allowed(
+            &Method::GET,
             "/api/local/mcp/agents"
         ));
     }

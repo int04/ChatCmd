@@ -16,7 +16,7 @@ use super::{
     chatgpt_native::*, chatgpt_observation::*, chatgpt_queue::*, chatgpt_result::*, crypto,
     data::*, folders::*, overview::*, plan_questions::*, sessions::*, settings::*, skills::*,
     subagent_fallback::*, system::*, task_controls::*, task_delete::*, task_execution_mode::*,
-    task_views::*, tunnels::*, workspaces::*,
+    task_views::*, tunnels::*, updates::*, workspaces::*,
 };
 
 pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
@@ -160,6 +160,10 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/skills/{id}/options", patch(set_skill_options))
         .route("/skills/{id}/icon", get(skill_icon))
         .route("/settings", get(settings).put(save_settings))
+        .route("/updates/status", get(update_status))
+        .route("/updates/check", post(check_update))
+        .route("/updates/start", post(start_update))
+        .route("/updates/restart", post(restart_update))
         .route("/diagnostics/database", get(database_diagnostics))
         .route("/diagnostics/tools", get(tool_diagnostics))
         .route("/diagnostics/logs", get(diagnostic_logs))

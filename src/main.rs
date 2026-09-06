@@ -18,6 +18,7 @@ mod gui_auth;
 mod log_helper;
 mod mutation_journal_bridge;
 mod runtime_host;
+mod updater;
 mod version;
 mod websocket;
 
