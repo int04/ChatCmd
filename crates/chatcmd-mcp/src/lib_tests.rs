@@ -111,25 +111,239 @@ async fn list_tools_from_fresh_connection() -> Vec<String> {
 }
 
 #[test]
-fn catalog_names_are_stable_and_unique() {
-    let mut names = TOOL_NAMES.to_vec();
-    names.sort_unstable();
-    names.dedup();
-    assert_eq!(names.len(), TOOL_NAMES.len());
-    assert_eq!(TOOL_NAMES.first(), Some(&"device_list"));
-    assert_eq!(TOOL_NAMES.last(), Some(&"agent_turn_complete"));
-    assert!(TOOL_NAMES.contains(&"agent_user_message"));
-    assert!(TOOL_NAMES.contains(&"fs_replace_text"));
+fn catalog_names_are_sorted_stable_and_unique() {
+    let mut sorted = TOOL_NAMES.to_vec();
+    sorted.sort_unstable();
+    assert_eq!(TOOL_NAMES.as_slice(), sorted.as_slice());
+    sorted.dedup();
+    assert_eq!(sorted.len(), TOOL_NAMES.len());
+    assert!(TOOL_NAMES.iter().any(|name| name == "agent_user_message"));
+    assert!(TOOL_NAMES.iter().any(|name| name == "fs_replace_text"));
+    assert!(TOOL_NAMES.iter().any(|name| name == "fs_apply_edits"));
+    assert!(TOOL_NAMES.iter().any(|name| name == "fs_list_v2"));
+    assert!(TOOL_NAMES.iter().any(|name| name == "fs_read_text_v2"));
+    assert!(TOOL_NAMES.iter().any(|name| name == "fs_batch_read"));
+    assert!(TOOL_NAMES.iter().any(|name| name == "fs_batch_stat"));
+    assert!(TOOL_NAMES.iter().any(|name| name == "task_artifact_create"));
+    assert!(
+        TOOL_NAMES
+            .iter()
+            .any(|name| name == "workspace_index_status")
+    );
+    for name in [
+        "blob_begin",
+        "blob_write_chunk",
+        "blob_status",
+        "blob_seal",
+        "blob_abort",
+    ] {
+        assert!(TOOL_NAMES.iter().any(|candidate| candidate == name));
+    }
+}
+
+#[test]
+fn blob_schemas_expose_bounded_caller_budget() {
+    let manifest = canonical_manifest();
+    let tools = manifest["tools"].as_array().expect("manifest tools");
+    for name in [
+        "blob_begin",
+        "blob_write_chunk",
+        "blob_status",
+        "blob_seal",
+        "blob_abort",
+    ] {
+        let tool = tools
+            .iter()
+            .find(|tool| tool["name"] == name)
+            .unwrap_or_else(|| panic!("missing {name}"));
+        let schema = tool["schema"].to_string();
+        assert!(schema.contains("budget"), "{name} budget missing");
+        assert!(schema.contains("timeoutMs"), "{name} timeout missing");
+        assert!(
+            schema.contains("maxBytesRead"),
+            "{name} read budget missing"
+        );
+        assert!(
+            schema.contains("maxBytesWritten"),
+            "{name} write budget missing"
+        );
+        assert!(
+            schema.contains("maxOpenFiles"),
+            "{name} open-file budget missing"
+        );
+    }
+}
+
+#[test]
+fn fs_write_text_schema_requires_exactly_one_content_source() {
+    let manifest = canonical_manifest();
+    let tools = manifest["tools"].as_array().expect("manifest tools");
+    let write = tools
+        .iter()
+        .find(|tool| tool["name"] == "fs_write_text")
+        .expect("fs_write_text");
+    let alternatives = write["schema"]["anyOf"]
+        .as_array()
+        .expect("source alternatives");
+    assert_eq!(alternatives.len(), 2);
+    let schema = write["schema"].to_string();
+    assert!(schema.contains("contentRef"));
+    assert!(schema.contains("content"));
+    assert!(
+        serde_json::from_value::<WriteTextArgs>(serde_json::json!({
+            "path": "file.txt",
+            "content": "inline"
+        }))
+        .is_ok()
+    );
+    assert!(
+        serde_json::from_value::<WriteTextArgs>(serde_json::json!({
+            "path": "file.txt",
+            "contentRef": "blob:v1:test"
+        }))
+        .is_ok()
+    );
+    assert!(
+        serde_json::from_value::<WriteTextArgs>(serde_json::json!({
+            "path": "file.txt",
+            "content": "inline",
+            "contentRef": "blob:v1:test"
+        }))
+        .is_err()
+    );
+}
+
+#[test]
+fn fs_write_raw_schema_requires_exactly_one_content_source() {
+    let manifest = canonical_manifest();
+    let tools = manifest["tools"].as_array().expect("manifest tools");
+    let write = tools
+        .iter()
+        .find(|tool| tool["name"] == "fs_write_raw")
+        .expect("fs_write_raw");
+    let alternatives = write["schema"]["anyOf"]
+        .as_array()
+        .expect("source alternatives");
+    assert_eq!(alternatives.len(), 2);
+    let schema = write["schema"].to_string();
+    assert!(schema.contains("base64"));
+    assert!(schema.contains("contentRef"));
+    assert!(
+        serde_json::from_value::<WriteRawArgs>(serde_json::json!({
+            "path": "file.bin",
+            "base64": "YWJj"
+        }))
+        .is_ok()
+    );
+    assert!(
+        serde_json::from_value::<WriteRawArgs>(serde_json::json!({
+            "path": "file.bin",
+            "contentRef": "blob:v1:test"
+        }))
+        .is_ok()
+    );
+    assert!(
+        serde_json::from_value::<WriteRawArgs>(serde_json::json!({
+            "path": "file.bin",
+            "base64": "YWJj",
+            "contentRef": "blob:v1:test"
+        }))
+        .is_err()
+    );
+}
+
+#[test]
+fn task_artifact_create_advertises_content_ref_contract() {
+    let manifest = canonical_manifest();
+    let tools = manifest["tools"].as_array().expect("manifest tools");
+    let create = tools
+        .iter()
+        .find(|tool| tool["name"] == "task_artifact_create")
+        .expect("task_artifact_create");
+    let properties = &create["schema"]["properties"];
+    assert!(properties.get("contentRef").is_some());
+    assert!(properties.get("relativePath").is_some());
+    assert!(properties.get("mediaType").is_some());
+    assert_eq!(create["capabilities"]["supportsContentRef"], true);
+    assert_eq!(create["capabilities"]["mutating"], true);
+}
+
+#[test]
+fn fs_apply_edits_advertises_versioned_streaming_contract() {
+    let manifest = canonical_manifest();
+    let tools = manifest["tools"].as_array().expect("manifest tools");
+    let apply = tools
+        .iter()
+        .find(|tool| tool["name"] == "fs_apply_edits")
+        .expect("fs_apply_edits");
+    let properties = &apply["schema"]["properties"];
+    for field in [
+        "path",
+        "expectedVersion",
+        "coordinateSystem",
+        "columnEncoding",
+        "dryRun",
+        "preserveLineEndings",
+        "preserveBom",
+        "budget",
+    ] {
+        assert!(
+            properties.get(field).is_some(),
+            "missing fs_apply_edits field {field}"
+        );
+    }
+    let alternatives = apply["schema"]["anyOf"]
+        .as_array()
+        .expect("source alternatives");
+    assert_eq!(alternatives.len(), 2);
+    let schema = apply["schema"].to_string();
+    assert!(schema.contains("edits"));
+    assert!(schema.contains("contentRef"));
+    assert!(
+        serde_json::from_value::<ApplyEditsArgs>(serde_json::json!({
+            "path": "file.txt",
+            "expectedVersion": "v1-test",
+            "coordinateSystem": "byte",
+            "edits": []
+        }))
+        .is_ok()
+    );
+    assert!(
+        serde_json::from_value::<ApplyEditsArgs>(serde_json::json!({
+            "path": "file.txt",
+            "expectedVersion": "v1-test",
+            "coordinateSystem": "byte",
+            "contentRef": "blob:v1:test"
+        }))
+        .is_ok()
+    );
+    assert!(
+        serde_json::from_value::<ApplyEditsArgs>(serde_json::json!({
+            "path": "file.txt",
+            "expectedVersion": "v1-test",
+            "coordinateSystem": "byte",
+            "edits": [],
+            "contentRef": "blob:v1:test"
+        }))
+        .is_err()
+    );
+    assert_eq!(apply["capabilities"]["mutating"], true);
+    assert_eq!(apply["capabilities"]["streaming"], true);
+    assert!(
+        apply["resultSchema"]["properties"]
+            .get("newVersion")
+            .is_some()
+    );
+    assert!(
+        apply["resultSchema"]["properties"]
+            .get("commitState")
+            .is_some()
+    );
 }
 
 #[tokio::test]
 async fn fresh_mcp_connections_advertise_every_declared_tool() {
-    let mut declared = TOOL_NAMES
-        .iter()
-        .map(|name| (*name).to_owned())
-        .collect::<Vec<_>>();
-    declared.sort_unstable();
-
+    let declared = TOOL_NAMES.to_vec();
     let initial = list_tools_from_fresh_connection().await;
     let reconnected = list_tools_from_fresh_connection().await;
 
@@ -138,139 +352,22 @@ async fn fresh_mcp_connections_advertise_every_declared_tool() {
 }
 
 #[test]
-fn tool_specific_schemas_expose_required_canonical_fields() {
-    let shell_read = serde_json::to_value(schemars::schema_for!(ShellReadArgs))
-        .expect("serialize shell_read schema");
-    assert!(shell_read["properties"].get("sessionId").is_some());
-    assert!(shell_read["properties"].get("afterSequence").is_some());
-    assert!(shell_read["properties"].get("maxEvents").is_some());
-    assert!(
-        shell_read["required"]
-            .as_array()
-            .is_some_and(|values| values.iter().any(|value| value == "sessionId"))
-    );
-
-    let shell_create = serde_json::to_value(schemars::schema_for!(ShellCreateArgs))
-        .expect("serialize shell_create schema");
-    assert!(shell_create["properties"].get("workingDirectory").is_some());
-    assert!(
-        shell_create["properties"]
-            .get("initialWorkingDirectory")
-            .is_none()
-    );
-
-    let git_status =
-        serde_json::to_value(schemars::schema_for!(CwdArgs)).expect("serialize git status schema");
-    assert!(git_status["properties"].get("cwd").is_some());
-
-    let git_commit = serde_json::to_value(schemars::schema_for!(GitCommitArgs))
-        .expect("serialize git_commit schema");
-    assert!(git_commit["properties"].get("message").is_some());
-    assert!(
-        git_commit["required"]
-            .as_array()
-            .is_some_and(|values| values.iter().any(|value| value == "message"))
-    );
+fn canonical_manifest_has_schema_for_every_tool() {
+    let manifest = canonical_manifest();
+    let tools = manifest["tools"].as_array().expect("manifest tools");
+    assert_eq!(tools.len(), TOOL_NAMES.len());
+    for (index, tool) in tools.iter().enumerate() {
+        assert_eq!(tool["name"].as_str(), Some(TOOL_NAMES[index].as_str()));
+        assert!(
+            !tool["schema"].is_null(),
+            "{} has no schema",
+            TOOL_NAMES[index]
+        );
+        assert!(tool["capabilities"].is_object());
+    }
 }
 
-#[test]
-fn compatibility_aliases_deserialize_into_canonical_tool_fields() {
-    let read: ShellReadArgs = serde_json::from_value(serde_json::json!({
-        "sessionId": "shell-1",
-        "fromSequence": 9
-    }))
-    .expect("fromSequence compatibility alias");
-    assert_eq!(read.after_sequence, Some(9));
-
-    let create: ShellCreateArgs = serde_json::from_value(serde_json::json!({
-        "initialWorkingDirectory": "D:/DEV/CmdGPT/ChatCmdClient"
-    }))
-    .expect("initialWorkingDirectory compatibility alias");
-    assert_eq!(
-        create.working_directory.as_deref(),
-        Some("D:/DEV/CmdGPT/ChatCmdClient")
-    );
-
-    let status: CwdArgs = serde_json::from_value(serde_json::json!({
-        "path": "D:/DEV/CmdGPT/ChatCmdClient"
-    }))
-    .expect("git path compatibility alias");
-    assert_eq!(status.cwd.as_deref(), Some("D:/DEV/CmdGPT/ChatCmdClient"));
-}
-
-#[test]
-fn query_tokens_are_rejected() {
-    assert!(has_query_token("access_token=secret"));
-    assert!(!has_query_token("cursor=token-value"));
-}
-
-#[test]
-fn local_session_correlation_is_stable_and_secret_free() {
-    let first = local_mcp_session_id("agent-test", Some("remote-secret-session"));
-    let second = local_mcp_session_id("agent-test", Some("remote-secret-session"));
-    assert_eq!(first, second);
-    assert!(!first.contains("remote-secret-session"));
-    assert_ne!(
-        first,
-        local_mcp_session_id("other-agent", Some("remote-secret-session"))
-    );
-    assert_eq!(
-        local_mcp_session_id("agent-test", None),
-        local_mcp_session_id("agent-test", None)
-    );
-}
-
-#[tokio::test]
-async fn path_token_and_origin_fail_closed() {
-    let security = HttpSecurity::new(Arc::new(Accept), Arc::new(Accept));
-    let mut legacy_header = HeaderMap::new();
-    legacy_header.insert("authorization", "Bearer secret".parse().expect("header"));
-    legacy_header.insert("origin", "https://allowed.example".parse().expect("header"));
-    assert_eq!(
-        security
-            .authorize("", &legacy_header, None)
-            .await
-            .expect_err("authorization header must not replace the path token")
-            .code,
-        "unauthorized"
-    );
-
-    let mut denied = HeaderMap::new();
-    denied.insert("origin", "https://denied.example".parse().expect("header"));
-    assert_eq!(
-        security
-            .authorize("secret", &denied, None)
-            .await
-            .expect_err("denied origin")
-            .code,
-        "origin_denied"
-    );
-
-    let no_origin = HeaderMap::new();
-    assert_eq!(
-        security
-            .authorize("secret", &no_origin, None)
-            .await
-            .expect_err("missing origin must be decided by policy")
-            .code,
-        "origin_denied"
-    );
-
-    let mut allowed = HeaderMap::new();
-    allowed.insert("origin", "https://allowed.example".parse().expect("header"));
-    assert_eq!(
-        security
-            .authorize("secret", &allowed, None)
-            .await
-            .expect("path token and origin are valid"),
-        "agent-test"
-    );
-    assert_eq!(
-        security
-            .authorize("secret", &allowed, Some("access_token=other"))
-            .await
-            .expect_err("query credentials stay unsupported")
-            .code,
-        "query_token_rejected"
-    );
-}
+#[path = "lib_tests/http_contract_tests.rs"]
+mod http_contract_tests;
+#[path = "lib_tests/result_contract_tests.rs"]
+mod result_contract_tests;

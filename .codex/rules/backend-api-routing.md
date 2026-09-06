@@ -14,8 +14,8 @@
 ## Local app to backend
 
 - The Rust app owns the backend base URL and backend HTTP client.
-- App-to-backend JSON request and response bodies must use the encrypted backend API protocol. Do not add plaintext app-to-backend JSON calls as a shortcut.
-- The browser must not receive or manage the app-to-backend crypto session or backend crypto keys.
+- Application-layer JSON encryption is not used. Send ordinary JSON request and response bodies and rely on the configured transport (for example HTTPS for remote services) when transport security is required.
+- Do not add custom crypto handshakes, crypto sessions, encrypted JSON wrappers, or browser-managed application-layer keys.
 - Forward only explicitly allowed headers through the local gateway. Never blindly forward all browser headers.
 
 ## Build routing
@@ -28,5 +28,5 @@
 ## Adding new backend features
 
 - Prefer a purpose-specific local API endpoint when the feature needs local state, credential storage, device information, file access, or response transformation.
-- The generic `/api/local/backend/*` gateway is acceptable for ordinary JSON APIs, but it must still use the Rust encrypted backend client.
+- The generic `/api/local/backend/*` gateway is acceptable for ordinary JSON APIs and should use the normal Rust HTTP client without a custom application-layer encryption wrapper.
 - Binary downloads, multipart uploads, SSE, streaming responses, and WebSocket backend features require an explicit protocol design; do not assume the JSON gateway supports them.

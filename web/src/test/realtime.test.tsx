@@ -13,6 +13,7 @@ describe('realtime reconnect', () => {
     const receive = vi.fn();
     const { result, unmount } = renderHook(() => useRealtime(receive), { wrapper });
     expect(result.current).toBe('offline');
+    await act(async () => { await Promise.resolve(); });
     await act(async () => {
       FakeSocket.instances[0].open();
       await FakeSocket.instances[0].ready();
@@ -22,10 +23,13 @@ describe('realtime reconnect', () => {
       await FakeSocket.instances[0].message({ id: 'evt-1', type: 'task.updated', occurredAt: '2026-01-01' });
       await FakeSocket.instances[0].message({ id: 'evt-1', type: 'task.updated', occurredAt: '2026-01-01' });
     });
-    expect(receive).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(receive).toHaveBeenCalledTimes(1));
     act(() => FakeSocket.instances[0].disconnect());
     expect(result.current).toBe('reconnecting');
-    act(() => vi.advanceTimersByTime(500));
+    await act(async () => {
+      vi.advanceTimersByTime(500);
+      await Promise.resolve();
+    });
     expect(FakeSocket.instances).toHaveLength(2);
     unmount();
     act(() => vi.runOnlyPendingTimers());
@@ -36,7 +40,7 @@ describe('realtime reconnect', () => {
     const first = vi.fn();
     const second = vi.fn();
     const { rerender } = renderHook(({ listener }) => useRealtime(listener), { initialProps: { listener: first }, wrapper });
-    expect(FakeSocket.instances).toHaveLength(1);
+    await waitFor(() => expect(FakeSocket.instances).toHaveLength(1));
     await act(async () => {
       FakeSocket.instances[0].open();
       await FakeSocket.instances[0].ready();

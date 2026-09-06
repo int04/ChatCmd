@@ -30,13 +30,10 @@ pub(super) async fn task_subagent_data(
         name: row.get("name"),
     });
 
-    let rows = sqlx::query(
-        "SELECT r.id,r.parent_turn_id,r.child_task_id,r.name,r.request,r.status AS registered_status,r.created_at_ms,r.updated_at_ms,r.completed_at_ms,t.status AS task_status FROM subagent_runs r LEFT JOIN tasks t ON t.id=r.child_task_id WHERE r.parent_task_id=? ORDER BY r.created_at_ms,r.id",
-    )
-    .bind(task_id)
-    .fetch_all(state.repository.pool())
-    .await
-    .map_err(db_problem)?;
+    let rows =
+        chatcmd_storage::subagent_tree::descendant_runs(state.repository.pool(), task_id, None)
+            .await
+            .map_err(db_problem)?;
 
     let runs = rows
         .iter()
@@ -50,13 +47,24 @@ pub(super) async fn task_subagent_data(
             json!({
                 "id": row.get::<String, _>("id"),
                 "parentTurnId": row.get::<String, _>("parent_turn_id"),
+                "parentTaskId": row.get::<String, _>("parent_task_id"),
+                "rootTurnId": row.get::<String, _>("root_turn_id"),
+                "parentName": row.get::<Option<String>, _>("parent_name"),
                 "taskId": row.get::<Option<String>, _>("child_task_id"),
                 "name": row.get::<String, _>("name"),
                 "request": row.get::<String, _>("request"),
                 "status": status,
+                "approvalGrant": chatcmd_storage::subagent_approval::status_value(row.get::<Option<String>, _>("approval_grant_json").as_deref(), row.get("approval_grant_requested")),
                 "createdAtUtc": iso_ms(created_at),
                 "updatedAtUtc": iso_ms(updated_at),
-                "completedAtUtc": completed_at.map(iso_ms)
+                "completedAtUtc": completed_at.map(iso_ms),
+                "workerId": row.get::<Option<String>, _>("worker_id"),
+                "attempt": row.get::<i64, _>("attempt"),
+                "leaseExpiresAtUtc": row.get::<Option<i64>, _>("lease_expires_at_ms").map(iso_ms),
+                "lastHeartbeatAtUtc": row.get::<Option<i64>, _>("last_heartbeat_at_ms").map(iso_ms),
+                "maxRuntimeMs": row.get::<i64, _>("max_runtime_ms"),
+                "startedAtUtc": row.get::<Option<i64>, _>("started_at_ms").map(iso_ms),
+                "terminalReason": row.get::<Option<String>, _>("terminal_reason")
             })
         })
         .collect();
@@ -67,13 +75,15 @@ pub(super) async fn pending_subagent_approvals(
     state: &AppState,
     parent_task_id: &str,
 ) -> Result<Vec<Value>, Problem> {
-    let rows = sqlx::query(
-        "SELECT a.id AS activity_id,a.task_id AS child_task_id,a.request_json,a.created_at_ms,r.id AS subagent_id,r.parent_turn_id,r.name FROM approvals a JOIN subagent_runs r ON r.child_task_id=a.task_id WHERE r.parent_task_id=? AND a.state='pending' ORDER BY a.created_at_ms,a.id",
-    )
-    .bind(parent_task_id)
-    .fetch_all(state.repository.pool())
-    .await
-    .map_err(db_problem)?;
+    let sql = format!(
+        "{} SELECT a.id AS activity_id,a.task_id AS child_task_id,a.request_json,a.created_at_ms,r.id AS subagent_id,r.parent_turn_id,r.parent_task_id,d.root_turn_id,p.title AS parent_name,r.name FROM approvals a JOIN subagent_runs r ON r.child_task_id=a.task_id JOIN descendants d ON d.id=r.id LEFT JOIN tasks p ON p.id=r.parent_task_id WHERE a.state='pending' ORDER BY a.created_at_ms,a.id",
+        chatcmd_storage::subagent_tree::DESCENDANTS_CTE
+    );
+    let rows = sqlx::query(&sql)
+        .bind(parent_task_id)
+        .fetch_all(state.repository.pool())
+        .await
+        .map_err(db_problem)?;
     Ok(rows
         .iter()
         .map(|row| {
@@ -85,6 +95,9 @@ pub(super) async fn pending_subagent_approvals(
                 "subagentId": row.get::<String, _>("subagent_id"),
                 "agentName": row.get::<String, _>("name"),
                 "parentTurnId": row.get::<String, _>("parent_turn_id"),
+                "parentTaskId": row.get::<String, _>("parent_task_id"),
+                "rootTurnId": row.get::<String, _>("root_turn_id"),
+                "parentName": row.get::<Option<String>, _>("parent_name"),
                 "childTurnId": request.get("turnId").cloned().unwrap_or(Value::Null),
                 "tool": request.get("tool").cloned().unwrap_or(Value::Null),
                 "input": request.get("input").cloned().unwrap_or(Value::Null),
@@ -174,7 +187,7 @@ pub(super) async fn mark_child_subagent_terminal(
     status: &str,
 ) -> Result<(), Problem> {
     let status = match status {
-        "completed" | "failed" | "stopped" | "interrupted" => status,
+        "completed" | "failed" | "stopped" | "timedOut" | "interrupted" => status,
         _ => return Ok(()),
     };
     let row = sqlx::query(
@@ -189,8 +202,8 @@ pub(super) async fn mark_child_subagent_terminal(
     };
 
     let now = now_ms();
-    sqlx::query(
-        "UPDATE subagent_runs SET status=?,updated_at_ms=?,completed_at_ms=? WHERE child_task_id=?",
+    let affected = sqlx::query(
+        "UPDATE subagent_runs SET status=?,terminal_reason=NULL,lease_expires_at_ms=NULL,updated_at_ms=?,completed_at_ms=? WHERE child_task_id=? AND status IN ('pending','running')",
     )
     .bind(status)
     .bind(now)
@@ -198,7 +211,11 @@ pub(super) async fn mark_child_subagent_terminal(
     .bind(child_task_id)
     .execute(state.repository.pool())
     .await
-    .map_err(db_problem)?;
+    .map_err(db_problem)?
+    .rows_affected();
+    if affected == 0 {
+        return Ok(());
+    }
 
     let subagent_id = row.get::<String, _>("id");
     let parent_task_id = row.get::<String, _>("parent_task_id");
@@ -220,7 +237,60 @@ pub(super) async fn mark_child_subagent_terminal(
     Ok(())
 }
 
+pub(super) async fn interrupt_active_child_subagents(
+    state: &AppState,
+    parent_task_id: &str,
+) -> Result<(), Problem> {
+    let sql = format!(
+        "{} SELECT r.id,r.parent_task_id,r.parent_turn_id,r.child_task_id,r.name,r.attempt FROM subagent_runs r JOIN descendants d ON d.id=r.id WHERE r.status IN ('pending','running')",
+        chatcmd_storage::subagent_tree::DESCENDANTS_CTE
+    );
+    let rows = sqlx::query(&sql)
+        .bind(parent_task_id)
+        .fetch_all(state.repository.pool())
+        .await
+        .map_err(db_problem)?;
+    let now = now_ms();
+    for row in rows {
+        let id = row.get::<String, _>("id");
+        let child_task_id = row.get::<Option<String>, _>("child_task_id");
+        let affected = sqlx::query("UPDATE subagent_runs SET status='interrupted',terminal_reason='parent task stopped',lease_expires_at_ms=NULL,updated_at_ms=?,completed_at_ms=? WHERE id=? AND status IN ('pending','running')")
+            .bind(now).bind(now).bind(&id).execute(state.repository.pool()).await.map_err(db_problem)?.rows_affected();
+        if affected == 0 {
+            continue;
+        }
+        if let Some(child_task_id) = child_task_id.as_deref() {
+            state.activities.cancel_task(child_task_id);
+            sqlx::query("UPDATE tasks SET status=CASE WHEN status IN ('pending','running') THEN 'interrupted' ELSE status END,active_session_id=NULL,updated_at_ms=? WHERE id=?")
+                .bind(now).bind(child_task_id).execute(state.repository.pool()).await.map_err(db_problem)?;
+            sqlx::query("UPDATE approvals SET state='cancelled',decision_json='{\"reason\":\"parent task stopped\"}',resolved_at_ms=? WHERE task_id=? AND state='pending'")
+                .bind(now).bind(child_task_id).execute(state.repository.pool()).await.map_err(db_problem)?;
+        }
+        let mut event = AppEvent::new(
+            "subagent.status",
+            json!({
+                "subagentId": id,
+                "childTaskId": child_task_id,
+                "name": row.get::<String, _>("name"),
+                "status": "interrupted",
+                "reason": "parent task stopped",
+                "attempt": row.get::<i64, _>("attempt")
+            }),
+        );
+        event.task_id = Some(row.get::<String, _>("parent_task_id"));
+        event.turn_id = Some(row.get::<String, _>("parent_turn_id"));
+        state.publish(event);
+    }
+    Ok(())
+}
+
 fn effective_status<'a>(registered: &'a str, task_status: Option<&'a str>) -> &'a str {
+    if matches!(
+        registered,
+        "completed" | "failed" | "stopped" | "timedOut" | "interrupted"
+    ) {
+        return registered;
+    }
     match task_status {
         Some("completed") => "completed",
         Some("failed") => "failed",
@@ -230,3 +300,7 @@ fn effective_status<'a>(registered: &'a str, task_status: Option<&'a str>) -> &'
         _ => registered,
     }
 }
+
+#[cfg(test)]
+#[path = "subagent_tree_tests.rs"]
+mod tests;

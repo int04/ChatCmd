@@ -1,10 +1,10 @@
-import { Clock3, ListChecks, MessageSquareMore, Sparkles } from 'lucide-react';
+import { Ban, Check, Clock3, ListChecks, LoaderCircle, MessageSquareMore, ShieldCheck, Sparkles } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ApiError, api } from '../api';
 import { Modal } from '../components';
 import { tr } from '../i18n';
 import { useRealtime } from '../realtime';
-import type { PlanQuestion, TimelineEvent } from '../types';
+import type { PlanQuestion, PlanQuestionAnswer, TimelineEvent } from '../types';
 
 function sortQueue(items: PlanQuestion[]) {
   return [...items].sort((left, right) => left.createdAtMs - right.createdAtMs || left.id.localeCompare(right.id));
@@ -62,16 +62,17 @@ export function GlobalPlanQuestionQueue() {
 
   const queueText = useMemo(() => tr('{count} planning question(s) waiting. They are shown one at a time so no answer is missed.', { count: queue.length }), [queue.length]);
   const expired = Boolean(current && remaining === 0);
+  const isConsent = current?.questionKind === 'executionConsent';
 
-  const answer = useCallback(async (value: { kind: 'option'; optionIndex: 1 | 2 } | { kind: 'custom'; text: string }) => {
+  const answer = useCallback(async (value: PlanQuestionAnswer) => {
     if (!current || busy || expired) return;
     setBusy(true);
     setProblem('');
     try {
-      await api.answerPlanQuestion(current.id, value);
+      await api.answerPlanQuestion(current, value);
       setQueue((items) => items.filter((item) => item.id !== current.id));
     } catch (error) {
-      if (error instanceof ApiError && (error.status === 404 || error.status === 409)) {
+      if (error instanceof ApiError && (error.status === 404 || error.status === 409 || error.status === 410)) {
         await reload();
       } else {
         setProblem(error instanceof Error ? error.message : tr('Could not send the planning answer.'));
@@ -93,38 +94,38 @@ export function GlobalPlanQuestionQueue() {
   if (!current) return null;
 
   return <Modal
-    title={tr('AI needs more information')}
-    description={tr('The AI is waiting for this answer inside the current planning turn.')}
+    title={isConsent ? tr('Approve execution?') : tr('AI needs more information')}
+    description={isConsent ? tr('Execution remains blocked unless you explicitly approve this request.') : tr('The AI is waiting for this answer inside the current planning turn.')}
     close={() => {}}
     dismissible={false}
     className="plan-question-modal"
   >
-    <div className="plan-question-meta" aria-live="polite">
-      <span><Sparkles />{tr('Planning mode')}</span>
-      <span><Clock3 />{expired ? tr('AI is choosing automatically…') : tr('{time} remaining', { time: formatRemaining(remaining) })}</span>
+    <div className="plan-question-meta" aria-live="polite" aria-busy={busy}>
+      <span>{isConsent ? <ShieldCheck aria-hidden="true" /> : <Sparkles aria-hidden="true" />}{isConsent ? tr('Execution consent') : tr('Planning mode')}</span>
+      <span><Clock3 aria-hidden="true" />{expired ? (isConsent ? tr('Expired — execution was not approved') : tr('AI is choosing automatically…')) : tr('{time} remaining', { time: formatRemaining(remaining) })}</span>
     </div>
 
     <div className="plan-question-queue-note"><ListChecks /><span>{queueText}</span></div>
 
     <section className="plan-question-copy" aria-labelledby="plan-question-text">
-      <span>{tr('Planning question')}</span>
+      <span>{isConsent ? tr('Requested action') : tr('Planning question')}</span>
       <strong id="plan-question-text">{current.question}</strong>
     </section>
 
-    <div className="plan-question-options" aria-label={tr('Suggested answers')}>
+    {!isConsent && <div className="plan-question-options" aria-label={tr('Suggested answers')}>
       {current.options.map((option, index) => {
         const optionIndex = (index + 1) as 1 | 2;
         return <button key={optionIndex} type="button" disabled={busy || expired} onClick={() => void answer({ kind: 'option', optionIndex })}>
           <span>{optionIndex}</span><strong>{option}</strong>
         </button>;
       })}
-    </div>
+    </div>}
 
-    <button className="plan-question-custom-toggle" type="button" disabled={busy || expired} aria-expanded={customOpen} onClick={() => setCustomOpen((value) => !value)}>
+    {!isConsent && <button className="plan-question-custom-toggle" type="button" disabled={busy || expired} aria-expanded={customOpen} onClick={() => setCustomOpen((value) => !value)}>
       <MessageSquareMore />{tr('Suggest another answer')}
-    </button>
+    </button>}
 
-    {customOpen && <div className="plan-question-custom">
+    {!isConsent && customOpen && <div className="plan-question-custom">
       <label htmlFor="plan-question-custom-answer">{tr('Your suggestion')}</label>
       <textarea
         id="plan-question-custom-answer"
@@ -138,7 +139,16 @@ export function GlobalPlanQuestionQueue() {
       <div><small>{customAnswer.length}/2000</small><button className="button primary" type="button" disabled={busy || expired || !customAnswer.trim()} onClick={submitCustom}>{tr('Send suggestion')}</button></div>
     </div>}
 
+    {isConsent && <div className="modal-actions" aria-label={tr('Execution consent actions')}>
+      <button className="button secondary" type="button" disabled={busy || expired} onClick={() => void answer({ kind: 'denyExecution' })}>
+        {busy ? <LoaderCircle className="spin" aria-hidden="true" /> : <Ban aria-hidden="true" />}{tr('Deny')}
+      </button>
+      <button className="button primary" type="button" disabled={busy || expired} onClick={() => void answer({ kind: 'approveExecution' })}>
+        {busy ? <LoaderCircle className="spin" aria-hidden="true" /> : <Check aria-hidden="true" />}{busy ? tr('Saving…') : tr('Approve execution')}
+      </button>
+    </div>}
+
     {problem && <p className="plan-question-error" role="alert">{problem}</p>}
-    {expired && <p className="plan-question-expired" role="status">{tr('The 120-second response window ended. The AI can now choose one of its two options and continue.')}</p>}
+    {expired && <p className="plan-question-expired" role="alert">{isConsent ? tr('The response window ended. No execution permission was granted; ask the AI to request consent again if needed.') : tr('The 120-second response window ended. The AI can now choose one of its two options and continue.')}</p>}
   </Modal>;
 }

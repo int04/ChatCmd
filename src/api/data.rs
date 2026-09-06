@@ -8,6 +8,27 @@ use crate::websocket::AppState;
 
 use super::{Problem, db_problem};
 
+pub(super) async fn tool_diagnostics(
+    State(state): State<Arc<AppState>>,
+) -> Result<Json<chatcmd_runtime::TelemetrySnapshot>, Problem> {
+    let artifact_bytes: i64 =
+        sqlx::query_scalar("SELECT COALESCE(SUM(size_bytes),0) FROM artifact_registry")
+            .fetch_one(state.repository.pool())
+            .await
+            .map_err(db_problem)?;
+    let journal_active: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM filesystem_operation_journal WHERE phase NOT IN ('completed','rolledBack','failed')",
+    )
+    .fetch_one(state.repository.pool())
+    .await
+    .map_err(db_problem)?;
+    state.telemetry.set_persisted_resource_usage(
+        u64::try_from(artifact_bytes.max(0)).unwrap_or(u64::MAX),
+        u64::try_from(journal_active.max(0)).unwrap_or(u64::MAX),
+    );
+    Ok(Json(state.telemetry.snapshot()))
+}
+
 pub(super) async fn database_diagnostics(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Value>, Problem> {

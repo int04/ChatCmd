@@ -4,21 +4,23 @@ const REQUEST_TYPE = 'chatcmd-chatgpt-extension-request';
 const RESPONSE_TYPE = 'chatcmd-chatgpt-extension-response';
 
 type BridgeCommand =
+  | { action: 'compact-resume'; nonce: string; jobId: string; taskId: string; localBaseUrl: string }
   | { action: 'ping'; nonce: string; conversationUrl?: string }
-  | { action: 'prepare-tab'; nonce: string }
+  | { action: 'prepare-tab'; nonce: string; newConversationUrl?: string }
   | { action: 'open-tab'; nonce: string; conversationUrl: string }
   | { action: 'focus-tab'; nonce: string; conversationUrl: string }
   | { action: 'close-tab'; nonce: string; conversationUrl: string }
   | { action: 'logs'; nonce: string }
   | { action: 'clear-logs'; nonce: string }
-  | { action: 'send'; nonce: string; requestId: string; submittedContent: string; model: string; conversationUrl?: string; localBaseUrl: string }
-  | { action: 'subagent-send'; nonce: string; subagentId: string; childTaskId: string; submittedContent: string; attempt: number; model: string; localBaseUrl: string }
+  | { action: 'send'; nonce: string; requestId: string; submittedContent: string; model: string; conversationUrl?: string; newConversationUrl?: string; localBaseUrl: string }
+  | { action: 'subagent-send'; nonce: string; subagentId: string; childTaskId: string; submittedContent: string; attempt: number; model: string; newConversationUrl?: string; localBaseUrl: string }
   | { action: 'subagent-close'; nonce: string; subagentId: string }
   | { action: 'stop'; nonce: string; requestId: string; localBaseUrl: string }
-  | { action: 'reconcile'; nonce: string; requestId: string };
+  | { action: 'reconcile'; nonce: string; requestId: string }
+  | { action: 'recover-identity'; nonce: string; requestId: string; submittedContent: string; localBaseUrl: string };
 
 export type ChatGptExtensionLog = { at: string; level: 'info' | 'warn' | 'error' | string; source: string; message: string };
-type BridgeResponse = { nonce: string; ok: boolean; error?: string; model?: string; logs?: ChatGptExtensionLog[]; chatGptTabOpen?: boolean; conversationTabOpen?: boolean; conversationReady?: boolean; tabId?: number; tabUrl?: string };
+type BridgeResponse = { nonce: string; ok: boolean; recovered?: boolean; reason?: string; error?: string; model?: string; logs?: ChatGptExtensionLog[]; chatGptTabOpen?: boolean; conversationTabOpen?: boolean; conversationReady?: boolean; tabId?: number; tabUrl?: string };
 export type ChatGptExtensionStatus = { ready: boolean; chatGptTabOpen: boolean; conversationTabOpen: boolean; conversationReady: boolean; tabId?: number; tabUrl?: string };
 
 export async function chatGptExtensionStatus(conversationUrl?: string): Promise<ChatGptExtensionStatus> {
@@ -41,8 +43,8 @@ export async function chatGptExtensionAvailable() {
   return (await chatGptExtensionStatus()).ready;
 }
 
-export async function prepareChatGptModelTab() {
-  return bridge({ action: 'prepare-tab', nonce: nonce() }, 3_000);
+export async function prepareChatGptModelTab(newConversationUrl?: string) {
+  return bridge({ action: 'prepare-tab', nonce: nonce(), newConversationUrl }, 3_000);
 }
 
 export async function openChatGptConversationTab(conversationUrl: string) {
@@ -66,11 +68,11 @@ export async function clearChatGptExtensionLogs() {
   await bridge({ action: 'clear-logs', nonce: nonce() }, 2_000);
 }
 
-export async function dispatchChatGptRequest(input: { requestId: string; submittedContent: string; model: string; conversationUrl?: string }) {
+export async function dispatchChatGptRequest(input: { requestId: string; submittedContent: string; model: string; conversationUrl?: string; newConversationUrl?: string }) {
   await bridge({ action: 'send', nonce: nonce(), ...input, localBaseUrl: window.location.origin }, 5_000);
 }
 
-export async function dispatchSubagentFallback(input: { subagentId: string; childTaskId: string; submittedContent: string; attempt: number; model?: string }) {
+export async function dispatchSubagentFallback(input: { subagentId: string; childTaskId: string; submittedContent: string; attempt: number; model?: string; newConversationUrl?: string }) {
   await bridge({ action: 'subagent-send', nonce: nonce(), ...input, model: input.model || 'Auto', localBaseUrl: window.location.origin }, 5_000);
 }
 
@@ -84,6 +86,14 @@ export async function stopChatGptRequest(requestId: string) {
 
 export async function reconcileChatGptRequest(requestId: string) {
   await bridge({ action: 'reconcile', nonce: nonce(), requestId }, 3_000);
+}
+
+export async function recoverChatGptIdentity(requestId: string, submittedContent: string) {
+  return bridge({ action: 'recover-identity', nonce: nonce(), requestId, submittedContent, localBaseUrl: window.location.origin }, 5_000);
+}
+
+export async function resumeChatGptCompact(jobId: string, taskId: string) {
+  await bridge({ action: 'compact-resume', nonce: nonce(), jobId, taskId, localBaseUrl: window.location.origin }, 5_000);
 }
 
 function bridge(command: BridgeCommand, timeoutMs: number) {

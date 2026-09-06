@@ -15,9 +15,12 @@ export function SessionsPage() {
   const live = useLoad(api.liveTerminals, []);
   const [tab, setTab] = useState<'terminal' | 'sessions'>('terminal');
   const [query, setQuery] = useState('');
-  useEffect(() => { const timer = window.setInterval(() => void live.refresh(), 2000); return () => window.clearInterval(timer); }, [live.refresh]);
-  const source = tab === 'terminal' ? live.data ?? [] : history.data ?? [];
-  const sessions = useMemo(() => [...source].sort((a, b) => Date.parse(b.updatedAtUtc ?? b.createdAtUtc ?? '') - Date.parse(a.updatedAtUtc ?? a.createdAtUtc ?? '')).filter((session) => `${session.id} ${session.shell ?? ''} ${session.workingDirectory ?? ''} ${session.processId ?? ''}`.toLowerCase().includes(query.toLowerCase())), [query, source]);
+  const refreshLive = live.refresh;
+  useEffect(() => { const timer = window.setInterval(() => void refreshLive(), 2000); return () => window.clearInterval(timer); }, [refreshLive]);
+  const sessions = useMemo(() => {
+    const source = tab === 'terminal' ? live.data ?? [] : history.data ?? [];
+    return [...source].sort((a, b) => Date.parse(b.updatedAtUtc ?? b.createdAtUtc ?? '') - Date.parse(a.updatedAtUtc ?? a.createdAtUtc ?? '')).filter((session) => `${session.id} ${session.shell ?? ''} ${session.workingDirectory ?? ''} ${session.processId ?? ''}`.toLowerCase().includes(query.toLowerCase()));
+  }, [history.data, live.data, query, tab]);
   const result = tab === 'terminal' ? live : history;
   return <div>
     <PageHeading eyebrow={tr('LOCAL ACTIVITY')} title={tr('Sessions')} body={tr('Manage logical sessions and currently running terminals.')} />

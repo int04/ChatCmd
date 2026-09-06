@@ -23,9 +23,11 @@ impl RuntimeHost {
             let mut interval =
                 tokio::time::interval(Duration::from_secs(WATCHDOG_INTERVAL_SECONDS));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            interval.tick().await;
             loop {
                 interval.tick().await;
+                if let Err(error) = host.expire_stale_subagents(None).await {
+                    warn!(code = %error.code, message = %error.message, "sub-agent lease watchdog failed");
+                }
                 if let Err(error) = host.auto_finalize_stale_turns(grace).await {
                     warn!(code = %error.code, message = %error.message, "finalization watchdog failed");
                 }
@@ -77,6 +79,7 @@ impl RuntimeHost {
     }
 
     async fn has_active_subagent_work(&self, task_id: &str, turn_id: &str) -> RuntimeResult<bool> {
+        self.expire_stale_subagents(None).await?;
         let active = sqlx::query_scalar::<_, i64>(
             "SELECT EXISTS(SELECT 1 FROM subagent_runs WHERE status IN ('pending','running') AND ((parent_task_id=? AND parent_turn_id=?) OR child_task_id=?))",
         )
@@ -189,6 +192,6 @@ mod tests {
     #[test]
     fn default_grace_is_safe_for_slow_final_responses() {
         assert_eq!(DEFAULT_FINALIZATION_GRACE_SECONDS, 120);
-        assert!(DEFAULT_FINALIZATION_GRACE_SECONDS >= MIN_FINALIZATION_GRACE_SECONDS);
+        const { assert!(DEFAULT_FINALIZATION_GRACE_SECONDS >= MIN_FINALIZATION_GRACE_SECONDS) };
     }
 }

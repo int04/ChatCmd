@@ -20,11 +20,11 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
     steps:
-      - name: Require main branch
-        if: github.ref != 'refs/heads/main'
+      - name: Require dev branch
+        if: github.ref != 'refs/heads/dev'
         shell: bash
         run: |
-          echo "Desktop DEV releases must be built from the main branch." >&2
+          echo "Desktop DEV releases must be built from the dev branch." >&2
           exit 1
 
       - name: Generate DEV release version
@@ -150,7 +150,7 @@ jobs:
           RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           release_title="ChatCMD ${RELEASE_TAG#v.}"
-          release_notes="DEV build automatically built from main. Build version: ${RELEASE_VERSION}. See SHA256SUMS.txt to verify downloads. The macOS packages are ad-hoc signed and are not notarized."
+          release_notes="DEV build automatically built from dev. Build version: ${RELEASE_VERSION}. See SHA256SUMS.txt to verify downloads. The macOS packages are ad-hoc signed and are not notarized."
 
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "DEV release ${RELEASE_TAG} already exists; replacing assets."

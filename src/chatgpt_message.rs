@@ -23,7 +23,25 @@ fn canonical(value: &str) -> String {
             _ => normalized.push(ch),
         }
     }
-    unescape_chatgpt_markdown(&collapse_echoed_links(&normalized))
+    let normalized = unescape_chatgpt_markdown(&collapse_echoed_links(&normalized));
+    collapse_excess_blank_lines(&normalized)
+}
+
+fn collapse_excess_blank_lines(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut consecutive_newlines = 0_u8;
+    for ch in value.chars() {
+        if ch == '\n' {
+            consecutive_newlines = consecutive_newlines.saturating_add(1);
+            if consecutive_newlines <= 2 {
+                output.push(ch);
+            }
+        } else {
+            consecutive_newlines = 0;
+            output.push(ch);
+        }
+    }
+    output
 }
 
 fn collapse_echoed_links(value: &str) -> String {
@@ -86,6 +104,14 @@ mod tests {
     fn keeps_meaningful_whitespace_distinct() {
         assert!(!equivalent("let x = 1;", "let  x = 1;"));
         assert!(!equivalent("line one\nline two", "line one line two"));
+    }
+
+    #[test]
+    fn accepts_chatgpt_blank_line_jitter_between_paragraphs() {
+        assert!(equivalent(
+            "Sử dụng plugin @rust_test\n\nPhần một\n\n\nPhần hai",
+            "Sử dụng plugin @rust\\_test\n\nPhần một\n\n\n\nPhần hai"
+        ));
     }
 
     #[test]

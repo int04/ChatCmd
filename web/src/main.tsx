@@ -4,6 +4,9 @@ import { BrowserRouter } from 'react-router-dom';
 import App from './App';
 import './styles.css';
 import './tasks/workspaceProjects.css';
+import './claude-code-theme.css';
+import './tasks/taskDetailLayout.css';
+import './updates/update.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

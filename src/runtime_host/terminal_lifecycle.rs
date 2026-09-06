@@ -121,7 +121,8 @@ impl RuntimeHost {
                             "sessionId": session_id,
                             "sequence": event.sequence,
                             "stream": event.stream,
-                            "data": event.data
+                            "data": event.data,
+                            "encoding": event.encoding
                         }),
                     );
                     cursor = event.sequence;

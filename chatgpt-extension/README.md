@@ -45,7 +45,7 @@ Callbacks are restricted to local HTTP origins and include:
 X-ChatCmdClient: chatgpt-extension
 ```
 
-The approval WebSocket uses the same ephemeral encrypted session model as the local UI. This does not protect data from a compromised browser profile, malicious extension, injected page code, or local administrator.
+The approval WebSocket uses plaintext JSON frames on the local ChatCMD transport. Authorization still comes from the extension allowlist and the local API boundary; no application-layer crypto session is created.
 
 ## Tab behavior
 

@@ -1,60 +1,31 @@
-use std::time::Duration;
+use std::{
+    path::{Component, Path},
+    time::{Duration, Instant},
+};
+
+mod artifact_tools;
+mod command_tools;
+mod filesystem_tools;
+mod helpers;
+mod tool_authorization;
 
 use chatcmd_core::{
-    ArtifactId, ArtifactStore, ExecutionMode, TaskExecutionMode, TaskId, TaskStore,
+    Artifact, ArtifactId, ArtifactStore, ExecutionMode, TaskExecutionMode, TaskId, TaskStore,
 };
 use chatcmd_mcp::RuntimeApi as _;
 use chatcmd_runtime::{
-    OperationContext, RuntimeError, RuntimeResult, ShellCreateRequest, ShellWriteRequest,
+    CommandOutput, FsConflictPolicy, FsTransferRequest, OperationContext, RuntimeError,
+    RuntimeResult, ShellCreateRequest, ShellWriteRequest, ToolUsage,
 };
 use serde_json::{Value, json};
 
+use super::turn_file_changes::{FileChangeKind, capture_snapshot};
 use super::{
     RuntimeHost, filesystem_dispatch, inputs::*, invalid, now_ms, parse, storage_error, task_json,
     value,
 };
 
 impl RuntimeHost {
-    pub(super) async fn authorize_tool(&self, agent_id: &str, tool: &str) -> RuntimeResult<()> {
-        use chatcmd_core::{McpAgentStore as _, ToolCatalogStore as _};
-
-        let id = chatcmd_core::AgentId::new(agent_id)
-            .map_err(|_| invalid("agentId", "must be a non-empty string"))?;
-        self.repository
-            .agent(&id)
-            .await
-            .map_err(storage_error)?
-            .filter(|agent| agent.enabled)
-            .ok_or_else(|| RuntimeError::new("unauthorized", "agent is disabled or missing"))?;
-        if matches!(
-            tool,
-            "agent_user_message"
-                | "agent_progress"
-                | "agent_plan_question"
-                | "agent_subagent_start"
-                | "agent_subagent_wait"
-                | "agent_turn_complete"
-        ) {
-            return Ok(());
-        }
-        let allowed = self
-            .repository
-            .agent_allowed_tool_ids(&id)
-            .await
-            .map_err(storage_error)?;
-        let tools = self.repository.list_tools().await.map_err(storage_error)?;
-        if tools.iter().any(|candidate| {
-            candidate.key == tool && candidate.enabled && allowed.contains(&candidate.id)
-        }) {
-            Ok(())
-        } else {
-            Err(RuntimeError::new(
-                "policy_denied",
-                "agent tool allowlist denied this operation",
-            ))
-        }
-    }
-
     pub(super) async fn dispatch(
         &self,
         tool: &str,
@@ -64,7 +35,9 @@ impl RuntimeHost {
         let project_folder = if tool.starts_with("fs_")
             || tool.starts_with("git_")
             || tool == "shell_create"
+            || tool == "command_run"
             || tool == "workspace_roots"
+            || tool == "project_context"
             || matches!(tool, "skills_list" | "skill_read")
         {
             <Self as chatcmd_mcp::RuntimeApi>::project_folder(self, context.task_id.as_deref())
@@ -75,7 +48,7 @@ impl RuntimeHost {
         };
         let mut task_path_scopes = if tool.starts_with("fs_")
             || tool.starts_with("git_")
-            || matches!(tool, "shell_create" | "workspace_roots")
+            || matches!(tool, "command_run" | "shell_create" | "workspace_roots")
         {
             self.task_user_path_scopes(&context).await?
         } else {
@@ -102,6 +75,12 @@ impl RuntimeHost {
             .map(|workspace| self.git.with_workspace(workspace));
         let git = scoped_git.as_ref().unwrap_or(&self.git);
 
+        if is_filesystem_tool(tool) {
+            return self
+                .dispatch_filesystem_tool(tool, &context, arguments, workspace)
+                .await;
+        }
+
         match tool {
             "device_list" => value(vec![self.local_device()]),
             "device_get" => {
@@ -127,6 +106,7 @@ impl RuntimeHost {
                         .clone()
                         .ok_or_else(project_folder_required_for_shell)?,
                 };
+                self.enable_shell_file_watcher(&context);
                 let info = self
                     .shell
                     .create_with_additional_scopes(
@@ -148,6 +128,15 @@ impl RuntimeHost {
                 self.spawn_terminal_live_bridge(&context, &info);
                 value(info)
             }
+            "command_run" => {
+                self.dispatch_command_run(
+                    &context,
+                    arguments,
+                    project_folder.as_deref(),
+                    &task_path_scopes,
+                )
+                .await
+            }
             "shell_write" => {
                 let input: ShellWrite = parse(arguments)?;
                 let written = self
@@ -159,6 +148,8 @@ impl RuntimeHost {
                             session_id: input.session_id,
                             text: input.text,
                             append_new_line: input.append_new_line,
+                            input_kind: input.input_kind,
+                            sensitive: input.sensitive,
                         },
                     )
                     .await?;
@@ -166,9 +157,10 @@ impl RuntimeHost {
             }
             "shell_wait" => {
                 let input: ShellWait = parse(arguments)?;
-                let result = self
+                let (result, usage) = self
                     .shell
-                    .wait(
+                    .wait_with_context(
+                        &context,
                         &input.session_id,
                         Duration::from_millis(input.timeout_ms.clamp(1, 300_000)),
                     )
@@ -177,20 +169,21 @@ impl RuntimeHost {
                     self.update_session_status(&input.session_id, "exited", result.exit_code)
                         .await?;
                 }
-                value(result)
+                value_with_usage(result, usage)
             }
             "shell_read" => {
                 let input: ShellRead = parse(arguments)?;
-                let result = self
+                let (result, usage) = self
                     .shell
-                    .read(
+                    .read_with_context(
+                        &context,
                         &input.session_id,
                         input.after_sequence,
                         input.max_events.clamp(1, 2_000),
                     )
                     .await?;
                 self.persist_shell_events(&context, &result).await?;
-                value(result)
+                value_with_usage(result, usage)
             }
             "shell_signal" => {
                 let input: ShellSignalInput = parse(arguments)?;
@@ -203,7 +196,7 @@ impl RuntimeHost {
                 let input: ShellResize = parse(arguments)?;
                 value(
                     self.shell
-                        .resize(&input.session_id, input.columns, input.rows)
+                        .resize_with_context(&context, &input.session_id, input.columns, input.rows)
                         .await?,
                 )
             }
@@ -225,122 +218,145 @@ impl RuntimeHost {
                 Some(project_folder) => value(vec![project_folder]),
                 None => value(task_path_scopes),
             },
-            "fs_list" => {
-                let input: ListInput = parse(arguments)?;
+            "project_context" => {
+                let input: ProjectContextInput = parse(arguments)?;
+                let folder = project_folder.ok_or_else(|| {
+                    RuntimeError::new(
+                        "project_folder_required",
+                        "project context requires the current task project folder",
+                    )
+                })?;
                 value(
-                    workspace
-                        .list(&input.path, input.offset, input.limit)
+                    chatcmd_runtime::ProjectContextService::default()
+                        .load_with_options(&folder, &input.target_paths, input.policy, input.range)
                         .await?,
                 )
             }
-            "fs_search" => {
-                filesystem_dispatch::search(self, workspace, &context, parse(arguments)?).await
+            "blob_begin" => value(self.blob_store.begin(
+                &context,
+                parse::<chatcmd_runtime::BlobBeginRequest>(arguments)?,
+            )?),
+            "blob_write_chunk" => value(self.blob_store.write_chunk(
+                &context,
+                parse::<chatcmd_runtime::BlobChunkRequest>(arguments)?,
+            )?),
+            "blob_status" => {
+                let input: BlobStatusInput = parse(arguments)?;
+                value(self.blob_store.status_with_budget(
+                    &context,
+                    &input.upload_id,
+                    &input.budget,
+                )?)
             }
-            "fs_find" => {
-                let input: FindInput = parse(arguments)?;
-                value(
-                    workspace
-                        .find(
-                            &input.path,
-                            &input.pattern,
-                            input.max_results,
-                            input.max_depth,
-                        )
-                        .await?,
-                )
-            }
-            "fs_read_text" => {
-                let input: ReadInput = parse(arguments)?;
-                value(
-                    workspace
-                        .read_text_range(
-                            &input.path,
-                            input.max_characters,
-                            input.start_line,
-                            input.line_count,
-                        )
-                        .await?,
-                )
-            }
-            "fs_write_text" => {
-                filesystem_dispatch::write_text(workspace, &context, parse(arguments)?).await
-            }
-            "fs_replace_text" => {
-                filesystem_dispatch::replace_text(workspace, &context, parse(arguments)?).await
-            }
-            "fs_write_raw" => {
-                let input: WriteRawInput = parse(arguments)?;
-                value(
-                    workspace
-                        .write_raw(&context, &input.path, &input.base64, input.overwrite)
-                        .await?,
-                )
-            }
-            "fs_stat" => {
-                let input: PathInput = parse(arguments)?;
-                value(workspace.stat(&input.path).await?)
-            }
-            "fs_create_directory" => {
-                let input: PathInput = parse(arguments)?;
-                value(workspace.create_directory(&input.path).await?)
-            }
-            "fs_copy" => {
-                let input: TransferInput = parse(arguments)?;
-                value(
-                    workspace
-                        .copy(&context, &input.source, &input.destination, input.overwrite)
-                        .await?,
-                )
-            }
-            "fs_move" => {
-                let input: TransferInput = parse(arguments)?;
-                value(
-                    workspace
-                        .move_path(&context, &input.source, &input.destination, input.overwrite)
-                        .await?,
-                )
-            }
-            "fs_delete" => {
-                filesystem_dispatch::delete(workspace, &context, parse(arguments)?).await
+            "blob_seal" => value(self.blob_store.seal(
+                &context,
+                parse::<chatcmd_runtime::BlobSealRequest>(arguments)?,
+            )?),
+            "blob_abort" => {
+                let input: BlobStatusInput = parse(arguments)?;
+                value(self.blob_store.abort_with_budget(
+                    &context,
+                    &input.upload_id,
+                    &input.budget,
+                )?)
             }
             "git_status" => {
-                let input: CwdInput = parse(arguments)?;
+                let input: GitCwdInput = parse(arguments)?;
                 let cwd = self.resolve_git_cwd(&context, input.cwd).await?;
-                value(git.status(&cwd).await?)
+                let output = git
+                    .status_with_options(&cwd, &input.options, context.cancellation.clone())
+                    .await?;
+                value(self.register_git_artifact(&context, output).await?)
             }
             "git_diff" => {
                 let input: GitDiff = parse(arguments)?;
                 let cwd = self.resolve_git_cwd(&context, input.cwd).await?;
-                value(
-                    git.diff(&cwd, input.staged, input.stat, input.path.as_deref())
-                        .await?,
-                )
+                let output = git
+                    .diff_with_options(
+                        &cwd,
+                        input.staged,
+                        input.stat,
+                        input.path.as_deref(),
+                        &input.options,
+                        context.cancellation.clone(),
+                    )
+                    .await?;
+                value(self.register_git_artifact(&context, output).await?)
             }
             "git_log" => {
                 let input: GitLog = parse(arguments)?;
                 let cwd = self.resolve_git_cwd(&context, input.cwd).await?;
-                value(git.log(&cwd, input.count, input.path.as_deref()).await?)
+                let output = git
+                    .log_with_options(
+                        &cwd,
+                        input.count,
+                        input.path.as_deref(),
+                        &input.options,
+                        context.cancellation.clone(),
+                    )
+                    .await?;
+                value(self.register_git_artifact(&context, output).await?)
             }
             "git_branch" => {
-                let input: CwdInput = parse(arguments)?;
+                let input: GitCwdInput = parse(arguments)?;
                 let cwd = self.resolve_git_cwd(&context, input.cwd).await?;
-                value(git.branch(&cwd).await?)
+                let output = git
+                    .branch_with_options(&cwd, &input.options, context.cancellation.clone())
+                    .await?;
+                value(self.register_git_artifact(&context, output).await?)
             }
             "git_show" => {
                 let input: GitShow = parse(arguments)?;
                 let cwd = self.resolve_git_cwd(&context, input.cwd).await?;
-                value(
-                    git.show(&cwd, &input.revision, input.path.as_deref())
-                        .await?,
-                )
+                let output = git
+                    .show_with_options(
+                        &cwd,
+                        &input.revision,
+                        input.path.as_deref(),
+                        &input.options,
+                        context.cancellation.clone(),
+                    )
+                    .await?;
+                value(self.register_git_artifact(&context, output).await?)
             }
             "git_commit" => {
                 let input: GitCommit = parse(arguments)?;
                 let cwd = self.resolve_git_cwd(&context, input.cwd).await?;
-                value(
-                    git.commit(&cwd, &input.message, input.all, &input.paths)
+                if input.preview_only {
+                    return value(
+                        git.preview_commit_with_options(
+                            &cwd,
+                            input.all,
+                            &input.paths,
+                            &input.options,
+                            context.cancellation.clone(),
+                        )
                         .await?,
-                )
+                    );
+                }
+                let output = if let Some(preview) = input.expected_preview.as_ref() {
+                    git.commit_previewed_with_options(
+                        &cwd,
+                        &input.message,
+                        input.all,
+                        &input.paths,
+                        preview,
+                        &input.options,
+                        context.cancellation.clone(),
+                    )
+                    .await?
+                } else {
+                    git.commit_with_options(
+                        &cwd,
+                        &input.message,
+                        input.all,
+                        &input.paths,
+                        &input.options,
+                        context.cancellation.clone(),
+                    )
+                    .await?
+                };
+                value(self.register_git_artifact(&context, output).await?)
             }
             "process_list" => value(self.process.list().await?),
             "process_inspect" => {
@@ -405,6 +421,7 @@ impl RuntimeHost {
                 Ok(json!({ "mode": mode.as_str() }))
             }
             "task_artifact_list" => self.list_artifacts(&context).await,
+            "task_artifact_create" => self.create_artifact(&context, arguments).await,
             "task_artifact_read" => self.read_artifact(&context, arguments).await,
             "agent_user_message" => {
                 let input: UserMessageInput = parse(arguments)?;
@@ -422,93 +439,33 @@ impl RuntimeHost {
             }
             "agent_plan_question" => {
                 let input: PlanQuestionInput = parse(arguments)?;
-                self.ask_plan_question(&context, input.question, input.options)
-                    .await
+                self.ask_plan_question_with_kind(
+                    &context,
+                    input.question,
+                    input.options,
+                    input.question_kind,
+                )
+                .await
             }
             "agent_subagent_start" => {
                 let input: SubagentStartInput = parse(arguments)?;
-                self.register_subagent(&context, &input.name, &input.request)
-                    .await
+                super::subagent_contract::validate_delegation_contract(&input)?;
+                self.register_subagent(
+                    &context,
+                    &input.name,
+                    &input.request,
+                    input.approval_grant.as_ref(),
+                )
+                .await
             }
             "agent_subagent_wait" => {
                 let input: SubagentWaitInput = parse(arguments)?;
-                self.wait_for_subagents(&context, input.timeout_ms).await
+                self.wait_for_subagent_reports(&context, &input).await
             }
             "agent_turn_complete" => self.complete_agent_turn(&context, arguments).await,
             _ => Err(RuntimeError::new("tool_not_found", "unknown MCP tool")),
         }
     }
-
-    async fn list_artifacts(&self, context: &OperationContext) -> RuntimeResult<Value> {
-        use sqlx::Row as _;
-
-        let task_id = context_task_id(context)?;
-        let rows = sqlx::query("SELECT id,relative_path,media_type,size_bytes,created_at_ms FROM artifact_registry WHERE task_id=? ORDER BY created_at_ms,id")
-            .bind(task_id.as_str())
-            .fetch_all(self.repository.pool())
-            .await
-            .map_err(|_| RuntimeError::new("storage_error", "artifact list unavailable"))?;
-        Ok(Value::Array(
-            rows.iter()
-                .map(|row| {
-                    json!({
-                        "id": row.get::<String, _>("id"),
-                        "relativePath": row.get::<String, _>("relative_path"),
-                        "mediaType": row.get::<Option<String>, _>("media_type"),
-                        "sizeBytes": row.get::<i64, _>("size_bytes"),
-                        "createdAtMs": row.get::<i64, _>("created_at_ms")
-                    })
-                })
-                .collect(),
-        ))
-    }
-
-    async fn read_artifact(
-        &self,
-        context: &OperationContext,
-        arguments: Value,
-    ) -> RuntimeResult<Value> {
-        let task_id = context_task_id(context)?;
-        let input: ArtifactInput = parse(arguments)?;
-        let id =
-            ArtifactId::new(input.artifact_id).map_err(|error| invalid("artifactId", error))?;
-        let artifact = self
-            .repository
-            .artifact(&id)
-            .await
-            .map_err(storage_error)?
-            .filter(|artifact| artifact.task_id.as_str() == task_id.as_str())
-            .ok_or_else(|| RuntimeError::new("artifact_not_found", "artifact was not found"))?;
-        let path = self
-            .workspace
-            .roots()
-            .iter()
-            .map(|root| root.join(&artifact.relative_path))
-            .find(|path| path.is_file())
-            .ok_or_else(|| {
-                RuntimeError::new("artifact_not_found", "artifact file was not found")
-            })?;
-        let read = self.workspace.read_text(&path, 200_000).await?;
-        Ok(json!({
-            "artifact": {
-                "id": artifact.id.as_str(), "taskId": artifact.task_id.as_str(),
-                "sessionId": artifact.session_id.map(|id| id.into_string()),
-                "relativePath": artifact.relative_path, "mediaType": artifact.media_type,
-                "sizeBytes": artifact.size_bytes, "sha256Hex": artifact.sha256_hex
-            },
-            "content": read.content, "truncated": read.truncated
-        }))
-    }
 }
 
-fn context_task_id(context: &OperationContext) -> RuntimeResult<TaskId> {
-    TaskId::new(context.task_id.as_deref().unwrap_or_default())
-        .map_err(|error| invalid("taskId", error))
-}
-
-fn project_folder_required_for_shell() -> RuntimeError {
-    RuntimeError::new(
-        "project_folder_required",
-        "shell working directory requires the task project folder or an explicit absolute working path",
-    )
-}
+use helpers::*;

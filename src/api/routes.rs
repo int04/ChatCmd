@@ -12,10 +12,11 @@ use axum::{
 use crate::websocket::AppState;
 
 use super::{
-    Problem, agents::*, chatgpt::*, chatgpt_completion::*, chatgpt_queue::*, crypto, data::*,
+    Problem, agents::*, auth::*, chatgpt::*, chatgpt_compact::*, chatgpt_completion::*,
+    chatgpt_native::*, chatgpt_observation::*, chatgpt_queue::*, chatgpt_result::*, data::*,
     folders::*, overview::*, plan_questions::*, sessions::*, settings::*, skills::*,
-    subagent_fallback::*, system::*, task_controls::*, task_delete::*, task_views::*, tunnels::*,
-    workspaces::*,
+    subagent_fallback::*, system::*, task_controls::*, task_delete::*, task_execution_mode::*,
+    task_views::*, tunnels::*, updates::*, workspaces::*,
 };
 
 pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
@@ -49,6 +50,23 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
             "/workspaces/projects/order",
             axum::routing::put(reorder_workspace_projects),
         )
+        .route(
+            "/workspaces/projects/{id}",
+            axum::routing::put(update_workspace_project).delete(delete_workspace_project),
+        )
+        .route(
+            "/tasks/{task_id}/chatgpt/compact",
+            get(task_compact).post(start_compact),
+        )
+        .route("/chatgpt/compact/pending", get(pending_compact))
+        .route("/chatgpt/compact/{id}", get(get_compact))
+        .route("/chatgpt/compact/{id}/checkpoint", post(checkpoint_compact))
+        .route(
+            "/chatgpt/compact/{id}/resume",
+            post(super::chatgpt_compact_resume::resume_compact),
+        )
+        .route("/chatgpt/capture/capabilities", get(capture_capabilities))
+        .route("/chatgpt/capture/turns", post(native_turn))
         .route("/chatgpt/requests", post(create_request))
         .route("/chatgpt/requests/{id}", get(request))
         .route("/chatgpt/tasks/{task_id}", get(task_bridge))
@@ -73,6 +91,10 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         )
         .route("/chatgpt/bridge/{request_id}/result", post(bridge_result))
         .route(
+            "/chatgpt/bridge/{request_id}/observation",
+            post(bridge_observation),
+        )
+        .route(
             "/chatgpt/bridge/{request_id}/browser-completed",
             post(bridge_browser_completed),
         )
@@ -83,6 +105,10 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route(
             "/subagents/{id}/fallback/started",
             post(subagent_fallback_started),
+        )
+        .route(
+            "/subagents/{id}/fallback/heartbeat",
+            post(subagent_fallback_heartbeat),
         )
         .route(
             "/subagents/{id}/fallback/result",
@@ -111,6 +137,10 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
             post(resolve_task_approval),
         )
         .route(
+            "/tasks/{id}/approval-grants/{grant_id}/revoke",
+            post(revoke_task_approval_grant),
+        )
+        .route(
             "/tasks/{task_id}/activities/{activity_id}/stop",
             post(stop_task_activity),
         )
@@ -130,21 +160,30 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
         .route("/skills/{id}/options", patch(set_skill_options))
         .route("/skills/{id}/icon", get(skill_icon))
         .route("/settings", get(settings).put(save_settings))
+        .route("/updates/status", get(update_status))
+        .route("/updates/check", post(check_update))
+        .route("/updates/start", post(start_update))
+        .route("/updates/restart", post(restart_update))
         .route("/diagnostics/database", get(database_diagnostics))
+        .route("/diagnostics/tools", get(tool_diagnostics))
         .route("/diagnostics/logs", get(diagnostic_logs))
         .route(
             "/diagnostics/user-data",
             axum::routing::delete(delete_all_user_data),
-        );
+        )
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_gui_auth,
+        ));
     let local = Router::new()
-        .route("/crypto/handshake", post(crypto::handshake))
+        .route("/auth/status", get(auth_status))
+        .route("/auth/setup", post(setup))
+        .route("/auth/login", post(login))
+        .route("/auth/logout", post(logout))
+        .route("/auth/change-password", post(change_password))
         .route("/system/elevation", get(elevation_status))
         .route("/system/elevation/restart", post(restart_elevated))
         .merge(protected)
-        .layer(middleware::from_fn_with_state(
-            state,
-            crypto::encrypted_local_api,
-        ))
         .layer(middleware::from_fn(management_header));
     Router::new()
         .route("/ping", get(ping))

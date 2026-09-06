@@ -33,6 +33,11 @@ async fn runtime_api_resolves_task_project_folder() {
 async fn user_message_and_workspace_roots_report_the_task_project_folder() {
     let (host, agent_id, configured_workspace) = test_host().await;
     let project = TempDir::new().expect("external task project");
+    std::fs::write(
+        project.path().join("AGENTS.md"),
+        "project-specific guidance",
+    )
+    .expect("write project rules");
     let expected = project
         .path()
         .canonicalize()
@@ -55,6 +60,15 @@ async fn user_message_and_workspace_roots_report_the_task_project_folder() {
         .await
         .expect("sync task project folder");
     assert_eq!(accepted["projectFolder"], expected);
+    assert_eq!(accepted["projectContext"]["status"], "available");
+    assert_eq!(accepted["projectContext"]["ruleCount"], 1);
+    assert_eq!(accepted["projectContext"]["truncated"], false);
+    assert!(
+        accepted["projectContext"]["contextRef"]
+            .as_str()
+            .is_some_and(|value| value.starts_with("project-context:sha256:"))
+    );
+    assert!(accepted["projectContext"].get("rules").is_none());
 
     let mut roots_context =
         OperationContext::new("task-workspace-roots", &agent_id, "workspace_roots");
@@ -138,6 +152,12 @@ async fn relative_filesystem_path_uses_task_project_folder_outside_configured_ro
 #[tokio::test]
 async fn delegated_child_inherits_project_folder_and_keeps_internal_user_message_sync() {
     let (host, agent_id, directory) = test_host().await;
+    sqlx::query(
+        "INSERT INTO settings(key,value_json,updated_at_ms) VALUES('ui_subagentConcurrency','5',0)",
+    )
+    .execute(host.repository.pool())
+    .await
+    .expect("enable child agents for this delegation fixture");
     let project = directory.path().join("delegated-project");
     std::fs::create_dir_all(&project).expect("create delegated project");
     let parent_scope = "conversation-subagent-internal-sync";

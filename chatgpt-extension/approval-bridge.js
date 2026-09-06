@@ -1,19 +1,5 @@
 const APPROVAL_BASE_URL_KEY = 'chatcmd-approval-base-url';
 const DEFAULT_APPROVAL_BASE_URL = 'http://127.0.0.1:8080';
-const APPROVAL_WS_PROTOCOL = 1;
-const APPROVAL_WS_AAD = new TextEncoder().encode('chatcmd/ws/v1');
-const APPROVAL_WS_HANDSHAKE_AAD = new TextEncoder().encode('chatcmd/ws/handshake-obfuscation/v1');
-const APPROVAL_WS_HKDF_INFO = new TextEncoder().encode('chatcmd/ws/aes-256-gcm/v1');
-const APPROVAL_WS_HANDSHAKE_KEY_A = new Uint8Array([
-  0x9d, 0x23, 0x71, 0xc4, 0x5a, 0xe8, 0x16, 0x3b, 0x42, 0xaf, 0xd1, 0x67, 0x08, 0xbe, 0x95, 0xf2,
-  0x31, 0x6c, 0xa9, 0x0d, 0x77, 0xd4, 0x58, 0x83, 0xe1, 0x4f, 0xb6, 0x2a, 0xc8, 0x19, 0x65, 0x90,
-]);
-const APPROVAL_WS_HANDSHAKE_KEY_B = new Uint8Array([
-  0x4a, 0x91, 0xc6, 0x3e, 0xeb, 0x52, 0xa7, 0xd0, 0xf5, 0x1b, 0x64, 0x92, 0xbd, 0x07, 0x2c, 0x49,
-  0xe8, 0xd3, 0x15, 0xba, 0x20, 0x6f, 0xc1, 0x34, 0x97, 0xaa, 0x03, 0xfd, 0x5e, 0xb2, 0x48, 0x27,
-]);
-const approvalTextEncoder = new TextEncoder();
-const approvalTextDecoder = new TextDecoder();
 const approvalItems = new Map();
 let approvalBaseUrl = DEFAULT_APPROVAL_BASE_URL;
 let approvalSocket = null;
@@ -60,52 +46,26 @@ function connectApprovalSocket() {
     return;
   }
   approvalSocket = socket;
-  socket.binaryType = 'arraybuffer';
-  let keyPair;
-  let sessionKey;
   let heartbeatTimer = null;
-  let messageChain = Promise.resolve();
 
   socket.onopen = () => {
-    void (async () => {
-      try {
-        keyPair = await crypto.subtle.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits']);
-        const publicKey = await crypto.subtle.exportKey('raw', keyPair.publicKey);
-        const handshakeKey = await approvalHandshakeKey();
-        const packet = await encryptApprovalHandshake(handshakeKey, {
-          type: 'crypto.clientHello',
-          protocol: APPROVAL_WS_PROTOCOL,
-          publicKey: approvalToBase64Url(new Uint8Array(publicKey)),
-        });
-        socket.send(approvalArrayBuffer(packet));
-      } catch {
-        socket.close();
-      }
-    })();
+    socket.send(JSON.stringify({ type: 'client.ready', client: 'chatgpt-extension' }));
+    heartbeatTimer = setInterval(() => {
+      if (socket.readyState !== WebSocket.OPEN) return;
+      try { socket.send(JSON.stringify({ type: 'client.ping' })); } catch { socket.close(); }
+    }, 20_000);
+    approvalReconnectAttempt = 0;
+    void resyncApprovalQueue();
   };
 
   socket.onmessage = ({ data }) => {
-    messageChain = messageChain.then(async () => {
-      if (!sessionKey) {
-        if (!keyPair || typeof data === 'string') throw new Error('Invalid approval WebSocket handshake frame');
-        const handshakeKey = await approvalHandshakeKey();
-        const hello = await decryptApprovalHandshake(handshakeKey, data);
-        if (hello.type !== 'crypto.serverHello' || hello.protocol !== APPROVAL_WS_PROTOCOL) throw new Error('Unsupported approval WebSocket protocol');
-        sessionKey = await deriveApprovalSessionKey(keyPair.privateKey, hello);
-        await sendApprovalEncrypted(socket, sessionKey, { type: 'client.ready', client: 'chatgpt-extension' });
-        if (heartbeatTimer) clearInterval(heartbeatTimer);
-        heartbeatTimer = setInterval(() => {
-          if (!sessionKey || socket.readyState !== WebSocket.OPEN) return;
-          void sendApprovalEncrypted(socket, sessionKey, { type: 'client.ping' }).catch(() => socket.close());
-        }, 20_000);
-        approvalReconnectAttempt = 0;
-        await resyncApprovalQueue();
-        return;
-      }
-      if (typeof data === 'string') throw new Error('Plaintext approval WebSocket frame is forbidden');
-      const event = await decryptApprovalEvent(sessionKey, data);
-      await handleApprovalEvent(event);
-    }).catch(() => socket.close());
+    if (typeof data !== 'string') {
+      socket.close();
+      return;
+    }
+    let event;
+    try { event = JSON.parse(data); } catch { socket.close(); return; }
+    void handleApprovalEvent(event).catch(() => socket.close());
   };
   socket.onerror = () => socket.close();
   socket.onclose = () => {
@@ -277,66 +237,5 @@ function sortedApprovalItems() {
 function conversationApprovalKey(taskId) { return `conversation:${taskId}`; }
 function activityApprovalKey(taskId, activityId) { return `activity:${taskId}:${activityId}`; }
 function planQuestionKey(questionId) { return `plan:${questionId}`; }
-
-async function approvalHandshakeKey() {
-  const keyBytes = new Uint8Array(32);
-  for (let index = 0; index < keyBytes.length; index += 1) keyBytes[index] = APPROVAL_WS_HANDSHAKE_KEY_A[index] ^ APPROVAL_WS_HANDSHAKE_KEY_B[index];
-  const key = await crypto.subtle.importKey('raw', approvalArrayBuffer(keyBytes), { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
-  keyBytes.fill(0);
-  return key;
-}
-
-async function encryptApprovalHandshake(key, value) {
-  const nonce = crypto.getRandomValues(new Uint8Array(12));
-  const plaintext = approvalTextEncoder.encode(JSON.stringify(value));
-  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce, additionalData: APPROVAL_WS_HANDSHAKE_AAD, tagLength: 128 }, key, plaintext));
-  const packet = new Uint8Array(1 + nonce.length + ciphertext.length);
-  packet[0] = APPROVAL_WS_PROTOCOL;
-  packet.set(nonce, 1);
-  packet.set(ciphertext, 13);
-  return packet;
-}
-
-async function decryptApprovalHandshake(key, data) {
-  const packet = await approvalBytes(data);
-  if (packet.length <= 13 || packet[0] !== APPROVAL_WS_PROTOCOL) throw new Error('Invalid approval handshake frame');
-  const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: packet.slice(1, 13), additionalData: APPROVAL_WS_HANDSHAKE_AAD, tagLength: 128 }, key, packet.slice(13));
-  return JSON.parse(approvalTextDecoder.decode(plaintext));
-}
-
-async function deriveApprovalSessionKey(privateKey, hello) {
-  const publicKey = await crypto.subtle.importKey('raw', approvalArrayBuffer(approvalFromBase64Url(hello.publicKey)), { name: 'ECDH', namedCurve: 'P-256' }, false, []);
-  const sharedSecret = await crypto.subtle.deriveBits({ name: 'ECDH', public: publicKey }, privateKey, 256);
-  const material = await crypto.subtle.importKey('raw', sharedSecret, 'HKDF', false, ['deriveKey']);
-  new Uint8Array(sharedSecret).fill(0);
-  return crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: approvalArrayBuffer(approvalFromBase64Url(hello.salt)), info: APPROVAL_WS_HKDF_INFO }, material, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
-}
-
-async function sendApprovalEncrypted(socket, key, value) {
-  const nonce = crypto.getRandomValues(new Uint8Array(12));
-  const plaintext = approvalTextEncoder.encode(JSON.stringify(value));
-  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce, additionalData: APPROVAL_WS_AAD, tagLength: 128 }, key, plaintext));
-  const packet = new Uint8Array(1 + nonce.length + ciphertext.length);
-  packet[0] = APPROVAL_WS_PROTOCOL;
-  packet.set(nonce, 1);
-  packet.set(ciphertext, 13);
-  socket.send(packet.buffer);
-}
-
-async function decryptApprovalEvent(key, data) {
-  const packet = await approvalBytes(data);
-  if (packet.length <= 13 || packet[0] !== APPROVAL_WS_PROTOCOL) throw new Error('Invalid encrypted approval frame');
-  const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: packet.slice(1, 13), additionalData: APPROVAL_WS_AAD, tagLength: 128 }, key, packet.slice(13));
-  return JSON.parse(approvalTextDecoder.decode(plaintext));
-}
-
-async function approvalBytes(data) {
-  if (data instanceof ArrayBuffer) return new Uint8Array(data);
-  if (data instanceof Blob) return new Uint8Array(await data.arrayBuffer());
-  throw new Error('Invalid approval WebSocket payload');
-}
-function approvalToBase64Url(bytes) { let binary = ''; for (const byte of bytes) binary += String.fromCharCode(byte); return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, ''); }
-function approvalFromBase64Url(value) { const base64 = value.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(value.length / 4) * 4, '='); const binary = atob(base64); return Uint8Array.from(binary, (char) => char.charCodeAt(0)); }
-function approvalArrayBuffer(bytes) { const copy = new Uint8Array(bytes.byteLength); copy.set(bytes); return copy.buffer; }
 
 void startApprovalBridge();
