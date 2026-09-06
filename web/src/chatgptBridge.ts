@@ -3,6 +3,8 @@ import { tr } from './i18n';
 const REQUEST_TYPE = 'chatcmd-chatgpt-extension-request';
 const RESPONSE_TYPE = 'chatcmd-chatgpt-extension-response';
 
+export const REQUIRED_CHATGPT_EXTENSION_VERSION = '0.1.9';
+
 type BridgeCommand =
   | { action: 'compact-resume'; nonce: string; jobId: string; taskId: string; localBaseUrl: string }
   | { action: 'ping'; nonce: string; conversationUrl?: string }
@@ -20,14 +22,15 @@ type BridgeCommand =
   | { action: 'recover-identity'; nonce: string; requestId: string; submittedContent: string; localBaseUrl: string };
 
 export type ChatGptExtensionLog = { at: string; level: 'info' | 'warn' | 'error' | string; source: string; message: string };
-type BridgeResponse = { nonce: string; ok: boolean; recovered?: boolean; reason?: string; error?: string; model?: string; logs?: ChatGptExtensionLog[]; chatGptTabOpen?: boolean; conversationTabOpen?: boolean; conversationReady?: boolean; tabId?: number; tabUrl?: string };
-export type ChatGptExtensionStatus = { ready: boolean; chatGptTabOpen: boolean; conversationTabOpen: boolean; conversationReady: boolean; tabId?: number; tabUrl?: string };
+type BridgeResponse = { nonce: string; ok: boolean; recovered?: boolean; reason?: string; error?: string; model?: string; logs?: ChatGptExtensionLog[]; extensionVersion?: string; chatGptTabOpen?: boolean; conversationTabOpen?: boolean; conversationReady?: boolean; tabId?: number; tabUrl?: string };
+export type ChatGptExtensionStatus = { ready: boolean; extensionVersion?: string; chatGptTabOpen: boolean; conversationTabOpen: boolean; conversationReady: boolean; tabId?: number; tabUrl?: string };
 
 export async function chatGptExtensionStatus(conversationUrl?: string): Promise<ChatGptExtensionStatus> {
   try {
     const response = await bridge({ action: 'ping', nonce: nonce(), conversationUrl }, 1_500);
     return {
       ready: true,
+      extensionVersion: response.extensionVersion,
       chatGptTabOpen: response.chatGptTabOpen === true,
       conversationTabOpen: response.conversationTabOpen === true || (!conversationUrl && response.chatGptTabOpen === true),
       conversationReady: conversationUrl ? response.conversationReady === true : true,

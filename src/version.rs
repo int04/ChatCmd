@@ -23,7 +23,7 @@ fn installed_version() -> Option<String> {
     is_valid_version(value).then(|| value.to_owned())
 }
 
-fn install_root(current_exe: &Path) -> Option<PathBuf> {
+pub(crate) fn install_root(current_exe: &Path) -> Option<PathBuf> {
     #[cfg(target_os = "macos")]
     if let Some(app_bundle) = current_exe.ancestors().find(|path| {
         path.extension()

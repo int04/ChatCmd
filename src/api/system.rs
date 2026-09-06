@@ -1,10 +1,10 @@
-use std::time::Duration;
+use std::{path::Path, process::Command, time::Duration};
+
+#[cfg(target_os = "windows")]
+use std::path::PathBuf;
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
-use std::{
-    path::Path,
-    process::{Command, Stdio},
-};
+use std::process::Stdio;
 
 #[cfg(target_os = "macos")]
 use std::{
@@ -16,7 +16,7 @@ use std::{
 use std::os::windows::process::CommandExt;
 
 use axum::Json;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::Problem;
 
@@ -47,6 +47,186 @@ pub(super) async fn exit_application() -> Json<ExitApplicationResponse> {
     });
 
     Json(ExitApplicationResponse { closing: true })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct OpenSystemTargetResponse {
+    opened: bool,
+    target: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct OpenBrowserExtensionsRequest {
+    browser: String,
+}
+
+pub(super) async fn open_chatgpt_extension_folder()
+-> Result<Json<OpenSystemTargetResponse>, Problem> {
+    let executable = std::env::current_exe()
+        .map_err(|error| system_open_problem("Extension folder unavailable", error.to_string()))?;
+    let install_root = crate::version::install_root(&executable).ok_or_else(|| {
+        system_open_problem(
+            "Extension folder unavailable",
+            "Could not resolve the ChatCMD install folder.",
+        )
+    })?;
+    let extension_dir = install_root.join("chatgpt-extension");
+    if !extension_dir.is_dir() {
+        return Err(Problem::new(
+            axum::http::StatusCode::NOT_FOUND,
+            "Extension folder not found",
+            format!(
+                "The packaged ChatGPT extension folder was not found at {}.",
+                extension_dir.display()
+            ),
+        ));
+    }
+    open_path(&extension_dir)
+        .map_err(|error| system_open_problem("Could not open extension folder", error))?;
+    Ok(Json(OpenSystemTargetResponse {
+        opened: true,
+        target: extension_dir.to_string_lossy().into_owned(),
+    }))
+}
+
+pub(super) async fn open_browser_extensions(
+    Json(request): Json<OpenBrowserExtensionsRequest>,
+) -> Result<Json<OpenSystemTargetResponse>, Problem> {
+    let (browser, target) = match request.browser.trim().to_ascii_lowercase().as_str() {
+        "chrome" => ("chrome", "chrome://extensions/"),
+        "edge" => ("edge", "edge://extensions/"),
+        "brave" => ("brave", "brave://extensions/"),
+        _ => {
+            return Err(Problem::new(
+                axum::http::StatusCode::BAD_REQUEST,
+                "Unsupported browser",
+                "Browser must be chrome, edge, or brave.",
+            ));
+        }
+    };
+    open_browser_target(browser, target)
+        .map_err(|error| system_open_problem("Could not open browser extensions", error))?;
+    Ok(Json(OpenSystemTargetResponse {
+        opened: true,
+        target: target.to_owned(),
+    }))
+}
+
+fn system_open_problem(title: &'static str, detail: impl Into<String>) -> Problem {
+    Problem::new(
+        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+        title,
+        detail.into(),
+    )
+}
+
+fn open_path(path: &Path) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("explorer.exe")
+            .arg(path)
+            .spawn()
+            .map_err(|error| format!("failed to open Explorer: {error}"))?;
+        return Ok(());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("/usr/bin/open")
+            .arg(path)
+            .spawn()
+            .map_err(|error| format!("failed to open Finder: {error}"))?;
+        return Ok(());
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        Command::new("xdg-open")
+            .arg(path)
+            .spawn()
+            .map_err(|error| format!("failed to open file manager: {error}"))?;
+        Ok(())
+    }
+}
+
+fn open_browser_target(browser: &str, target: &str) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        for executable in windows_browser_candidates(browser) {
+            let explicit_path = executable.components().count() > 1;
+            if explicit_path && !executable.is_file() {
+                continue;
+            }
+            if Command::new(&executable).arg(target).spawn().is_ok() {
+                return Ok(());
+            }
+        }
+        return Err(format!(
+            "Could not find a supported {browser} executable on this computer."
+        ));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let application = match browser {
+            "edge" => "Microsoft Edge",
+            "brave" => "Brave Browser",
+            _ => "Google Chrome",
+        };
+        let status = Command::new("/usr/bin/open")
+            .args(["-a", application, target])
+            .status()
+            .map_err(|error| format!("failed to launch {application}: {error}"))?;
+        return status
+            .success()
+            .then_some(())
+            .ok_or_else(|| format!("{application} could not open {target}."));
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        let candidates: &[&str] = match browser {
+            "edge" => &["microsoft-edge", "microsoft-edge-stable"],
+            "brave" => &["brave-browser", "brave-browser-stable"],
+            _ => &[
+                "google-chrome",
+                "google-chrome-stable",
+                "chromium",
+                "chromium-browser",
+            ],
+        };
+        for executable in candidates {
+            if Command::new(executable).arg(target).spawn().is_ok() {
+                return Ok(());
+            }
+        }
+        Err(format!(
+            "Could not find a supported {browser} executable on this computer."
+        ))
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn windows_browser_candidates(browser: &str) -> Vec<PathBuf> {
+    let (executable, vendor_path) = match browser {
+        "edge" => ("msedge.exe", ["Microsoft", "Edge", "Application"]),
+        "brave" => (
+            "brave.exe",
+            ["BraveSoftware", "Brave-Browser", "Application"],
+        ),
+        _ => ("chrome.exe", ["Google", "Chrome", "Application"]),
+    };
+    let mut candidates = Vec::new();
+    for variable in ["LOCALAPPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)"] {
+        if let Some(root) = std::env::var_os(variable) {
+            let mut path = PathBuf::from(root);
+            for segment in vendor_path {
+                path.push(segment);
+            }
+            path.push(executable);
+            candidates.push(path);
+        }
+    }
+    candidates.push(PathBuf::from(executable));
+    candidates
 }
 
 pub(super) async fn restart_elevated() -> Result<Json<ElevationStatus>, Problem> {
