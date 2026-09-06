@@ -72,6 +72,50 @@ The automated macOS packages are ad-hoc signed and are not Apple-notarized.
 
 The authoritative method-by-method reference is in [docs/mcp_method.md](docs/mcp_method.md).
 
+### Sub-Agent orchestration
+
+Sub-Agents let a coordinator split a larger task into smaller delegated jobs that can run independently and, when useful, in parallel. Each Sub-Agent is represented by its own child task, while remaining attached to the parent task and root turn so ChatCMD can supervise the entire delegation tree from one workflow.
+
+How it works:
+
+1. **Delegate a focused job.** The parent creates or reuses a child through `agent_subagent_start`, providing a name, request, and optional constraints such as allowed files, allowed effects, dependencies, acceptance criteria, project context, and a bounded safe-read approval grant.
+2. **Reserve and claim a child task.** ChatCMD creates a deterministic child task and Sub-Agent run, prevents duplicate workers for the same delegation, and enforces the global Sub-Agent concurrency limit configured under **Settings > Execution**.
+3. **Run with the same safety boundaries.** Delegation can only narrow server policy. A child does not receive unrestricted tool access: normal tool authorization and approval rules still apply. An optional `approvalGrant` can inherit only a bounded portion of an already approved parent safe-read grant; Git, process, write, and agent-lifecycle operations continue through their normal approval path.
+4. **Support nested delegation without deadlocking the tree.** A child can create its own Sub-Agent, so parent → child → grandchild workflows are supported. All descendants share the same global concurrency budget; when a nested child cannot acquire a slot, it must continue that delegated work locally instead of waiting indefinitely.
+5. **Supervise lifecycle and failures.** Sub-Agent runs move through pending/running/terminal states, publish live status to the task timeline, refresh leases with heartbeats, and are cleaned up by watchdog logic if a worker restarts, stops heartbeating, or exceeds its runtime deadline. The ChatGPT browser extension can also act as a fallback worker when native delegation is unavailable.
+6. **Return durable results to the coordinator.** `agent_subagent_wait` waits on the whole descendant tree and reads persisted final reports from SQLite, including grandchildren. Reports carry the final content plus normalized work outcome, blockers, limitations, child verification metadata, and evidence references. Lifecycle completion is kept separate from proof that the delegated objective actually succeeded, so the parent remains responsible for integrating and verifying child work before finalizing.
+
+This makes Sub-Agents useful for parallel code inspection, splitting research across components, delegating focused implementation or review work, and building multi-level agent workflows without losing task history, permission boundaries, or final-result traceability. See [docs/subagent-reports.md](docs/subagent-reports.md) and [docs/subagent-approval-grants.md](docs/subagent-approval-grants.md) for the detailed report and permission model.
+
+### Follow-up messages: queue or send immediately
+
+While ChatGPT is still working, ChatCMD lets you prepare the next instruction without waiting for the current response to finish. The task composer exposes two different delivery modes:
+
+- **Queue another message (`Gửi thêm tin nhắn`):** adds the message to the task's persistent ChatGPT queue. ChatCMD keeps it waiting until the current conversation is idle, the browser bridge is connected, the exact ChatGPT tab is open, and the UI is ready for another prompt; it then sends the first queued message automatically.
+- **Send immediate message (`Gửi ngay tin nhắn`):** marks the message as `immediate`, allowing the AI to receive it on its next MCP call in the same conversation instead of waiting for the normal browser-send window. If the active turn ends before that happens, the message remains available as a normal queued follow-up rather than being lost.
+
+Queued follow-ups are manageable directly from the task UI: messages can be reordered, edited, deleted, promoted from queued to immediate, or demoted back to normal queue mode. Realtime queue events keep the panel synchronized when messages are consumed, and automatic sending is paused while compact/resume, bridge synchronization, another send, or an edit is in progress.
+
+This is useful when you already know the next step: you can line up several follow-up instructions for sequential execution, or inject a higher-priority instruction into the current MCP-driven workflow without manually waiting for each ChatGPT turn to become ready.
+
+### Compact & resume now
+
+Long ChatGPT conversations eventually become harder to continue reliably as their usable context fills up. **Compact & resume now** creates a durable handoff from the current ChatGPT conversation into a fresh one while keeping the same ChatCMD task, project, permissions, timeline, queued messages, and local task identity.
+
+How it works:
+
+1. **Confirm before anything is sent.** Selecting **Compact & resume now** opens a confirmation dialog. The optional **Tiếp tục công việc sau khi compact xong** checkbox starts unchecked on every opening; leave it unchecked to transfer context only, or opt in to automatically continue the working request after the replacement chat has been attached.
+2. **Freeze the task at a safe boundary.** ChatCMD fences new local MCP operations for the compacting task, waits for already-admitted operations to finish, and stops the current ChatGPT generation before asking the source conversation to produce its handoff. Existing drafts and queued follow-up messages are preserved rather than overwritten.
+3. **Write and persist the handoff first.** The source ChatGPT conversation receives a structured handoff request covering requirements, corrections, completed versus planned work, bug/fix/evidence chains, delegated work, environment details, blockers, and remaining tasks. The resulting public answer is saved durably in SQLite before ChatCMD is allowed to open or commit a replacement conversation.
+4. **Bootstrap a fresh ChatGPT conversation.** ChatCMD opens a new conversation and sends a no-tools resume/bootstrap message containing the saved handoff. It waits until the destination's real canonical ChatGPT conversation identity and resume marker are observed before changing the task's active conversation binding.
+5. **Keep the same ChatCMD task.** Completion archives the old ChatGPT URL and conversation metadata, retires obsolete bridge bindings, and points the existing task at the new conversation. The task ID, title, project folder, permission state, timeline, drafts, and queued messages stay with the original task instead of creating a second ChatCMD task.
+6. **Optionally continue the work.** Only when the saved opt-in is enabled does ChatCMD enqueue the deterministic post-handoff continuation request. Repeated resume calls are idempotent, so recovery or retries do not create duplicate working messages.
+7. **Retire the source tab conservatively.** After the new conversation is safely attached, ChatCMD attempts to close only the exact recorded source tab. If tab identity, draft state, generation state, or dispatch ownership is ambiguous, it leaves the tab open rather than risking closure of the wrong conversation.
+
+The UI shows live phases for preparing, writing the handoff, saving it, and opening the new chat. Compact state is persisted independently of the browser worker, so extension reloads, closed/reopened tabs, delayed Send availability, or lost responses can be reconciled from SQLite plus browser dispatch metadata instead of blindly repeating prompts. Completed compactions remain available in **Lịch sử thu gọn ngữ cảnh**, including references to the archived source and replacement conversation.
+
+Compact & resume is intentionally fail-closed: if ChatCMD cannot prove which prompt was sent, which conversation produced the handoff, or which destination owns the resume marker, it pauses with a recoverable state instead of silently dropping context or binding the task to the wrong chat. See [docs/COMPACT_RESUME.md](docs/COMPACT_RESUME.md) for the full persistence, identity, recovery, and dispatch model.
+
 ### Management console
 
 - Runtime dashboard for app, database, MCP listener, task, terminal, approval, and client health.
