@@ -185,7 +185,7 @@ async fn compact_migration_upgrades_schema_22_and_registry_matches() {
     .expect("marker");
     old.pool().close().await;
     let (upgraded, report) = SqliteRepository::open(&path, 1).await.expect("upgrade");
-    assert_eq!(CURRENT_SCHEMA_VERSION, 24);
+    assert_eq!(CURRENT_SCHEMA_VERSION, 25);
     assert_eq!(report.schema_version, CURRENT_SCHEMA_VERSION);
     let version: i64 = sqlx::query_scalar("SELECT MAX(version) FROM _sqlx_migrations")
         .fetch_one(upgraded.pool())

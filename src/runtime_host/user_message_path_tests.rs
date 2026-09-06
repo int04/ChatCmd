@@ -234,7 +234,7 @@ async fn chatgpt_bridge_reuses_existing_task_when_chatgpt_reformats_the_prompt()
     let (host, agent_id, _directory) = test_host().await;
     let task_id = "task-chatgpt-bridge-existing";
     let request_id = "chatgpt-request-existing";
-    let submitted = "Sử dụng plugin @test_rust\n\nThư mục dự án: D:\\DEV\\CmdGPT\\ChatCmdClient\n\nđể thực hiện yêu cầu sau: Kiểm tra http://localhost:8080/api/local/overview \n\nVí dụ abcd ";
+    let submitted = "Sử dụng plugin @test_rust\n\nThư mục dự án: D:\\DEV\\CmdGPT\\ChatCmdClient\n\nđể thực hiện yêu cầu sau: Kiểm tra http://localhost:8080/api/local/overview \n\n\nVí dụ abcd ";
     let message_from_chatgpt = submitted
         .replacen("@test_rust", "@test\\_rust", 1)
         .replacen(
@@ -242,6 +242,7 @@ async fn chatgpt_bridge_reuses_existing_task_when_chatgpt_reformats_the_prompt()
             "[http://localhost:8080/api/local/overview](http://localhost:8080/api/local/overview)",
             1,
         )
+        .replacen("\n\n\nVí dụ", "\n\n\n\nVí dụ", 1)
         .replacen("Ví dụ abcd ", "Ví dụ abcd\u{00a0}", 1);
     let now = now_ms();
 
