@@ -267,6 +267,19 @@ async fn browser_only_final_response_completes_child_and_saves_conversation() {
         .await
         .expect("read browser-only final answer");
     assert_eq!(stored_answer, "Browser-only delegated answer");
+    let report = chatcmd_storage::subagent_report::report_page(
+        state.repository.pool(),
+        SUBAGENT_ID,
+        0,
+        12_000,
+    )
+    .await
+    .expect("read browser report")
+    .expect("persisted final report");
+    assert_eq!(report["content"], stored_answer);
+    assert_eq!(report["source"], "browserFinal");
+    assert_eq!(report["workOutcome"], "unknown");
+    assert_eq!(report["verification"], "unknown");
 }
 
 async fn heartbeat_call(state: Arc<AppState>, attempt: i64) -> Value {

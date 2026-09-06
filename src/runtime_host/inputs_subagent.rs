@@ -34,6 +34,12 @@ pub(super) struct SubagentStartInput {
 pub(super) struct SubagentWaitInput {
     #[serde(default = "default_subagent_wait_ms")]
     pub(super) timeout_ms: u64,
+    #[serde(default)]
+    pub(super) subagent_id: Option<String>,
+    #[serde(default)]
+    pub(super) report_offset: u64,
+    #[serde(default)]
+    pub(super) report_version: Option<String>,
 }
 
 const fn default_subagent_wait_ms() -> u64 {

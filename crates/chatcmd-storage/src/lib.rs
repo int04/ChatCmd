@@ -7,6 +7,8 @@ mod device_identity;
 mod importer;
 mod path;
 mod repository;
+pub mod subagent_approval;
+pub mod subagent_report;
 pub mod subagent_tree;
 mod writer;
 

@@ -22,9 +22,13 @@ pub async fn descendant_runs(
         SELECT r.id,r.parent_task_id,r.parent_turn_id,d.root_turn_id,r.child_task_id,r.name,r.request,
         r.status AS registered_status,r.created_at_ms,r.updated_at_ms,r.completed_at_ms,r.worker_id,
         r.attempt,r.lease_expires_at_ms,r.last_heartbeat_at_ms,r.max_runtime_ms,r.started_at_ms,
-        r.terminal_reason,t.status AS task_status,p.title AS parent_name
+        COALESCE(r.terminal_reason,CASE WHEN r.status='failed' THEN r.fallback_error END) AS terminal_reason,
+        t.status AS task_status,p.title AS parent_name,
+        r.requested_approval_grant_json IS NOT NULL AS approval_grant_requested,
+        json_extract(g.payload_json,'$.subagentApproval') AS approval_grant_json
         FROM descendants d JOIN subagent_runs r ON r.id=d.id
         LEFT JOIN tasks t ON t.id=r.child_task_id LEFT JOIN tasks p ON p.id=r.parent_task_id
+        LEFT JOIN timeline_events g ON g.event_id='subagent-grant:'||r.id||':'||r.attempt AND g.task_id=r.child_task_id AND g.actor='system' AND g.kind='status'
         WHERE (? IS NULL OR d.root_turn_id=?) ORDER BY r.created_at_ms,r.id");
     sqlx::query(&sql)
         .bind(task_id)

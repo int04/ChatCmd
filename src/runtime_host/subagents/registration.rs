@@ -352,28 +352,21 @@ impl RuntimeHost {
             .fetch_one(&mut *transaction)
             .await
             .map_err(|_| RuntimeError::new("storage_error", "sub-agent attempt lookup failed"))?;
-        if let Some(requested_approval_grant) = requested_approval_grant.as_ref()
-            && let Err(error) = self
-                .inherit_subagent_approval_grant(
-                    &mut transaction,
-                    SubagentGrantInheritance {
-                        owner_agent_id: &context.agent_id,
-                        parent_task_id: &parent_task_id,
-                        parent_turn_id: &parent_turn_id,
-                        child_task_id,
-                        child_turn_id: context.turn_id.as_deref(),
-                        child_attempt: attempt,
-                        lease_expires_at_ms: lease_expires_at,
-                    },
-                    requested_approval_grant,
-                )
-                .await
-        {
-            transaction.rollback().await.map_err(|_| {
-                RuntimeError::new("storage_error", "sub-agent claim rollback failed")
-            })?;
-            return Err(error);
-        }
+        self.initialize_subagent_grant(
+            &mut transaction,
+            &subagent_id,
+            SubagentGrantInheritance {
+                owner_agent_id: &context.agent_id,
+                parent_task_id: &parent_task_id,
+                parent_turn_id: &parent_turn_id,
+                child_task_id,
+                child_turn_id: context.turn_id.as_deref(),
+                child_attempt: attempt,
+                lease_expires_at_ms: lease_expires_at,
+            },
+            requested_approval_grant.as_ref(),
+        )
+        .await?;
         transaction.commit().await.map_err(|_| {
             RuntimeError::new("storage_error", "sub-agent claim transaction commit failed")
         })?;

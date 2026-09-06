@@ -1,44 +1,91 @@
 use super::*;
 
 impl RuntimeHost {
+    #[cfg(test)]
     pub(in crate::runtime_host) async fn wait_for_subagents(
         &self,
         context: &OperationContext,
         timeout_ms: u64,
     ) -> RuntimeResult<Value> {
+        self.wait_for_subagent_reports(
+            context,
+            &crate::runtime_host::inputs::SubagentWaitInput {
+                timeout_ms,
+                subagent_id: None,
+                report_offset: 0,
+                report_version: None,
+            },
+        )
+        .await
+    }
+
+    pub(in crate::runtime_host) async fn wait_for_subagent_reports(
+        &self,
+        context: &OperationContext,
+        input: &crate::runtime_host::inputs::SubagentWaitInput,
+    ) -> RuntimeResult<Value> {
         let parent_task_id = required_context_value(context.task_id.as_deref(), "taskId")?;
         let parent_turn_id = required_context_value(context.turn_id.as_deref(), "turnId")?;
-        let deadline = Instant::now() + Duration::from_millis(timeout_ms.clamp(250, 40_000));
+        let deadline = Instant::now() + Duration::from_millis(input.timeout_ms.clamp(250, 40_000));
         loop {
             self.expire_stale_subagents(None).await?;
-            let runs = self
+            let mut runs = self
                 .subagent_values(parent_task_id, Some(parent_turn_id))
                 .await?;
-            let pending_count = runs
-                .iter()
-                .filter(|run| run.get("status").and_then(Value::as_str) == Some("pending"))
-                .count();
-            let running_count = runs
-                .iter()
-                .filter(|run| run.get("status").and_then(Value::as_str) == Some("running"))
-                .count();
+            let pending_count = runs.iter().filter(|r| r["status"] == "pending").count();
+            let running_count = runs.iter().filter(|r| r["status"] == "running").count();
             let active_count = pending_count + running_count;
-            if active_count == 0 || Instant::now() >= deadline {
-                let all_completed = !runs.is_empty()
-                    && runs
-                        .iter()
-                        .all(|run| run.get("status").and_then(Value::as_str) == Some("completed"));
+            if active_count == 0 || input.subagent_id.is_some() || Instant::now() >= deadline {
+                self.attach_subagent_reports(&mut runs, input).await?;
+                let counts = reports::report_counts(&runs);
+                let reports_pending = counts["pending"].as_u64().unwrap_or(0) > 0;
+                if active_count == 0
+                    && reports_pending
+                    && input.subagent_id.is_none()
+                    && Instant::now() < deadline
+                {
+                    sleep(Duration::from_millis(100)).await;
+                    continue;
+                }
+                let all_completed =
+                    !runs.is_empty() && runs.iter().all(|r| r["status"] == "completed");
+                let failed_count = runs
+                    .iter()
+                    .filter(|r| {
+                        matches!(
+                            r["status"].as_str(),
+                            Some("failed" | "stopped" | "timedOut" | "interrupted")
+                        )
+                    })
+                    .count();
+                let all_work_completed = all_completed
+                    && runs.iter().all(|r| {
+                        r["report"]["workOutcome"] == "completed"
+                            && r["report"]["workOutcomeProvenance"] == "agentDeclared"
+                            && r["report"]["blockers"]
+                                .as_array()
+                                .is_some_and(Vec::is_empty)
+                    });
                 return Ok(json!({
-                    "allFinished": active_count == 0,
-                    "allCompleted": all_completed,
-                    "pendingCount": pending_count,
-                    "runningCount": running_count,
-                    "activeCount": active_count,
-                    "nextPollAfterMs": if active_count == 0 { 0 } else { 1000 },
-                    "earliestLeaseExpiryMs": runs.iter().filter_map(|run| run.get("leaseExpiresAtMs").and_then(Value::as_i64)).min(),
+                    "allFinished": active_count == 0, "allCompleted": all_completed,
+                    "allWorkCompleted": all_work_completed,
+                    "pendingCount": pending_count, "runningCount": running_count,
+                    "activeCount": active_count, "failedCount": failed_count,
+                    "reportPendingCount": counts["pending"], "reportMissingCount": counts["missing"],
+                    "reportAvailableCount": counts["available"],
+                    "partialCount": counts["partial"], "blockedCount": counts["blocked"],
+                    "unknownOutcomeCount": counts["unknown"],
+                    "nextPollAfterMs": if active_count == 0 && !reports_pending { 0 } else { 1000 },
+                    "earliestLeaseExpiryMs": runs.iter().filter_map(|r| r["leaseExpiresAtMs"].as_i64()).min(),
                     "subagents": runs,
-                    "instruction": if active_count == 0 { "All registered sub-agents are finished. You may finalize the parent turn." } else if pending_count > 0 && running_count == 0 { "Some sub-agents are still pending and have not started. If dispatchMode was native, create the host-native children using delegatedPrompt. Otherwise call agent_subagent_wait again." } else { "Some sub-agents are still pending or running. Call agent_subagent_wait again before agent_turn_complete." }
+                    "instruction": reports::wait_instruction(active_count, reports_pending, !all_work_completed && !runs.is_empty())
                 }));
+            }
+            if context.cancellation.is_cancelled() {
+                return Err(RuntimeError::new(
+                    "cancelled",
+                    "sub-agent wait was cancelled",
+                ));
             }
             sleep(Duration::from_millis(250)).await;
         }

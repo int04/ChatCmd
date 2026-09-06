@@ -26,8 +26,16 @@ impl RuntimeHost {
                 "one or more tools are still running in this turn; wait for them to finish before completing the turn",
             ));
         }
+        if input.content.trim().is_empty() {
+            return Err(RuntimeError::new(
+                "final_response_required",
+                "final content must not be empty",
+            ));
+        }
         self.ensure_subagents_finished(context).await?;
         let quality = self.normalize_completion_report(context, &input).await;
+        // Persist metadata first so readers of the subsequent final answer see its outcome.
+        self.persist_completion_report(context, &quality).await;
         let result = self
             .save_agent_event(
                 context,
@@ -36,7 +44,6 @@ impl RuntimeHost {
                 input.suggested_title.as_deref(),
             )
             .await?;
-        self.persist_completion_report(context, &quality).await;
         self.demote_immediate_messages(context).await?;
         let mut result = result;
         result["qualityReport"] = quality;

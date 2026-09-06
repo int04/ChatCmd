@@ -120,20 +120,7 @@ impl RuntimeHost {
                 "approvalGrant maxBytesRead is too large",
             )
         })?;
-        let mut requested_tools = request.allowed_tools.clone();
-        requested_tools.sort();
-        requested_tools.dedup();
-        if requested_tools.len() != request.allowed_tools.len()
-            || requested_tools.iter().any(|tool| {
-                let capabilities = tool_capabilities(tool);
-                !capabilities.approval_required || !capabilities.risk_class.is_safe_read()
-            })
-        {
-            return Err(RuntimeError::new(
-                "approval_grant_inheritance_denied",
-                "child approval grants may contain only distinct approval-required safe-read tools",
-            ));
-        }
+        let requested_tools = validate_subagent_grant_request(request)?;
         let mut requested_scopes = Vec::with_capacity(request.path_scopes.len());
         for path in &request.path_scopes {
             let canonical = std::fs::canonicalize(path).map_err(|_| {
@@ -163,12 +150,13 @@ impl RuntimeHost {
         }
 
         let now = now_ms();
-        let rows = sqlx::query("SELECT id,allowed_tools_json,path_scopes_json,option_constraints_json,max_calls,used_calls,max_files_scanned,used_files_scanned,max_bytes_read,used_bytes_read,expires_at_ms FROM approval_grants WHERE owner_agent_id=? AND task_id=? AND state='active' AND expires_at_ms>? AND catalog_hash=? AND (turn_id IS NULL OR turn_id=?) ORDER BY created_at_ms DESC,id")
+        let rows = sqlx::query("SELECT id,allowed_tools_json,path_scopes_json,option_constraints_json,max_calls,used_calls,max_files_scanned,used_files_scanned,max_bytes_read,used_bytes_read,expires_at_ms FROM approval_grants WHERE owner_agent_id=? AND task_id=? AND state='active' AND expires_at_ms>? AND catalog_hash=? AND (turn_id IS NULL OR turn_id=?) AND child_attempt IS (SELECT attempt FROM subagent_runs WHERE child_task_id=? LIMIT 1) ORDER BY created_at_ms DESC,id")
         .bind(owner_agent_id)
         .bind(parent_task_id)
         .bind(now)
         .bind(catalog_hash())
         .bind(parent_turn_id)
+        .bind(parent_task_id)
         .fetch_all(&mut **transaction)
         .await
         .map_err(|_| RuntimeError::new("storage_error", "parent approval grant lookup failed"))?;

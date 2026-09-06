@@ -233,6 +233,15 @@ async fn persisted_command_evidence_is_owner_bound_and_conservative() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn delegated_child_evidence_requires_current_parent_integration_state() {
+    Box::pin(check_delegated_evidence(false)).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn delegated_grandchild_evidence_is_scoped_and_rechecked_for_parent_integration() {
+    Box::pin(check_delegated_evidence(true)).await;
+}
+
+async fn check_delegated_evidence(nested: bool) {
     use crate::runtime_host::user_message_tests::test_host;
     use chatcmd_core::{
         ActorKind, AgentId, EventId, EventKind, TaskId, TerminalEventStore as _, TimelineEvent,
@@ -283,10 +292,23 @@ async fn delegated_child_evidence_requires_current_parent_integration_state() {
         .register_subagent(&parent_context, "verifier", "run tests", None)
         .await
         .expect("registration");
-    let child_task = registration["childTaskId"]
+    let mut child_task = registration["childTaskId"]
         .as_str()
         .expect("child task")
         .to_owned();
+    if nested {
+        let mut child_context = parent_context.clone();
+        child_context.task_id = Some(child_task);
+        child_context.turn_id = Some("e18-nested-coordinator".into());
+        let grandchild = host
+            .register_subagent(&child_context, "nested verifier", "run tests", None)
+            .await
+            .expect("grandchild registration");
+        child_task = grandchild["childTaskId"]
+            .as_str()
+            .expect("grandchild task")
+            .to_owned();
+    }
     let mut child_command = OperationContext::new("e18-command", &agent_id, "command_run");
     child_command.task_id = Some(child_task.clone());
     child_command.turn_id = Some("e18-child-turn".into());
@@ -327,6 +349,11 @@ async fn delegated_child_evidence_requires_current_parent_integration_state() {
         .await;
     assert_eq!(fresh["verification"], "passed");
     assert_eq!(fresh["evidence"][0]["delegatedChild"], true);
+    let mut other_turn = parent_context.clone();
+    other_turn.turn_id = Some("e18-unrelated-parent-turn".into());
+    let isolated = host.normalize_completion_report(&other_turn, &report).await;
+    assert_eq!(isolated["verification"], "unknown");
+    assert_eq!(isolated["evidence"].as_array().map(Vec::len), Some(0));
     std::fs::write(project.join("parent-integration-edit.rs"), "changed").expect("edit");
     let stale = host
         .normalize_completion_report(&parent_context, &report)

@@ -460,7 +460,7 @@ impl RuntimeHost {
             }
             "agent_subagent_wait" => {
                 let input: SubagentWaitInput = parse(arguments)?;
-                self.wait_for_subagents(&context, input.timeout_ms).await
+                self.wait_for_subagent_reports(&context, &input).await
             }
             "agent_turn_complete" => self.complete_agent_turn(&context, arguments).await,
             _ => Err(RuntimeError::new("tool_not_found", "unknown MCP tool")),

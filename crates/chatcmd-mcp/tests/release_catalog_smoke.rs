@@ -163,6 +163,29 @@ async fn packaged_process_advertises_exact_manifest_contract_deterministically()
         );
     }
 
+    let wait = first
+        .iter()
+        .find(|tool| tool["name"] == "agent_subagent_wait")
+        .expect("agent_subagent_wait advertised on wire");
+    for field in ["timeoutMs", "subagentId", "reportOffset", "reportVersion"] {
+        assert!(
+            wait["inputSchema"]["properties"].get(field).is_some(),
+            "missing {field} in packaged wait schema"
+        );
+    }
+    let description = wait["description"].as_str().expect("wait description");
+    for marker in [
+        "report.continuation",
+        "workOutcome",
+        "lifecycle",
+        "reportPendingCount",
+    ] {
+        assert!(
+            description.contains(marker),
+            "missing {marker} in wait guidance"
+        );
+    }
+
     let manifest = canonical_manifest();
     let manifest_tools = manifest["tools"].as_array().expect("manifest tools");
     assert_eq!(first.len(), manifest_tools.len());

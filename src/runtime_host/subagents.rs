@@ -24,8 +24,10 @@ const MAX_SUBAGENT_MAX_RUNTIME_MS: i64 = 86_400_000;
 const SUBAGENT_WATCHDOG_BATCH: i64 = 100;
 
 mod coordination;
+mod grant_bootstrap;
 mod lifecycle;
 mod registration;
+mod reports;
 mod watchdog;
 
 fn subagent_row_value(row: &sqlx::sqlite::SqliteRow) -> Value {
@@ -42,6 +44,7 @@ fn subagent_row_value(row: &sqlx::sqlite::SqliteRow) -> Value {
         "name": row.get::<String, _>("name"),
         "request": row.get::<String, _>("request"),
         "status": status,
+        "approvalGrant": chatcmd_storage::subagent_approval::status_value(row.get::<Option<String>, _>("approval_grant_json").as_deref(), row.get("approval_grant_requested")),
         "createdAtMs": row.get::<i64, _>("created_at_ms"),
         "updatedAtMs": row.get::<i64, _>("updated_at_ms"),
         "completedAtMs": row.get::<Option<i64>, _>("completed_at_ms")
@@ -56,7 +59,10 @@ fn subagent_row_value(row: &sqlx::sqlite::SqliteRow) -> Value {
 }
 
 fn effective_status<'a>(registered: &'a str, task_status: Option<&'a str>) -> &'a str {
-    if registered == "timedOut" {
+    if matches!(
+        registered,
+        "completed" | "failed" | "stopped" | "timedOut" | "interrupted"
+    ) {
         return registered;
     }
     match task_status {
@@ -139,25 +145,7 @@ fn validate_subagent_approval_request(
     let Some(request) = request else {
         return Ok(());
     };
-    if request.allowed_tools.is_empty() || request.path_scopes.is_empty() {
-        return Err(RuntimeError::new(
-            "invalid_arguments",
-            "approvalGrant requires non-empty allowedTools and pathScopes",
-        ));
-    }
-    if request.allowed_tools.len() > 64 || request.path_scopes.len() > 64 {
-        return Err(RuntimeError::new(
-            "invalid_arguments",
-            "approvalGrant exceeds the maximum number of tool/path scopes",
-        ));
-    }
-    if request.max_calls == 0 || request.max_files_scanned == 0 || request.max_bytes_read == 0 {
-        return Err(RuntimeError::new(
-            "invalid_arguments",
-            "approvalGrant budgets must all be greater than zero",
-        ));
-    }
-    Ok(())
+    super::approval::validate_subagent_grant_request(request).map(|_| ())
 }
 
 fn subagent_id_for_registration(

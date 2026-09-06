@@ -265,7 +265,13 @@ impl RuntimeHost {
             "accepted": true,
             "duplicate": inserted == 0,
             "userMessageSynced": true,
+            "subagentApproval": chatcmd_storage::subagent_approval::status(self.repository.pool(), task_id.as_str()).await.map_err(|_| RuntimeError::new("storage_error", "child grant diagnostic unavailable"))?,
             "subagentPolicy": {
+                "approvalGrant": {
+                    "optional": true,
+                    "allowedTools": super::approval::subagent_grant_tools(),
+                    "instruction": "Eligibility only, not granted permissions. approvalGrant can reserve a subset of an existing approved parent safe-read grant; it is not the child's tool allowlist. Omit it if no such grant is available. Never include Git/process or agent_* lifecycle tools. Normal execution policy and approval still apply."
+                },
                 "enabled": subagent_limit > 0,
                 "maxConcurrent": subagent_limit,
                 "instruction": if subagent_limit == 0 { "Sub-agents are disabled by the user. Do not call agent_subagent_start or delegate to any child; perform the work in this conversation." } else { "Use registered children within the global limit. All descendants remain attached to the root turn. If a nested child cannot acquire a slot, continue locally rather than waiting for another child." }

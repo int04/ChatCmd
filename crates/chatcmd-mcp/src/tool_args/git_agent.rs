@@ -23,6 +23,9 @@ tool_args!(GitLogArgs {
 #[derive(Debug, Clone, Default, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SubagentApprovalGrantArgs {
+    /// Distinct names from subagentPolicy.approvalGrant.allowedTools only. Git/process and
+    /// agent_* lifecycle tools are ineligible. This is NOT the child's tool allowlist.
+    /// Omit approvalGrant unless an approved parent safe-read grant can cover it.
     allowed_tools: Vec<String>,
     path_scopes: Vec<String>,
     max_calls: u64,
@@ -49,5 +52,14 @@ tool_args!(SubagentStartArgs {
 });
 tool_args!(SubagentWaitArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    timeout_ms: Option<u64>
+    timeout_ms: Option<u64>,
+    /// Optional descendant ID to read a report page without waiting for other children.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    subagent_id: Option<String>,
+    /// Zero-based Unicode character offset returned by report.continuation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    report_offset: Option<u64>,
+    /// Immutable final event ID from report.continuation; required for offsets above zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    report_version: Option<String>
 });

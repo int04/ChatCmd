@@ -151,11 +151,17 @@ impl RuntimeHost {
                 );
             }
         }
-        let child_rows = sqlx::query(
-            "SELECT e.turn_id,e.payload_json,e.created_at_ms,r.child_task_id,t.agent_id FROM subagent_runs r JOIN tasks t ON t.id=r.child_task_id JOIN timeline_events e ON e.task_id=r.child_task_id WHERE r.parent_task_id=? AND r.parent_turn_id=? AND r.child_task_id IS NOT NULL AND e.kind='tool_result' AND json_extract(e.payload_json,'$.tool')='command_run' ORDER BY e.created_at_ms,e.event_id",
-        )
-        .bind(task_id).bind(turn_id).fetch_all(self.repository.pool()).await
-        .map_err(|_| "evidenceStoreUnavailable")?;
+        let child_sql = format!(
+            "{} SELECT e.turn_id,e.payload_json,e.created_at_ms,r.child_task_id,t.agent_id FROM descendants d JOIN subagent_runs r ON r.id=d.id JOIN tasks t ON t.id=r.child_task_id JOIN timeline_events e ON e.task_id=r.child_task_id WHERE d.root_turn_id=? AND t.agent_id=? AND r.child_task_id IS NOT NULL AND e.created_at_ms>=COALESCE(r.started_at_ms,r.created_at_ms) AND e.kind='tool_result' AND json_extract(e.payload_json,'$.tool')='command_run' ORDER BY e.created_at_ms,e.event_id",
+            chatcmd_storage::subagent_tree::DESCENDANTS_CTE
+        );
+        let child_rows = sqlx::query(&child_sql)
+            .bind(task_id)
+            .bind(turn_id)
+            .bind(&context.agent_id)
+            .fetch_all(self.repository.pool())
+            .await
+            .map_err(|_| "evidenceStoreUnavailable")?;
         for row in child_rows {
             let payload = serde_json::from_str::<Value>(&row.get::<String, _>("payload_json"))
                 .unwrap_or(Value::Null);
@@ -260,7 +266,17 @@ impl RuntimeHost {
                 format!("{}\0{}", context.request_id, turn.as_str()).as_bytes(),
             )
         );
-        let payload = json!({"status": "quality", "qualityReport": report});
+        // Match persistence::save_agent_event's stable key without publishing private call data.
+        let material = format!(
+            "agent-event\0agent:{}\0scope:{}\0completed",
+            context.agent_id, context.request_id
+        );
+        let final_event_id = format!(
+            "agent-event-{}",
+            Uuid::new_v5(&Uuid::NAMESPACE_OID, material.as_bytes())
+        );
+        let payload =
+            json!({"status": "quality", "qualityReport": report, "finalEventId": final_event_id});
         let event = TimelineEvent {
             id: match EventId::new(&key) {
                 Ok(value) => value,

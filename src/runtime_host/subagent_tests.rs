@@ -167,8 +167,10 @@ async fn register_with_grant(
 }
 
 mod fallback;
+mod grant_bootstrap;
 mod grants;
 mod lifecycle;
+mod reports;
 
 #[tokio::test]
 async fn extension_fallback_stays_pending_and_parent_wait_remains_active() {

@@ -83,6 +83,11 @@ impl RuntimeHost {
             return Ok(());
         }
         let now = now_ms();
+        let reason: String = message.chars().take(2_000).collect();
+        sqlx::query("UPDATE subagent_runs SET terminal_reason=COALESCE(terminal_reason,?),updated_at_ms=? WHERE child_task_id=? AND status='failed'")
+            .bind(&reason).bind(now).bind(child_task_id)
+            .execute(self.repository.pool()).await
+            .map_err(|_| RuntimeError::new("storage_error", "child failure reason could not be persisted"))?;
         let affected = sqlx::query("UPDATE tasks SET status='failed',active_session_id=NULL,updated_at_ms=? WHERE id=? AND status NOT IN ('completed','stopped')")
             .bind(now)
             .bind(child_task_id)

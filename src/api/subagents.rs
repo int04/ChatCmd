@@ -54,6 +54,7 @@ pub(super) async fn task_subagent_data(
                 "name": row.get::<String, _>("name"),
                 "request": row.get::<String, _>("request"),
                 "status": status,
+                "approvalGrant": chatcmd_storage::subagent_approval::status_value(row.get::<Option<String>, _>("approval_grant_json").as_deref(), row.get("approval_grant_requested")),
                 "createdAtUtc": iso_ms(created_at),
                 "updatedAtUtc": iso_ms(updated_at),
                 "completedAtUtc": completed_at.map(iso_ms),
@@ -284,7 +285,10 @@ pub(super) async fn interrupt_active_child_subagents(
 }
 
 fn effective_status<'a>(registered: &'a str, task_status: Option<&'a str>) -> &'a str {
-    if registered == "timedOut" {
+    if matches!(
+        registered,
+        "completed" | "failed" | "stopped" | "timedOut" | "interrupted"
+    ) {
         return registered;
     }
     match task_status {

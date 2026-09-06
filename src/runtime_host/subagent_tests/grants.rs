@@ -64,29 +64,16 @@ async fn inherited_grant_rejects_tool_path_and_budget_escalation() {
 
     let mut tool_escalation = read_grant_request(&parent_scope);
     tool_escalation.allowed_tools = vec!["fs_write_text".to_owned()];
-    let (registration, subagent_id) =
-        register_with_grant(&host, &context, "Tool escalation", &tool_escalation).await;
-    let child_task_id = registration
-        .get("childTaskId")
-        .and_then(Value::as_str)
-        .expect("child task");
-    let child_context = OperationContext::new(
-        "claim-tool-escalation",
-        &context.agent_id,
-        "agent_user_message",
-    );
     let error = host
-        .claim_subagent_from_message(
-            &child_context,
-            child_task_id,
-            Some(&delegated_prompt(&subagent_id)),
+        .register_subagent(
+            &context,
+            "Tool escalation",
+            "Read delegated files",
+            Some(&tool_escalation),
         )
         .await
-        .expect_err("tool escalation denied");
+        .expect_err("tool escalation denied before child creation");
     assert_eq!(error.code, "approval_grant_inheritance_denied");
-    host.finish_subagent_for_child(child_task_id, "failed")
-        .await
-        .expect("finish denied tool child");
 
     let mut path_escalation = read_grant_request(directory.path());
     path_escalation.max_calls = 1;
@@ -103,15 +90,26 @@ async fn inherited_grant_rejects_tool_path_and_budget_escalation() {
         &context.agent_id,
         "agent_user_message",
     );
-    let error = host
-        .claim_subagent_from_message(
-            &child_context,
-            child_task_id,
-            Some(&delegated_prompt(&subagent_id)),
-        )
+    host.claim_subagent_from_message(
+        &child_context,
+        child_task_id,
+        Some(&delegated_prompt(&subagent_id)),
+    )
+    .await
+    .expect("claim without inherited authority");
+    let diagnostic =
+        chatcmd_storage::subagent_approval::status(host.repository.pool(), child_task_id)
+            .await
+            .unwrap()
+            .unwrap();
+    assert_eq!(diagnostic["status"], "notInherited");
+    assert_eq!(diagnostic["errorCode"], "approval_grant_inheritance_denied");
+    let grants: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM approval_grants WHERE task_id=?")
+        .bind(child_task_id)
+        .fetch_one(host.repository.pool())
         .await
-        .expect_err("path escalation denied");
-    assert_eq!(error.code, "approval_grant_inheritance_denied");
+        .unwrap();
+    assert_eq!(grants, 0, "path escalation must never create a grant");
     host.finish_subagent_for_child(child_task_id, "failed")
         .await
         .expect("finish denied path child");
@@ -129,15 +127,26 @@ async fn inherited_grant_rejects_tool_path_and_budget_escalation() {
         &context.agent_id,
         "agent_user_message",
     );
-    let error = host
-        .claim_subagent_from_message(
-            &child_context,
-            child_task_id,
-            Some(&delegated_prompt(&subagent_id)),
-        )
+    host.claim_subagent_from_message(
+        &child_context,
+        child_task_id,
+        Some(&delegated_prompt(&subagent_id)),
+    )
+    .await
+    .expect("claim without inherited authority");
+    let diagnostic =
+        chatcmd_storage::subagent_approval::status(host.repository.pool(), child_task_id)
+            .await
+            .unwrap()
+            .unwrap();
+    assert_eq!(diagnostic["status"], "notInherited");
+    assert_eq!(diagnostic["errorCode"], "approval_grant_inheritance_denied");
+    let grants: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM approval_grants WHERE task_id=?")
+        .bind(child_task_id)
+        .fetch_one(host.repository.pool())
         .await
-        .expect_err("budget escalation denied");
-    assert_eq!(error.code, "approval_grant_inheritance_denied");
+        .unwrap();
+    assert_eq!(grants, 0, "budget escalation must never create a grant");
 }
 
 #[tokio::test]
@@ -176,13 +185,31 @@ async fn concurrent_child_reservations_do_not_oversubscribe_parent() {
         host.claim_subagent_from_message(&first_context, &first_task, Some(&first_prompt)),
         host.claim_subagent_from_message(&second_context, &second_task, Some(&second_prompt))
     );
-    assert_eq!(usize::from(first.is_ok()) + usize::from(second.is_ok()), 1);
-    let denied = if first.is_err() {
-        first.expect_err("first denied")
-    } else {
-        second.expect_err("second denied")
-    };
-    assert_eq!(denied.code, "approval_grant_inheritance_denied");
+    first.expect("first turn remains usable");
+    second.expect("second turn remains usable");
+    let first = chatcmd_storage::subagent_approval::status(host.repository.pool(), &first_task)
+        .await
+        .unwrap()
+        .unwrap();
+    let second = chatcmd_storage::subagent_approval::status(host.repository.pool(), &second_task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        usize::from(first["status"] == "inherited") + usize::from(second["status"] == "inherited"),
+        1
+    );
+    assert_eq!(
+        usize::from(first["status"] == "notInherited")
+            + usize::from(second["status"] == "notInherited"),
+        1
+    );
+    let grants: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM approval_grants WHERE inherited_from IS NOT NULL")
+            .fetch_one(host.repository.pool())
+            .await
+            .unwrap();
+    assert_eq!(grants, 1, "the losing reservation receives no authority");
     let used_calls: i64 = sqlx::query_scalar(
         "SELECT used_calls FROM approval_grants WHERE task_id=? AND inherited_from IS NULL",
     )
