@@ -78,6 +78,29 @@ async fn secret_rotation_invalidates_old_token_and_database_stores_only_hash() {
         .await
         .expect("create agent");
     let agent_id = created.agent.id.clone();
+    let device = repository.local_device().await.expect("device");
+    let grant_task_id = TaskId::new("grant-owner-task").expect("task ID");
+    repository
+        .upsert_task(&Task {
+            id: grant_task_id.clone(),
+            agent_id: Some(agent_id.clone()),
+            device_id: device.id,
+            conversation_scope_hash: None,
+            title: None,
+            source: None,
+            project_folder: None,
+            allow_execute: Some(true),
+            status: TaskStatus::Running,
+            active_session_id: None,
+            generation: 1,
+            stopped_at_ms: None,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+        })
+        .await
+        .expect("grant task");
+    sqlx::query("INSERT INTO approval_grants(id,owner_agent_id,task_id,allowed_tools_json,path_scopes_json,option_constraints_json,max_calls,expires_at_ms,catalog_hash,state,created_at_ms,updated_at_ms) VALUES('rotation-grant',?,?, '[\"fs_stat\"]','[]','{}',4,9999999999999,'catalog','active',1,1)")
+        .bind(agent_id.as_str()).bind(grant_task_id.as_str()).execute(repository.pool()).await.expect("grant");
     let old = created.secret.expose_once();
     assert!(
         repository
@@ -91,6 +114,12 @@ async fn secret_rotation_invalidates_old_token_and_database_stores_only_hash() {
         .rotate_agent_secret(&agent_id)
         .await
         .expect("rotate secret");
+    let grant_state: String =
+        sqlx::query_scalar("SELECT state FROM approval_grants WHERE id='rotation-grant'")
+            .fetch_one(repository.pool())
+            .await
+            .expect("grant state");
+    assert_eq!(grant_state, "revoked");
     let new = rotated.secret.expose_once();
     assert_ne!(old, new);
     assert!(

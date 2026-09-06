@@ -1,8 +1,12 @@
-import { CheckCircle2, CircleAlert, Clock3, LoaderCircle, MessageSquareText } from 'lucide-react';
+import { subagentLabel } from '../tasks/subagentPresentation';
+import { mergeTimelineEvents, snapshotRevision } from '../tasks/timelineSnapshots';
+import { CheckCircle2, CircleAlert, Clock3, LoaderCircle, MessageSquareText, PanelRightClose, PanelRightOpen } from 'lucide-react';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 
 import { api } from '../api';
+import { CompactProvider } from '../chatgpt/compact/CompactProvider';
+import { CompactHistoryCard } from '../chatgpt/compact/CompactHistoryCard';
 import { ChatGptTaskCard, ChatGptTaskComposer, NewChatGptConversation } from '../chatgpt/ChatGptConversation';
 import { ErrorState, Loading, StatusBadge, formatTime } from '../components';
 import { tr, translatedStatus } from '../i18n';
@@ -31,7 +35,7 @@ function TasksWorkspace() {
     if (event.type === 'system.connected') { if (connectedOnce.current) setDetailVersion((value) => value + 1); connectedOnce.current = true; return; }
     if (event.type === 'system.resync_required') { setDetailVersion((value) => value + 1); return; }
     if (event.type === 'subagent.status' || event.type === 'subagent.approval_pending' || event.type === 'subagent.approval_resolved') {
-      const childTaskId = subagentChildTaskId(event); if (childTaskId) hideSubagentTask(childTaskId); if (event.taskId === taskId) setDetailVersion((value) => value + 1); return;
+      const childTaskId = subagentChildTaskId(event); if (childTaskId) hideSubagentTask(childTaskId); if (event.taskId === taskId || (event.taskId && hiddenSubagentTaskIds.current.has(event.taskId))) setDetailVersion((value) => value + 1); return;
     }
     if (!event.taskId) return;
     if (event.taskId === taskId && event.type === 'approval.resolved') {
@@ -54,7 +58,7 @@ function TasksWorkspace() {
     if (event.taskId === taskId && (event.type === 'approval.pending' || event.type === 'conversation.approval_pending' || event.type === 'conversation.title_updated')) { setDetailVersion((value) => value + 1); return; }
     if (event.taskId === taskId) {
       const compactEvent = compactLiveToolEvent(event);
-      setLiveEvents((current) => current.some((item) => item.id === compactEvent.id) ? current : [...current, compactEvent]);
+      setLiveEvents((current) => mergeTimelineEvents(current, [compactEvent]));
     }
     else if (taskId && hiddenSubagentTaskIds.current.has(event.taskId)) setDetailVersion((value) => value + 1);
   }, [hideSubagentTask, taskId]);
@@ -75,7 +79,7 @@ function TaskConversationDetail({ taskId, refreshVersion, realtime, liveEvents, 
   useEffect(() => { if (!olderEvents.length) setNextCursor(result.data?.nextCursor); }, [olderEvents.length, result.data?.nextCursor]);
   useEffect(() => { if (refreshVersion > 0) void refresh(); }, [refreshVersion, refresh]);
   useEffect(() => { if (result.data?.task.isSubagent) onSubagentTask(result.data.task.id); for (const subagent of result.data?.subagents ?? []) if (subagent.taskId) onSubagentTask(subagent.taskId); }, [onSubagentTask, result.data?.subagents, result.data?.task.id, result.data?.task.isSubagent]);
-  const approvalPolling = result.data?.task.allowExecute === null || (result.data?.executionMode === 'approval' && (result.data.task.status === 'running' || (result.data.subagents ?? []).some((subagent) => subagent.status === 'pending' || subagent.status === 'running')));
+  const approvalPolling = (result.data?.subagents ?? []).some((agent) => agent.status === 'pending' || agent.status === 'running') || result.data?.task.allowExecute === null || (result.data?.executionMode === 'approval' && (result.data.task.status === 'running' || (result.data.subagents ?? []).some((subagent) => subagent.status === 'pending' || subagent.status === 'running')));
   useEffect(() => { if (!approvalPolling) return; const timer = window.setInterval(() => void refresh(), 1500); return () => window.clearInterval(timer); }, [approvalPolling, refresh]);
   const loadOlder = useCallback(async () => {
     if (!nextCursor || loadingOlder) return;
@@ -100,11 +104,17 @@ function TaskDetailContent({ detail, realtime, onTaskChanged, hasOlder, loadingO
   const startedAt = task.createdAtUtc ?? turns[0]?.startedAtUtc ?? task.updatedAtUtc;
   const chatRef = useRef<HTMLElement>(null);
   const nearBottomRef = useRef(true);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem('chatcmd.layout.taskDetailSidebarCollapsed.v1') === 'true');
   const sidebarResize = useResizableWidth({ storageKey: 'chatcmd.layout.taskDetailSidebarWidth.v1', cssVariable: '--task-detail-sidebar-width', defaultWidth: typeof window !== 'undefined' && window.innerWidth <= 1180 ? 300 : 340, minWidth: 280, maxWidth: 520, direction: -1 });
   const activeTaskRef = useRef<string | null>(null);
   const lastEvent = events.at(-1); const lastTurn = turns.at(-1);
-  const updateKey = `${events.length}:${lastEvent?.id ?? 'empty'}:${turns.length}:${lastTurn?.id ?? 'empty'}:${lastTurn?.status ?? 'empty'}:${lastTurn?.completedAtUtc ?? ''}`;
+  const updateKey = `${events.reduce((max, event) => Math.max(max, snapshotRevision(event)), 0)}:${events.length}:${lastEvent?.id ?? 'empty'}:${turns.length}:${lastTurn?.id ?? 'empty'}:${lastTurn?.status ?? 'empty'}:${lastTurn?.completedAtUtc ?? ''}`;
   useLayoutEffect(() => { const root = chatRef.current; if (!root) return; const taskChanged = activeTaskRef.current !== task.id; activeTaskRef.current = task.id; if (!taskChanged && !nearBottomRef.current) return; const frame = window.requestAnimationFrame(() => { root.scrollTop = root.scrollHeight; }); return () => window.cancelAnimationFrame(frame); }, [task.id, updateKey]);
+  const toggleSidebar = () => setSidebarCollapsed((current) => {
+    const next = !current;
+    localStorage.setItem('chatcmd.layout.taskDetailSidebarCollapsed.v1', String(next));
+    return next;
+  });
   const updateChatScrollPosition = () => {
     const root = chatRef.current; if (!root) return;
     nearBottomRef.current = root.scrollHeight - root.scrollTop - root.clientHeight < 96;
@@ -116,37 +126,36 @@ function TaskDetailContent({ detail, realtime, onTaskChanged, hasOlder, loadingO
     }));
   };
 
-  return <div className="task-detail-shell">
-    <header className="task-detail-topbar"><div><h1>{conversationName(task)}</h1><p>{tr('{count} agent turns · generation {generation} · {realtime} · updated {time}', { count: turns.length, generation: task.generation ?? 1, realtime: realtime === 'online' ? translatedStatus('online') : realtime, time: formatTime(task.updatedAtUtc) })}</p></div><StatusBadge state={task.status} /></header>
+  return <CompactProvider taskId={task.id} enabled={chatGpt}><div className={`task-detail-shell${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}>
     <div className="task-detail-body">
       <div className={`task-chat-pane${chatGpt ? ' has-chatgpt-footer' : ''}`}>
+      <header className="task-detail-topbar" tabIndex={0} aria-label={subagentLabel('header')}><div><h1>{conversationName(task)}</h1><p>{tr('{count} agent turns · generation {generation} · {realtime} · updated {time}', { count: turns.length, generation: task.generation ?? 1, realtime: realtime === 'online' ? translatedStatus('online') : realtime, time: formatTime(task.updatedAtUtc) })}</p></div><div className="task-detail-topbar-actions"><StatusBadge state={task.status} /><button className="task-detail-sidebar-toggle" type="button" aria-label={sidebarCollapsed ? 'Mở thông tin task' : 'Đóng thông tin task'} title={sidebarCollapsed ? 'Mở thông tin task' : 'Đóng thông tin task'} onClick={toggleSidebar}>{sidebarCollapsed ? <PanelRightOpen /> : <PanelRightClose />}</button></div></header>
         <main ref={chatRef} className="task-chat-column" onScroll={updateChatScrollPosition}><h2 className="sr-only">{tr('Activity timeline')}</h2>
           <SubagentApprovalQueue approvals={detail.subagentApprovals ?? []} onResolved={(activityId) => onTaskChanged({ ...detail, subagentApprovals: (detail.subagentApprovals ?? []).filter((item) => item.activityId !== activityId) })} />
           {loadingOlder && <div className="task-history-skeleton" role="status" aria-label={tr('Loading older conversation')}><span /><span /><span /></div>}
           <section className="task-bubble-timeline turn-timeline" aria-label={tr('Conversation activity')}>
-            {turns.length ? turns.map((turn) => <TaskTurnBubble turn={turn} taskId={task.id} agentLabel={chatGpt ? 'ChatGPT' : tr('Codex Agent')} subagents={(detail.subagents ?? []).filter((agent) => agent.parentTurnId === turn.id)} key={turn.id} />) : <div className="task-awaiting-first-response" role="status" aria-live="polite"><span className="task-awaiting-first-response-icon"><LoaderCircle /></span><span>{tr('The conversation is connected, ChatGPT is thinking about the answer...')}</span></div>}
+            {turns.length ? turns.map((turn) => <TaskTurnBubble turn={turn} taskId={task.id} agentLabel={chatGpt ? 'ChatGPT' : tr('Codex Agent')} subagents={(detail.subagents ?? []).filter((agent) => (agent.rootTurnId ?? agent.parentTurnId) === turn.id)} key={turn.id} />) : <div className="task-awaiting-first-response" role="status" aria-live="polite"><span className="task-awaiting-first-response-icon"><LoaderCircle /></span><span>{tr('The conversation is connected, ChatGPT is thinking about the answer...')}</span></div>}
           </section>
         </main>
         {chatGpt && <footer className="task-chat-footer"><ChatGptTaskComposer taskId={task.id} /></footer>}
       </div>
-      <aside className="task-detail-sidebar" aria-label={tr('Task information')}>
+      {!sidebarCollapsed && <aside className="task-detail-sidebar" aria-label={tr('Task information')}>
         <div className="panel-resize-handle task-sidebar-resize-handle" role="separator" aria-label={tr('Resize task information')} aria-orientation="vertical" aria-valuemin={280} aria-valuemax={520} aria-valuenow={sidebarResize.width} tabIndex={0} onPointerDown={sidebarResize.onPointerDown} onKeyDown={sidebarResize.onKeyDown} />
         <header className="task-info-header"><span className={`task-info-state ${task.status}`}>{task.status === 'running' ? <LoaderCircle className="spin" /> : task.status === 'failed' ? <CircleAlert /> : <CheckCircle2 />}</span><div><h2>{conversationName(task)}</h2><p><code>#{task.id}</code> · {translatedStatus(task.status)} · {tr('{count} agent turns', { count: turns.length })}</p></div></header>
         <div className="task-info-duration"><Clock3 /><span>{formatTime(startedAt)} → {formatTime(task.updatedAtUtc)}</span></div>
         <TaskTerminalSection taskId={task.id} turnId={lastTurn?.id} />
         {(chatGpt || task.isSubagent) && <ChatGptTaskCard taskId={task.id} />}
-        <TaskAccessCard taskId={detail.executionModeSourceTaskId ?? task.id} defaultMode={detail.executionMode ?? 'allowAll'} />
+        <TaskAccessCard taskId={detail.executionModeSourceTaskId ?? task.id} grantTaskId={task.id} defaultMode={detail.executionMode ?? 'allowAll'} grants={detail.approvalGrants} />
+        {chatGpt && <CompactHistoryCard />}
         {!chatGpt && <TaskConversationStopCard taskId={task.id} taskStatus={task.status} onStopped={onTaskChanged} />}
-      </aside>
+      </aside>}
     </div>
-  </div>;
+  </div></CompactProvider>;
 }
 
 
 function mergeUniqueEvents(first: TimelineEvent[], second: TimelineEvent[]) {
-  const merged = new Map<string, TimelineEvent>();
-  for (const event of [...first, ...second]) if (!merged.has(event.id)) merged.set(event.id, event);
-  return [...merged.values()].sort((left, right) => left.occurredAt.localeCompare(right.occurredAt) || left.id.localeCompare(right.id));
+  return mergeTimelineEvents(first, second);
 }
 
 function compactLiveToolEvent(event: TimelineEvent): TimelineEvent {

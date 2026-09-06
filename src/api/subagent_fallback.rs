@@ -37,8 +37,11 @@ pub(super) struct SubagentFallbackResult {
 pub(super) async fn pending_subagent_fallbacks(
     State(state): State<Arc<AppState>>,
 ) -> Result<Json<Vec<Value>>, Problem> {
+    if !heartbeat::creation_enabled(&state).await? {
+        return Ok(Json(Vec::new()));
+    }
     let rows = sqlx::query(
-        "SELECT r.id,r.parent_task_id,r.parent_turn_id,r.child_task_id,r.name,r.request,r.fallback_attempts,r.fallback_conversation_id,r.fallback_conversation_url,a.name AS agent_name FROM subagent_runs r LEFT JOIN tasks t ON t.id=r.child_task_id LEFT JOIN mcp_agents a ON a.id=t.agent_id WHERE r.status='pending' AND r.fallback_state IN ('requested','started') AND r.fallback_attempts BETWEEN 1 AND ? ORDER BY r.updated_at_ms,r.id",
+        "SELECT r.id,r.parent_task_id,r.parent_turn_id,r.child_task_id,r.name,r.request,r.fallback_attempts,r.fallback_conversation_id,r.fallback_conversation_url,a.name AS agent_name,p.project_folder AS parent_project_folder FROM subagent_runs r LEFT JOIN tasks t ON t.id=r.child_task_id LEFT JOIN mcp_agents a ON a.id=t.agent_id LEFT JOIN tasks p ON p.id=r.parent_task_id WHERE r.status='pending' AND r.fallback_state IN ('requested','started') AND r.fallback_attempts BETWEEN 1 AND ? ORDER BY r.updated_at_ms,r.id",
     )
     .bind(MAX_EXTENSION_FALLBACK_ATTEMPTS)
     .fetch_all(state.repository.pool())
@@ -326,7 +329,7 @@ async fn fallback_row(
     state: &Arc<AppState>,
     subagent_id: &str,
 ) -> Result<sqlx::sqlite::SqliteRow, Problem> {
-    sqlx::query("SELECT r.id,r.parent_task_id,r.parent_turn_id,r.child_task_id,r.name,r.request,r.status,r.fallback_state,r.fallback_attempts,r.fallback_conversation_id,r.fallback_conversation_url,a.name AS agent_name FROM subagent_runs r LEFT JOIN tasks t ON t.id=r.child_task_id LEFT JOIN mcp_agents a ON a.id=t.agent_id WHERE r.id=? LIMIT 1")
+    sqlx::query("SELECT r.id,r.parent_task_id,r.parent_turn_id,r.child_task_id,r.name,r.request,r.status,r.fallback_state,r.fallback_attempts,r.fallback_conversation_id,r.fallback_conversation_url,a.name AS agent_name,p.project_folder AS parent_project_folder FROM subagent_runs r LEFT JOIN tasks t ON t.id=r.child_task_id LEFT JOIN mcp_agents a ON a.id=t.agent_id LEFT JOIN tasks p ON p.id=r.parent_task_id WHERE r.id=? LIMIT 1")
         .bind(subagent_id)
         .fetch_optional(state.repository.pool())
         .await
@@ -396,6 +399,7 @@ fn fallback_request_value(row: &sqlx::sqlite::SqliteRow, attempt: i64) -> Value 
         "parentTurnId": row.get::<String, _>("parent_turn_id"),
         "childTaskId": row.get::<Option<String>, _>("child_task_id"),
         "name": row.get::<String, _>("name"),
+        "projectFolder": row.get::<Option<String>, _>("parent_project_folder"),
         "submittedContent": submitted_content,
         "attempt": attempt,
         "maxAttempts": MAX_EXTENSION_FALLBACK_ATTEMPTS,
@@ -404,12 +408,16 @@ fn fallback_request_value(row: &sqlx::sqlite::SqliteRow, attempt: i64) -> Value 
     })
 }
 
-fn fallback_submitted_content(agent_name: Option<&str>, request: &str, subagent_id: &str) -> String {
+fn fallback_submitted_content(
+    agent_name: Option<&str>,
+    request: &str,
+    subagent_id: &str,
+) -> String {
     let delegated_prompt = format!("{request}\n\nCMDGPT_SUBAGENT_ID={subagent_id}");
     match agent_name.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(agent_name) => format!(
-            "Sử dụng plugin @{agent_name} để thực hiện yêu cầu sau:\n\n{delegated_prompt}"
-        ),
+        Some(agent_name) => {
+            format!("Sử dụng plugin @{agent_name} để thực hiện yêu cầu sau:\n\n{delegated_prompt}")
+        }
         None => delegated_prompt,
     }
 }
@@ -456,3 +464,7 @@ fn clean_optional(value: Option<&str>) -> Option<&str> {
 #[cfg(test)]
 #[path = "subagent_fallback_tests.rs"]
 mod tests;
+
+#[path = "subagent_fallback_heartbeat.rs"]
+mod heartbeat;
+pub(super) use heartbeat::subagent_fallback_heartbeat;

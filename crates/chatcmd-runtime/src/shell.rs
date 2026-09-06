@@ -2,9 +2,10 @@ mod live;
 mod operations;
 
 use crate::{
-    PolicyEngine, RuntimeConfig, RuntimeError, RuntimeResult, SharedEventSink, ShellEvent,
-    ShellSessionInfo,
+    AdmissionController, BudgetTracker, PolicyEngine, RuntimeConfig, RuntimeError, RuntimeResult,
+    SharedEventSink, ShellEvent, ShellSessionInfo, ToolBudget, ToolUsage,
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use portable_pty::{Child, MasterPty};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -16,7 +17,7 @@ use std::{
     },
     time::{SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::{Notify, Semaphore};
+use tokio::sync::Notify;
 
 #[derive(Clone)]
 pub struct ShellRuntime {
@@ -29,7 +30,7 @@ struct ShellRuntimeInner {
     retired_sessions: Mutex<VecDeque<Arc<Session>>>,
     completed_requests: Mutex<HashMap<String, serde_json::Value>>,
     in_flight_requests: Mutex<HashSet<String>>,
-    operations: Arc<Semaphore>,
+    admission: AdmissionController,
     policy: PolicyEngine,
     events: SharedEventSink,
 }
@@ -52,10 +53,95 @@ struct Session {
 }
 
 struct OutputBuffer {
-    events: VecDeque<ShellEvent>,
+    events: VecDeque<StoredEvent>,
     bytes: usize,
     latest: u64,
     replay_truncated: bool,
+    dropped_bytes: u64,
+    dropped_events: u64,
+}
+
+struct StoredEvent {
+    event: ShellEvent,
+    bytes: usize,
+}
+
+impl OutputBuffer {
+    fn push(&mut self, event: ShellEvent, byte_count: usize, max_bytes: usize, max_events: usize) {
+        self.bytes = self.bytes.saturating_add(byte_count);
+        self.events.push_back(StoredEvent {
+            event,
+            bytes: byte_count,
+        });
+        while self.bytes > max_bytes || self.events.len() > max_events {
+            let Some(removed) = self.events.pop_front() else {
+                break;
+            };
+            self.bytes = self.bytes.saturating_sub(removed.bytes);
+            self.dropped_bytes = self
+                .dropped_bytes
+                .saturating_add(u64::try_from(removed.bytes).unwrap_or(u64::MAX));
+            self.dropped_events = self.dropped_events.saturating_add(1);
+            self.replay_truncated = true;
+        }
+    }
+}
+
+struct TerminalOutputCoalescer {
+    pending: Vec<u8>,
+    max_chunk_bytes: usize,
+}
+
+impl TerminalOutputCoalescer {
+    fn new(max_chunk_bytes: usize) -> Self {
+        Self {
+            pending: Vec::with_capacity(max_chunk_bytes),
+            max_chunk_bytes: max_chunk_bytes.max(256),
+        }
+    }
+
+    fn push(&mut self, bytes: &[u8]) -> Vec<Vec<u8>> {
+        self.pending.extend_from_slice(bytes);
+        let mut chunks = Vec::new();
+        while self.pending.len() >= self.max_chunk_bytes {
+            chunks.push(self.pending.drain(..self.max_chunk_bytes).collect());
+        }
+        chunks
+    }
+
+    fn flush(&mut self) -> Option<Vec<u8>> {
+        (!self.pending.is_empty()).then(|| std::mem::take(&mut self.pending))
+    }
+}
+
+fn encode_output(bytes: &[u8]) -> (String, String) {
+    match std::str::from_utf8(bytes) {
+        Ok(text) => (text.to_owned(), "utf-8".to_owned()),
+        Err(_) => (BASE64.encode(bytes), "base64".to_owned()),
+    }
+}
+
+fn append_output(
+    session: &Session,
+    bytes: Vec<u8>,
+    max_replay_bytes: usize,
+    max_replay_events: usize,
+) {
+    let byte_count = bytes.len();
+    let (data, encoding) = encode_output(&bytes);
+    if let Ok(mut output) = session.output.lock() {
+        output.latest = output.latest.saturating_add(1);
+        let event = ShellEvent {
+            sequence: output.latest,
+            timestamp_unix_ms: now_ms(),
+            event_type: "output".into(),
+            stream: "pty".into(),
+            data,
+            encoding,
+        };
+        output.push(event, byte_count, max_replay_bytes, max_replay_events);
+    }
+    session.notify.notify_waiters();
 }
 
 fn default_shell() -> PathBuf {
@@ -166,19 +252,40 @@ fn spawn_session_reaper(inner: Arc<ShellRuntimeInner>, session: Arc<Session>) ->
 }
 
 fn kill_tree(session: &Session) -> RuntimeResult<()> {
+    if session.exited.load(Ordering::Acquire) {
+        return Ok(());
+    }
+    let mut tree_killed = false;
     if cfg!(windows)
         && let Some(pid) = session.process_id
     {
-        let _ = std::process::Command::new("taskkill.exe")
+        tree_killed = std::process::Command::new("taskkill.exe")
             .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .output();
+            .output()
+            .is_ok_and(|output| output.status.success());
     }
-    session
-        .child
-        .lock()
-        .map_err(lock_error)?
-        .kill()
-        .map_err(io_error)
+    if cfg!(unix)
+        && let Some(pid) = session.process_id
+    {
+        tree_killed = std::process::Command::new("kill")
+            .args(["-KILL", &format!("-{pid}")])
+            .output()
+            .is_ok_and(|output| output.status.success());
+    }
+    let child_kill = session.child.lock().map_err(lock_error)?.kill();
+    if tree_killed {
+        return Ok(());
+    }
+    match child_kill {
+        Ok(()) => Ok(()),
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                || session.exited.load(Ordering::Acquire) =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(io_error(error)),
+    }
 }
 
 fn lock_error<T>(_error: std::sync::PoisonError<T>) -> RuntimeError {
@@ -206,5 +313,83 @@ fn redact(value: &str) -> String {
         "[REDACTED]".into()
     } else {
         value.into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn coalescer_bounds_chunks_and_preserves_a_million_tiny_reads() {
+        let input = (0..1_000_000)
+            .map(|index| (index % 251) as u8)
+            .collect::<Vec<_>>();
+        let mut coalescer = TerminalOutputCoalescer::new(8 * 1024);
+        let mut chunks = Vec::new();
+        for byte in &input {
+            chunks.extend(coalescer.push(std::slice::from_ref(byte)));
+        }
+        if let Some(chunk) = coalescer.flush() {
+            chunks.push(chunk);
+        }
+        assert!(chunks.iter().all(|chunk| chunk.len() <= 8 * 1024));
+        assert!(chunks.len() < 125);
+        assert_eq!(chunks.concat(), input);
+    }
+
+    #[test]
+    fn encoded_output_round_trips_utf8_ansi_cr_and_binary() {
+        let vectors: [&[u8]; 4] = [
+            "xin chào".as_bytes(),
+            b"\x1b[31mred\x1b[0m",
+            b"10%\r20%\r",
+            b"\x00\xff\x80\n",
+        ];
+        for input in vectors {
+            let (data, encoding) = encode_output(input);
+            let decoded = if encoding == "base64" {
+                BASE64.decode(data).expect("valid base64")
+            } else {
+                data.into_bytes()
+            };
+            assert_eq!(decoded, input);
+        }
+    }
+
+    #[test]
+    fn replay_evicts_oldest_by_bytes_and_events_with_gap_counters() {
+        let mut output = OutputBuffer {
+            events: VecDeque::new(),
+            bytes: 0,
+            latest: 0,
+            replay_truncated: false,
+            dropped_bytes: 0,
+            dropped_events: 0,
+        };
+        for sequence in 1..=4 {
+            output.latest = sequence;
+            output.push(
+                ShellEvent {
+                    sequence,
+                    timestamp_unix_ms: 0,
+                    event_type: "output".to_owned(),
+                    stream: "pty".to_owned(),
+                    data: "1234".to_owned(),
+                    encoding: "utf-8".to_owned(),
+                },
+                4,
+                10,
+                2,
+            );
+        }
+        assert_eq!(output.events.len(), 2);
+        assert_eq!(
+            output.events.front().map(|stored| stored.event.sequence),
+            Some(3)
+        );
+        assert_eq!(output.dropped_events, 2);
+        assert_eq!(output.dropped_bytes, 8);
+        assert!(output.replay_truncated);
     }
 }

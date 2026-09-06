@@ -46,6 +46,12 @@ impl RuntimeHost {
             return Ok(json!({ "attempt": current_attempt, "status": status }));
         }
 
+        if self.subagent_concurrency_limit().await? == 0 {
+            return Err(RuntimeError::new(
+                "subagents_disabled",
+                "Browser child dispatch is disabled by the user.",
+            ));
+        }
         let attempt =
             if matches!(fallback_state.as_str(), "requested" | "started") && current_attempt > 0 {
                 current_attempt
@@ -73,15 +79,26 @@ impl RuntimeHost {
         let parent_task_id = row.get::<String, _>("parent_task_id");
         let parent_turn_id = row.get::<String, _>("parent_turn_id");
         let name = row.get::<String, _>("name");
-        let agent_name = sqlx::query_scalar::<_, String>(
-            "SELECT name FROM mcp_agents WHERE id=? LIMIT 1",
+        let project_folder = sqlx::query_scalar::<_, String>(
+            "SELECT project_folder FROM tasks WHERE id=? AND project_folder IS NOT NULL LIMIT 1",
         )
-        .bind(&parent_context.agent_id)
+        .bind(&parent_task_id)
         .fetch_optional(self.repository.pool())
         .await
         .ok()
         .flatten();
-        let submitted_content = match agent_name.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+        let agent_name =
+            sqlx::query_scalar::<_, String>("SELECT name FROM mcp_agents WHERE id=? LIMIT 1")
+                .bind(&parent_context.agent_id)
+                .fetch_optional(self.repository.pool())
+                .await
+                .ok()
+                .flatten();
+        let submitted_content = match agent_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
             Some(agent_name) => format!(
                 "Sử dụng plugin @{agent_name} để thực hiện yêu cầu sau:\n\n{delegated_prompt}"
             ),
@@ -99,6 +116,7 @@ impl RuntimeHost {
                 "parentTurnId": parent_turn_id,
                 "childTaskId": child_task_id,
                 "name": name,
+                "projectFolder": project_folder,
                 "submittedContent": submitted_content,
                 "attempt": attempt,
                 "maxAttempts": MAX_EXTENSION_FALLBACK_ATTEMPTS,

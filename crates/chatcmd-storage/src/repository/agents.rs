@@ -62,6 +62,9 @@ impl McpAgentStore for SqliteRepository {
         if affected == 0 {
             return Err(StorageError::NotFound(format!("MCP agent {id}")));
         }
+        sqlx::query("UPDATE approval_grants SET state='revoked',updated_at_ms=? WHERE owner_agent_id=? AND state='active'")
+            .bind(now).bind(id.as_str()).execute(&self.pool).await
+            .map_err(|error| backend("revoke rotated agent grants", error))?;
         let agent = self
             .agent(id)
             .await?
@@ -73,9 +76,10 @@ impl McpAgentStore for SqliteRepository {
     }
 
     async fn set_agent_enabled(&self, id: &AgentId, enabled: bool) -> Result<(), StorageError> {
+        let now = now_ms()?;
         let affected = sqlx::query("UPDATE mcp_agents SET enabled=?,updated_at_ms=? WHERE id=?")
             .bind(enabled)
-            .bind(now_ms()?)
+            .bind(now)
             .bind(id.as_str())
             .execute(&self.pool)
             .await
@@ -83,6 +87,11 @@ impl McpAgentStore for SqliteRepository {
             .rows_affected();
         if affected == 0 {
             return Err(StorageError::NotFound(format!("MCP agent {id}")));
+        }
+        if !enabled {
+            sqlx::query("UPDATE approval_grants SET state='revoked',updated_at_ms=? WHERE owner_agent_id=? AND state='active'")
+                .bind(now).bind(id.as_str()).execute(&self.pool).await
+                .map_err(|error| backend("revoke disabled agent grants", error))?;
         }
         Ok(())
     }
@@ -104,6 +113,11 @@ impl McpAgentStore for SqliteRepository {
                 .rows_affected();
         if affected == 0 {
             return Err(StorageError::NotFound(format!("MCP agent {id}")));
+        }
+        if !input.enabled {
+            sqlx::query("UPDATE approval_grants SET state='revoked',updated_at_ms=? WHERE owner_agent_id=? AND state='active'")
+                .bind(now_ms()?).bind(id.as_str()).execute(&self.pool).await
+                .map_err(|error| backend("revoke disabled agent grants", error))?;
         }
         self.agent(id)
             .await?

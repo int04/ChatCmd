@@ -113,11 +113,14 @@ pub(super) async fn terminal_live_output(
         "oldestAvailableSequence": result.oldest_available_sequence,
         "latestAvailableSequence": result.latest_available_sequence,
         "replayTruncated": result.replay_truncated,
+        "droppedBytes": result.dropped_bytes,
+        "droppedEvents": result.dropped_events,
         "events": result.events.iter().map(|event| json!({
             "sequence": event.sequence,
             "occurredAtUtc": iso_ms(i64::try_from(event.timestamp_unix_ms).unwrap_or(i64::MAX)),
             "stream": event.stream,
-            "data": event.data
+            "data": event.data,
+            "encoding": event.encoding
         })).collect::<Vec<_>>()
     })))
 }
@@ -172,6 +175,8 @@ pub(super) async fn terminal_input(
                 session_id: id,
                 text: input.text,
                 append_new_line: false,
+                input_kind: chatcmd_runtime::ShellInputKind::Interactive,
+                sensitive: false,
             },
         )
         .await

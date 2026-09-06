@@ -1,14 +1,17 @@
+import { subagentLabel, subagentTreeRows } from './subagentPresentation';
+import { TurnThinkingSources } from './TurnThinkingSources';
+import { browserThinking, isBrowserEvent } from './chatGptThinking';
 import { BookOpen, Bot, CheckCircle2, ChevronDown, CircleAlert, CircleStop, Clock3, ExternalLink, FileCode2, FilePenLine, GitBranch, LoaderCircle, MessageSquareText, Search, TerminalSquare, Wrench } from 'lucide-react';
 import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import rehypeSanitize from 'rehype-sanitize';
-import remarkGfm from 'remark-gfm';
+import { ChatRichText } from './rich-text/ChatRichText';
 import { api } from '../api';
 import { Modal } from '../components';
 import { appLocale, formatAppNumber, tr } from '../i18n';
 import type { SubagentRun, TaskActivityDetail, TaskTurn, TimelineEvent } from '../types';
 import { ApprovalDecisionActions } from './ApprovalDecisionActions';
+import { CompletionQualityCard } from './CompletionQualityCard';
 import { StopActivityDialog } from './StopActivityDialog';
+import { completionQualityReport } from './completionQuality';
 import {
   activityCodeView,
   activityDiffView,
@@ -34,11 +37,14 @@ const TaskCodeViewer = lazy(async () => ({ default: (await import('../TaskCodeVi
 export function TaskTurnBubble({ turn, taskId, subagents = [], agentLabel = 'Codex Agent' }: { turn: TaskTurn; taskId: string; subagents?: SubagentRun[]; agentLabel?: string }) {
   const events = turn.events ?? [];
   const completion = findCompletionSignal(events);
+  const qualityReport = completionQualityReport(events);
   const response = findFinalResponse(events);
   const autoFinalized = completion?.payload.autoFinalized === true;
   const userMessage = findUserMessage(events);
   const visibleUserMessage = userMessage?.text.replace(/^\s*CMDGPT_SUBAGENT_ID=subagent-[A-Za-z0-9_-]+\s*$/gm, '').trim();
-  const processEvents = events.filter((event) => event !== userMessage?.event);
+  const browser = browserThinking(events);
+  const dualSources = agentLabel === 'ChatGPT' || events.some(isBrowserEvent);
+  const processEvents = events.filter((event) => event !== userMessage?.event && !isBrowserEvent(event));
   const blocks = buildProcessBlocks(processEvents);
   const activities = blocks.flatMap((block) => block.type === 'activities' ? block.activities : []);
   const rawStatus = turn.status ?? 'incomplete';
@@ -50,18 +56,21 @@ export function TaskTurnBubble({ turn, taskId, subagents = [], agentLabel = 'Cod
   const headingId = `turn-${turn.id}`;
   const [stopTarget, setStopTarget] = useState<ToolActivity | null>(null);
   const [changeTarget, setChangeTarget] = useState<ToolActivity | null>(null);
-  const [thinkingOpen, setThinkingOpen] = useState(() => !response);
-  const hasThinkingContent = subagents.length > 0 || activities.length > 0 || blocks.some((block) => block.type === 'progress') || isThinking || status === 'failed' || status === 'incomplete' || (status === 'completed' && autoFinalized && !response);
+  const hasResponse = Boolean(response);
+  const [thinkingOpen, setThinkingOpen] = useState(() => !hasResponse);
+  const hasMcp = subagents.length > 0 || activities.length > 0 || blocks.some((block) => block.type === 'progress') || Boolean(response && !isBrowserEvent(response.event));
+  const hasThinkingContent = dualSources || subagents.length > 0 || activities.length > 0 || blocks.some((block) => block.type === 'progress') || isThinking || status === 'failed' || status === 'incomplete' || (status === 'completed' && autoFinalized && !hasResponse);
   const fileChanges = response ? responseFileChanges(response.event) : [];
+  const fileChangeTrackingIncomplete = response ? responseFileChangeTrackingIncomplete(response.event) : false;
 
   useEffect(() => {
-    setThinkingOpen(!response);
-  }, [Boolean(response)]);
+    setThinkingOpen(!hasResponse);
+  }, [hasResponse]);
 
   return <div className="turn-item">
     {userMessage && <article className="turn-user-message">
       <header><strong>{tr('You')}</strong><BubbleTime value={userMessage.event.occurredAt} /></header>
-      <div className="turn-user-content"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]}>{visibleUserMessage}</ReactMarkdown></div>
+      <div className="turn-user-content"><ChatRichText content={visibleUserMessage ?? ''} /></div>
     </article>}
     <div className={`turn-end-status ${status}`} role={status === 'running' ? 'status' : undefined}>
       {status === 'running'
@@ -86,6 +95,7 @@ export function TaskTurnBubble({ turn, taskId, subagents = [], agentLabel = 'Cod
           <span><MessageSquareText aria-hidden="true" />{tr('Thinking')}</span><ChevronDown aria-hidden="true" />
         </button>
         {thinkingOpen && <div className="turn-thinking-content">
+          <TurnThinkingSources enabled={dualSources} browser={browser} hasMcp={hasMcp} running={status === 'running'}>
           {subagents.length > 0 && <SubagentList agents={subagents} />}
           {(activities.length > 0 || blocks.some((block) => block.type === 'progress')) && <TurnProcess blocks={blocks} taskId={taskId} onStop={setStopTarget} />}
           {isThinking && <div className="turn-thinking" role="status"><span>{tr('Thinking and preparing a response…')}</span></div>}
@@ -94,11 +104,14 @@ export function TaskTurnBubble({ turn, taskId, subagents = [], agentLabel = 'Cod
             : <div className="turn-error" role="alert"><CircleAlert /><div><strong>{tr('Agent turn failed')}</strong><p>{latestMessage(events) || tr('The Agent could not complete this turn. Review the activity above to find the cause.')}</p></div></div>)}
           {status === 'incomplete' && <div className="turn-warning" role="status"><CircleAlert /><div><strong>{tr('This turn may have been interrupted')}</strong><p>{latestMessage(events) || tr('No new activity or completion signal was received for a long time. The turn may have been interrupted or delayed; its state will recover automatically if new data arrives.')}</p></div></div>}
           {status === 'completed' && autoFinalized && !response && <div className="turn-warning" role="status"><CircleAlert /><div><strong>{tr('Finalizer was not received')}</strong><p>{tr('No completion callback arrived from the Agent. ChatCMD stopped waiting after the inactivity grace period; later Agent activity will reopen the turn automatically.')}</p></div></div>}
+          </TurnThinkingSources>
           <button type="button" className="turn-thinking-collapse" onClick={() => setThinkingOpen(false)}><ChevronDown aria-hidden="true" />{tr('Show less')}</button>
         </div>}
       </section>}
       {status === 'completed' && response && <section className="turn-final-section">
         <div className="turn-response"><div className="turn-response-label"><CheckCircle2 /> {tr('Final response')}</div><div className="turn-response-content"><RichText content={response.text} /></div></div>
+        {qualityReport && <CompletionQualityCard report={qualityReport} />}
+        {fileChangeTrackingIncomplete && <div className="turn-warning" role="status"><CircleAlert /><div><strong>{tr('File change tracking was incomplete')}</strong><p>{tr('Some shell file events were dropped. The list below may not include every changed file.')}</p></div></div>}
         {fileChanges.length > 0 && <TurnFileChanges changes={fileChanges} onOpen={(activity) => setChangeTarget(activity)} />}
       </section>}
     </article>
@@ -107,18 +120,26 @@ export function TaskTurnBubble({ turn, taskId, subagents = [], agentLabel = 'Cod
   </div>;
 }
 
-type TurnFileChange = { path: string; fileName: string; extension: string; kind: 'added' | 'deleted' | 'modified'; additions: number; deletions: number; activity: ToolActivity };
+export type TurnFileChange = { path: string; fileName: string; extension: string; kind: 'added' | 'deleted' | 'modified' | 'moved' | 'directoryCreated'; additions: number | null; deletions: number | null; confidence: string; diffArtifactRef?: string; activity: ToolActivity };
 
-function responseFileChanges(event: TimelineEvent): TurnFileChange[] {
+export function responseFileChangeTrackingIncomplete(event: TimelineEvent): boolean {
+  const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload) ? event.payload as Record<string, unknown> : {};
+  return payload.fileChangeTrackingIncomplete === true;
+}
+
+export function responseFileChanges(event: TimelineEvent): TurnFileChange[] {
   const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload) ? event.payload as Record<string, unknown> : {};
   const raw = Array.isArray(payload.fileChanges) ? payload.fileChanges : [];
   return raw.flatMap((item, index) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) return [];
     const value = item as Record<string, unknown>;
     const path = typeof value.path === 'string' ? value.path : '';
-    const before = typeof value.before === 'string' ? value.before : '';
-    const after = typeof value.after === 'string' ? value.after : '';
-    const kind = value.kind === 'added' || value.kind === 'deleted' ? value.kind : 'modified';
+    const preview = value.preview && typeof value.preview === 'object' && !Array.isArray(value.preview) ? value.preview as Record<string, unknown> : {};
+    const before = typeof preview.before === 'string' ? preview.before : '';
+    const after = typeof preview.after === 'string' ? preview.after : '';
+    const kind = value.kind === 'added' || value.kind === 'deleted' || value.kind === 'moved' || value.kind === 'directoryCreated' ? value.kind : 'modified';
+    const confidence = typeof value.confidence === 'string' ? value.confidence : 'metadataOnly';
+    const diffArtifactRef = typeof value.diffArtifactRef === 'string' ? value.diffArtifactRef : undefined;
     if (!path) return [];
     const fileName = path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
     const extension = fileName.includes('.') ? fileName.split('.').at(-1)?.toUpperCase() || 'FILE' : 'FILE';
@@ -128,13 +149,16 @@ function responseFileChanges(event: TimelineEvent): TurnFileChange[] {
       tool,
       kind: kind === 'deleted' ? 'delete' : 'edit',
       input: { path },
-      output: { __chatcmdDiff: { path, before, after, beforeAvailable: value.beforeAvailable !== false } },
+      output: { __chatcmdDiff: { path, before, after, beforeAvailable: typeof preview.before === 'string' } },
       status: 'succeeded',
       startedAt: event.occurredAt,
       finishedAt: event.occurredAt,
       turnId: event.turnId,
     };
-    return [{ path, fileName, extension, kind, additions: Number(value.additions) || 0, deletions: Number(value.deletions) || 0, activity }];
+    return [{ path, fileName, extension, kind,
+      additions: typeof value.additions === 'number' ? value.additions : null,
+      deletions: typeof value.deletions === 'number' ? value.deletions : null,
+      confidence, diffArtifactRef, activity }];
   });
 }
 
@@ -142,11 +166,11 @@ function TurnFileChanges({ changes, onOpen }: { changes: TurnFileChange[]; onOpe
   return <section className="turn-file-changes" aria-label={tr('Changed files')}>
     <div className="turn-file-changes-heading"><FilePenLine aria-hidden="true" /><strong>{tr('Changed files')}</strong><span>{changes.length}</span></div>
     <div className="turn-file-change-list">{changes.map((change, index) => {
-      const action = change.kind === 'added' ? tr('Added') : change.kind === 'deleted' ? tr('Deleted') : tr('Modified');
+      const action = change.kind === 'added' ? tr('Added') : change.kind === 'deleted' ? tr('Deleted') : change.kind === 'moved' ? tr('Moved') : change.kind === 'directoryCreated' ? tr('Created') : tr('Modified');
       return <button type="button" className={`turn-file-change-card ${change.kind}`} onClick={() => onOpen(change.activity)} key={`${change.path}:${index}`}>
         <span className="turn-file-change-icon"><FileCode2 aria-hidden="true" /><small>{change.extension}</small></span>
         <span className="turn-file-change-copy"><strong>{action} {change.fileName}</strong><small>{change.path}</small></span>
-        <span className="turn-file-change-lines"><b>+{change.additions}</b><i>-{change.deletions}</i></span>
+        <span className="turn-file-change-lines" title={change.confidence}><b>+{change.additions ?? '?'}</b><i>-{change.deletions ?? '?'}</i></span>
       </button>;
     })}</div>
   </section>;
@@ -167,7 +191,7 @@ function ActivityDiffModal({ activity, close }: { activity: ToolActivity; close:
 function SubagentList({ agents }: { agents: SubagentRun[] }) {
   return <section className="turn-subagents" aria-label={tr('Subagents')}>
     <div className="turn-subagents-heading"><Bot aria-hidden="true" /><strong>{tr('Subagents')}</strong><span>{agents.length}</span></div>
-    <div className="turn-subagents-list">{agents.map((agent) => <SubagentItem agent={agent} key={agent.id} />)}</div>
+    <div className="turn-subagents-list">{subagentTreeRows(agents).map(({ agent, depth }) => <div className="turn-subagent-branch" key={agent.id} data-depth={depth} style={{ paddingInlineStart: Math.min(depth, 5) * 14 }}>{depth > 0 && <small className="turn-subagent-parent">{subagentLabel('parent')}: {agent.parentName || agent.parentTaskId}</small>}<SubagentItem agent={agent} /></div>)}</div>
   </section>;
 }
 
@@ -176,15 +200,21 @@ function SubagentItem({ agent }: { agent: SubagentRun }) {
   const running = agent.status === 'running';
   const failed = agent.status === 'failed';
   const stopped = agent.status === 'stopped';
-  const statusLabel = pending ? tr('Waiting to start') : running ? tr('Running') : agent.status === 'completed' ? tr('Done') : agent.status === 'stopped' ? tr('Stopped') : agent.status === 'interrupted' ? tr('Interrupted') : failed ? tr('Failed') : agent.status;
+  const timedOut = agent.status === 'timedOut';
+  const statusLabel = pending ? tr('Waiting to start') : running ? tr('Running') : agent.status === 'completed' ? tr('Done') : agent.status === 'stopped' ? tr('Stopped') : agent.status === 'interrupted' ? tr('Interrupted') : timedOut ? tr('Timed out') : failed ? tr('Failed') : agent.status;
+  const statusDetail = subagentStatusText(agent, statusLabel);
   const content = <>
-    <span className={`turn-subagent-state ${agent.status}`} aria-hidden="true">{pending ? <Clock3 /> : running ? <LoaderCircle className="spin" /> : stopped ? <CircleStop /> : failed || agent.status === 'interrupted' ? <CircleAlert /> : <CheckCircle2 />}</span>
-    <span className="turn-subagent-copy"><strong>{agent.name}</strong><small>{statusLabel}</small></span>
+    <span className={`turn-subagent-state ${agent.status}`} aria-hidden="true">{pending ? <Clock3 /> : running ? <LoaderCircle className="spin" /> : stopped ? <CircleStop /> : failed || timedOut || agent.status === 'interrupted' ? <CircleAlert /> : <CheckCircle2 />}</span>
+    <span className="turn-subagent-copy"><strong>{agent.name}</strong><small title={agent.terminalReason}>{statusDetail}</small></span>
     {agent.taskId && <ExternalLink className="turn-subagent-open" aria-hidden="true" />}
   </>;
   return agent.taskId
     ? <a className={`turn-subagent ${agent.status}`} href={`/tasks/${encodeURIComponent(agent.taskId)}`} target="_blank" rel="noreferrer noopener" aria-label={`${agent.name} - ${statusLabel} - ${tr('Open in new tab')}`}>{content}</a>
     : <div className={`turn-subagent ${agent.status}`} aria-label={`${agent.name} - ${statusLabel}`}>{content}</div>;
+}
+
+export function subagentStatusText(agent: Pick<SubagentRun, 'attempt' | 'terminalReason'>, statusLabel: string) {
+  return `${statusLabel}${agent.attempt > 0 ? ` · ${tr('Attempt')} ${agent.attempt}` : ''}${agent.terminalReason ? ` · ${agent.terminalReason}` : ''}`;
 }
 
 function TurnProcess({ blocks, taskId, onStop }: { blocks: ReturnType<typeof buildProcessBlocks>; taskId: string; onStop: (activity: ToolActivity) => void }) {
@@ -212,7 +242,7 @@ function ProgressMessage({ event }: { event: TimelineEvent }) {
 }
 
 function RichText({ content }: { content: string }) {
-  return <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeSanitize]} components={{ a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer noopener" /> }}>{content}</ReactMarkdown>;
+  return <ChatRichText content={content} />;
 }
 
 function ActivityRow({ activity, taskId, onStop }: { activity: ToolActivity; taskId: string; onStop: (activity: ToolActivity) => void }) {
@@ -248,7 +278,7 @@ function ActivityRow({ activity, taskId, onStop }: { activity: ToolActivity; tas
       <ChevronDown className="activity-chevron" aria-hidden="true" />
     </button>
     {stoppable && <button type="button" className="activity-stop-button" aria-label={tr('Stop {name}', { name: activityLabel(activity) })} onClick={(event) => { event.preventDefault(); event.stopPropagation(); onStop(activity); }}><CircleStop aria-hidden="true" /><span>{tr('Stop')}</span></button>}
-    {approvalPending && taskId && <ApprovalDecisionActions target={{ taskId, activityId: activity.id, turnId: activity.turnId }} />}
+    {approvalPending && taskId && <ApprovalDecisionActions target={{ taskId, activityId: activity.id, turnId: activity.turnId }} reusable={isSafeReadApproval(activity.input)} />}
     {open && <Modal className="tool-activity-modal" title={activityLabel(activity)} description={`${formatClockTime(activity.startedAt)} · ${activityDuration(activity.startedAt, activity.finishedAt ?? new Date().toISOString())}`} close={closePopup}>
       {detailLoading
         ? <div className="activity-popup-content"><div className="activity-detail-loading" role="status"><LoaderCircle className="spin" aria-hidden="true" /><span>{tr('Loading…')}</span></div></div>
@@ -257,6 +287,12 @@ function ActivityRow({ activity, taskId, onStop }: { activity: ToolActivity; tas
           : <ActivityPopupContent activity={resolvedActivity} approvalPending={approvalPending} running={running} />}
     </Modal>}
   </div>;
+}
+
+function isSafeReadApproval(input: unknown) {
+  if (!input || typeof input !== 'object') return false;
+  const risk = (input as { riskClass?: unknown }).riskClass;
+  return risk === 'metadataRead' || risk === 'contentRead' || risk === 'computeRead';
 }
 
 function ActivityPopupContent({ activity, approvalPending, running }: { activity: ToolActivity; approvalPending: boolean; running: boolean }) {

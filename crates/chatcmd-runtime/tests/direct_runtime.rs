@@ -1,7 +1,9 @@
 use chatcmd_runtime::{
-    ApprovalDecision, BoxFuture, ExecutionPolicy, NullEventSink, OperationContext, PolicyDecision,
-    PolicyEngine, RuntimeConfig, RuntimeResult, ShellCreateRequest, ShellRuntime,
-    ShellWriteRequest, SystemLocalDevice, WorkspaceService,
+    ApplyEditsBudget, ApplyEditsRequest, ApprovalDecision, BoxFuture, EditColumnEncoding,
+    EditCoordinateSystem, ExecutionPolicy, FsStatBudget, FsStatRequest, NullEventSink,
+    OperationContext, PolicyDecision, PolicyEngine, RuntimeConfig, RuntimeResult,
+    ShellCreateRequest, ShellRuntime, ShellWriteRequest, SystemLocalDevice, TextEdit, TextPosition,
+    VersionStrength, WorkspaceService,
 };
 use std::{
     collections::BTreeMap,
@@ -19,6 +21,182 @@ impl ApprovalDecision for Approve {
     ) -> BoxFuture<'a, RuntimeResult<bool>> {
         Box::pin(async { Ok(true) })
     }
+}
+
+async fn metadata_version(workspace: &WorkspaceService, path: &std::path::Path) -> String {
+    workspace
+        .stat_v2(
+            None,
+            &FsStatRequest {
+                path: path.to_path_buf(),
+                version_strength: VersionStrength::Metadata,
+                hash_algorithm: None,
+                budget: FsStatBudget::default(),
+            },
+        )
+        .await
+        .expect("capture version")
+        .version_token
+}
+
+#[tokio::test]
+async fn apply_edits_handles_byte_ranges_dry_run_and_stale_versions() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let workspace =
+        WorkspaceService::new(&[directory.path().to_path_buf()], policy()).expect("workspace");
+    let file = directory.path().join("edits.txt");
+    std::fs::write(&file, "zero one two three").expect("write sample");
+    let version = metadata_version(&workspace, &file).await;
+    let request = ApplyEditsRequest {
+        path: file.clone(),
+        expected_version: version.clone(),
+        coordinate_system: EditCoordinateSystem::Byte,
+        column_encoding: None,
+        edits: vec![
+            TextEdit {
+                start_byte: Some(13),
+                end_byte: Some(18),
+                start: None,
+                end: None,
+                text: "THREE".to_owned(),
+            },
+            TextEdit {
+                start_byte: Some(0),
+                end_byte: Some(4),
+                start: None,
+                end: None,
+                text: "ZERO".to_owned(),
+            },
+            TextEdit {
+                start_byte: Some(8),
+                end_byte: Some(8),
+                start: None,
+                end: None,
+                text: "small ".to_owned(),
+            },
+        ],
+        dry_run: true,
+        preserve_line_endings: true,
+        preserve_bom: true,
+        budget: ApplyEditsBudget::default(),
+    };
+    let dry_run = workspace
+        .apply_edits(
+            &OperationContext::new("dry", "agent", "fs_apply_edits"),
+            &request,
+        )
+        .await
+        .expect("dry run");
+    assert!(!dry_run.applied);
+    assert_eq!(
+        std::fs::read_to_string(&file).expect("unchanged file"),
+        "zero one two three"
+    );
+
+    let applied = workspace
+        .apply_edits(
+            &OperationContext::new("apply", "agent", "fs_apply_edits"),
+            &ApplyEditsRequest {
+                dry_run: false,
+                ..request.clone()
+            },
+        )
+        .await
+        .expect("apply edits");
+    assert!(applied.applied);
+    assert_ne!(applied.old_version, applied.new_version);
+    assert_eq!(
+        std::fs::read_to_string(&file).expect("edited file"),
+        "ZERO onesmall  two THREE"
+    );
+    let stale = workspace
+        .apply_edits(
+            &OperationContext::new("retry", "agent", "fs_apply_edits"),
+            &ApplyEditsRequest {
+                dry_run: false,
+                ..request
+            },
+        )
+        .await
+        .expect_err("stale retry");
+    assert_eq!(stale.code, "targetReplaced");
+}
+
+#[tokio::test]
+async fn apply_edits_supports_unicode_line_columns_crlf_and_rejects_overlap() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let workspace =
+        WorkspaceService::new(&[directory.path().to_path_buf()], policy()).expect("workspace");
+    let file = directory.path().join("unicode.txt");
+    std::fs::write(
+        &file,
+        b"\xef\xbb\xbfalpha\r\na\xf0\x9f\x98\x80e\xcc\x81\r\nomega",
+    )
+    .expect("write UTF-8 sample");
+    let version = metadata_version(&workspace, &file).await;
+    let request = ApplyEditsRequest {
+        path: file.clone(),
+        expected_version: version,
+        coordinate_system: EditCoordinateSystem::LineColumn,
+        column_encoding: Some(EditColumnEncoding::Utf8CodePoint),
+        edits: vec![TextEdit {
+            start_byte: None,
+            end_byte: None,
+            start: Some(TextPosition { line: 2, column: 2 }),
+            end: Some(TextPosition { line: 2, column: 3 }),
+            text: "EMOJI\nNEXT".to_owned(),
+        }],
+        dry_run: false,
+        preserve_line_endings: true,
+        preserve_bom: true,
+        budget: ApplyEditsBudget::default(),
+    };
+    workspace
+        .apply_edits(
+            &OperationContext::new("unicode", "agent", "fs_apply_edits"),
+            &request,
+        )
+        .await
+        .expect("unicode edit");
+    assert_eq!(
+        std::fs::read(&file).expect("edited bytes"),
+        b"\xef\xbb\xbfalpha\r\naEMOJI\r\nNEXTe\xcc\x81\r\nomega"
+    );
+
+    let version = metadata_version(&workspace, &file).await;
+    let overlap = workspace
+        .apply_edits(
+            &OperationContext::new("overlap", "agent", "fs_apply_edits"),
+            &ApplyEditsRequest {
+                path: file,
+                expected_version: version,
+                coordinate_system: EditCoordinateSystem::Byte,
+                column_encoding: None,
+                edits: vec![
+                    TextEdit {
+                        start_byte: Some(3),
+                        end_byte: Some(8),
+                        start: None,
+                        end: None,
+                        text: String::new(),
+                    },
+                    TextEdit {
+                        start_byte: Some(7),
+                        end_byte: Some(9),
+                        start: None,
+                        end: None,
+                        text: String::new(),
+                    },
+                ],
+                dry_run: true,
+                preserve_line_endings: true,
+                preserve_bom: true,
+                budget: ApplyEditsBudget::default(),
+            },
+        )
+        .await
+        .expect_err("overlap rejected");
+    assert_eq!(overlap.code, "overlappingEdits");
 }
 
 fn policy() -> PolicyEngine {
@@ -109,6 +287,8 @@ async fn shell_lifecycle_timeout_duplicate_and_force_close() {
                 session_id: created.session_id.clone(),
                 text: command.to_owned(),
                 append_new_line: true,
+                input_kind: chatcmd_runtime::ShellInputKind::Interactive,
+                sensitive: false,
             },
         )
         .await
@@ -155,6 +335,155 @@ async fn shell_lifecycle_timeout_duplicate_and_force_close() {
         .expect("retired shell output remains readable");
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn shell_force_close_kills_stubborn_process_group() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let runtime = runtime(directory.path().to_path_buf(), 1);
+    let pid_file = directory.path().join("grandchild.pid");
+    let command = format!(
+        "sh -c 'trap \"\" HUP TERM INT; sleep 60' & child=$!; echo $child > '{}'; wait",
+        pid_file.display()
+    );
+    let created = runtime
+        .create(
+            &OperationContext::new("tree-create", "agent", "shell_create"),
+            ShellCreateRequest {
+                request_id: "tree-create".to_owned(),
+                working_directory: Some(directory.path().to_path_buf()),
+                executable: Some(PathBuf::from("/bin/sh")),
+                arguments: vec!["-c".to_owned(), command],
+                environment: BTreeMap::new(),
+                columns: Some(100),
+                rows: Some(24),
+            },
+        )
+        .await
+        .expect("create process tree");
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !pid_file.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "grandchild pid file was not created"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let grandchild_pid = std::fs::read_to_string(&pid_file)
+        .expect("read grandchild pid")
+        .trim()
+        .parse::<u32>()
+        .expect("parse grandchild pid");
+
+    runtime
+        .close(
+            &OperationContext::new("tree-close", "agent", "shell_close"),
+            &created.session_id,
+            true,
+        )
+        .await
+        .expect("force close process tree");
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let alive = std::process::Command::new("kill")
+            .args(["-0", &grandchild_pid.to_string()])
+            .status()
+            .is_ok_and(|status| status.success());
+        if !alive {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "stubborn grandchild {grandchild_pid} survived force close"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test]
+async fn force_close_is_idempotent_after_process_exit() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let runtime = runtime(directory.path().to_path_buf(), 1);
+    let created = runtime
+        .create(
+            &OperationContext::new("exit-close-create", "agent", "shell_create"),
+            create_request(directory.path().to_path_buf(), "exit-close-create"),
+        )
+        .await
+        .expect("create shell");
+    runtime
+        .write(
+            &OperationContext::new("exit-close-write", "agent", "shell_write"),
+            ShellWriteRequest {
+                request_id: "exit-close-write".to_owned(),
+                session_id: created.session_id.clone(),
+                text: "exit".to_owned(),
+                append_new_line: true,
+                input_kind: chatcmd_runtime::ShellInputKind::Interactive,
+                sensitive: false,
+            },
+        )
+        .await
+        .expect("exit shell");
+    let waited = runtime
+        .wait(&created.session_id, Duration::from_secs(5))
+        .await
+        .expect("wait for shell exit");
+    assert!(waited.completed);
+    runtime
+        .close(
+            &OperationContext::new("exit-close-force", "agent", "shell_close"),
+            &created.session_id,
+            true,
+        )
+        .await
+        .expect("force close after exit is idempotent");
+}
+
+#[tokio::test]
+async fn shell_write_rejects_bulk_input_before_writing() {
+    let directory = tempfile::tempdir().expect("temp directory");
+    let config = RuntimeConfig {
+        roots: vec![directory.path().to_path_buf()],
+        max_sessions: 1,
+        max_shell_interactive_input_bytes: 8,
+        ..RuntimeConfig::default()
+    };
+    let runtime = ShellRuntime::new(config, policy(), Arc::new(NullEventSink));
+    let created = runtime
+        .create(
+            &OperationContext::new("bulk-create", "agent", "shell_create"),
+            create_request(directory.path().to_path_buf(), "bulk-create"),
+        )
+        .await
+        .expect("create shell");
+    let error = runtime
+        .write(
+            &OperationContext::new("bulk-write", "agent", "shell_write"),
+            ShellWriteRequest {
+                request_id: "bulk-write".to_owned(),
+                session_id: created.session_id.clone(),
+                text: "123456789".to_owned(),
+                append_new_line: false,
+                input_kind: chatcmd_runtime::ShellInputKind::Interactive,
+                sensitive: true,
+            },
+        )
+        .await
+        .expect_err("bulk input must be rejected");
+    assert_eq!(error.code, "shellInputTooLarge");
+    assert!(error.message.contains("fs_write_text/fs_write_raw"));
+    runtime
+        .close(
+            &OperationContext::new("bulk-close", "agent", "shell_close"),
+            &created.session_id,
+            true,
+        )
+        .await
+        .expect("close shell");
+}
+
 #[tokio::test]
 async fn shell_wait_retires_exited_session_and_keeps_replay() {
     let directory = tempfile::tempdir().expect("temp directory");
@@ -174,6 +503,8 @@ async fn shell_wait_retires_exited_session_and_keeps_replay() {
                 session_id: created.session_id.clone(),
                 text: "exit".to_owned(),
                 append_new_line: true,
+                input_kind: chatcmd_runtime::ShellInputKind::Interactive,
+                sensitive: false,
             },
         )
         .await
@@ -209,6 +540,8 @@ async fn shell_reader_retires_exited_session_without_wait() {
                 session_id: created.session_id.clone(),
                 text: "exit".to_owned(),
                 append_new_line: true,
+                input_kind: chatcmd_runtime::ShellInputKind::Interactive,
+                sensitive: false,
             },
         )
         .await
@@ -249,7 +582,7 @@ async fn cancellation_and_session_backpressure_are_explicit() {
         )
         .await
         .expect_err("cancelled create");
-    assert_eq!(error.code, "cancelled");
+    assert_eq!(error.code, "operationCancelled");
 
     let first = runtime
         .create(

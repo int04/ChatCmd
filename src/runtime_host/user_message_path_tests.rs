@@ -6,8 +6,24 @@ use tempfile::TempDir;
 use super::user_message_tests::{test_host, turn_context};
 use super::*;
 
-#[tokio::test]
-async fn user_supplied_absolute_path_grant_persists_for_task() {
+#[test]
+fn user_supplied_absolute_path_grant_persists_for_task() {
+    std::thread::Builder::new()
+        .name("absolute-path-grant-test".to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("test runtime")
+                .block_on(user_supplied_absolute_path_grant_persists_for_task_case());
+        })
+        .expect("spawn test thread")
+        .join()
+        .expect("absolute path grant test thread");
+}
+
+async fn user_supplied_absolute_path_grant_persists_for_task_case() {
     let (host, agent_id, _workspace_directory) = test_host().await;
     let external = TempDir::new().expect("external directory");
     let granted_directory = external.path().join("reference project");
@@ -78,8 +94,8 @@ async fn user_supplied_absolute_path_grant_persists_for_task() {
             json!({"path": denied_file.display().to_string(), "maxCharacters": 1000}),
         )
         .await
-        .expect("absolute external path must be auto-allowed");
-    assert_eq!(external["content"], "must stay blocked");
+        .expect_err("unmentioned absolute external path must remain blocked");
+    assert_eq!(external.code, "path_outside_allowed_scope");
 
     let next_turn = "turn-after-explicit-path-grant";
     let mut next_user_context = turn_context(
@@ -218,7 +234,7 @@ async fn chatgpt_bridge_reuses_existing_task_when_chatgpt_reformats_the_prompt()
     let (host, agent_id, _directory) = test_host().await;
     let task_id = "task-chatgpt-bridge-existing";
     let request_id = "chatgpt-request-existing";
-    let submitted = "Sử dụng plugin @test_rust\n\nThư mục dự án: D:\\DEV\\CmdGPT\\ChatCmdClient\n\nđể thực hiện yêu cầu sau: Kiểm tra http://localhost:8080/api/local/overview \n\nVí dụ abcd ";
+    let submitted = "Sử dụng plugin @test_rust\n\nThư mục dự án: D:\\DEV\\CmdGPT\\ChatCmdClient\n\nđể thực hiện yêu cầu sau: Kiểm tra http://localhost:8080/api/local/overview \n\n\nVí dụ abcd ";
     let message_from_chatgpt = submitted
         .replacen("@test_rust", "@test\\_rust", 1)
         .replacen(
@@ -226,6 +242,7 @@ async fn chatgpt_bridge_reuses_existing_task_when_chatgpt_reformats_the_prompt()
             "[http://localhost:8080/api/local/overview](http://localhost:8080/api/local/overview)",
             1,
         )
+        .replacen("\n\n\nVí dụ", "\n\n\n\nVí dụ", 1)
         .replacen("Ví dụ abcd ", "Ví dụ abcd\u{00a0}", 1);
     let now = now_ms();
 

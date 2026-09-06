@@ -1,0 +1,48 @@
+{
+  "commandRun": {
+    "executable": "cargo",
+    "arguments": ["test", "-p", "example"],
+    "cwd": ".",
+    "idempotencyKey": "turn-7-test",
+    "timeoutMs": 30000
+  },
+  "projectContext": {
+    "targetPaths": ["src/lib.rs"],
+    "policy": {"loadClaudeMd": false},
+    "range": {"path": "D:/fixture/AGENTS.md", "offset": 64, "versionToken": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+  },
+  "gitPreview": {
+    "message": "scoped change",
+    "paths": ["src/lib.rs"],
+    "previewOnly": true
+  },
+  "executionConsent": {
+    "question": "Bạn có muốn thực hiện kế hoạch không?",
+    "options": ["Có", "Không"],
+    "questionKind": "executionConsent"
+  },
+  "completion": {
+    "content": "Blocked: verification evidence expired.",
+    "workOutcome": "blocked",
+    "verificationIntent": "notRun",
+    "verificationReason": "execution_not_found",
+    "blockers": ["verification evidence expired"]
+  },
+  "gitPreviewResult": {
+    "version": 2,
+    "head": null,
+    "indexDigest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "worktreeDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "stagedPaths": [], "unstagedPaths": ["src/lib.rs"], "untrackedPaths": [],
+    "unmergedPaths": [], "scopePaths": ["src/lib.rs"], "all": false
+  },
+  "projectContextResult": {
+    "contextRef": "project-context:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "workspace": "D:/fixture", "effectiveHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "rules": [], "manifests": ["D:/fixture/Cargo.toml"], "warnings": [], "truncated": false
+  },
+  "completionError": {
+    "error": {"code": "execution_not_found", "message": "execution evidence was not found", "retryable": false, "approvalRequired": false, "phase": null, "outcome": "notStarted", "recovery": "refreshExecutionEvidence"},
+    "usage": null
+  }
+}

@@ -9,6 +9,7 @@ use serde_json::Value;
 #[derive(Clone, Default)]
 pub(crate) struct ActivityRegistry {
     active: Arc<Mutex<HashMap<String, ActiveActivity>>>,
+    in_flight: Arc<Mutex<HashMap<String, OperationContext>>>,
 }
 
 #[derive(Clone)]
@@ -31,7 +32,54 @@ pub(crate) enum StopActivityResult {
     NotRunning,
 }
 
+/// Tracks every admitted MCP call through persistence, including lifecycle tools.
+pub(crate) struct CompactCallGuard {
+    registry: ActivityRegistry,
+    key: String,
+}
+
+impl Drop for CompactCallGuard {
+    fn drop(&mut self) {
+        if let Ok(mut calls) = self.registry.in_flight.lock() {
+            calls.remove(&self.key);
+        }
+    }
+}
+
 impl ActivityRegistry {
+    pub(crate) fn track_compact_call(
+        &self,
+        context: &OperationContext,
+    ) -> Result<CompactCallGuard, chatcmd_runtime::RuntimeError> {
+        let key = uuid::Uuid::new_v4().to_string();
+        self.in_flight
+            .lock()
+            .map_err(|_| {
+                chatcmd_runtime::RuntimeError::new(
+                    "compact_activity_unavailable",
+                    "Cannot verify the local tool barrier",
+                )
+            })?
+            .insert(key.clone(), context.clone());
+        Ok(CompactCallGuard {
+            registry: self.clone(),
+            key,
+        })
+    }
+
+    pub(crate) fn compact_settled(&self, task_id: &str, scope: Option<&str>) -> bool {
+        // Poisoned/unavailable is not zero. Calls register BEFORE checking the durable
+        // fence, so an already-admitted call cannot hide in the admission/dispatch gap.
+        self.in_flight.lock().is_ok_and(|calls| {
+            !calls.values().any(|context| {
+                context.task_id.as_deref() == Some(task_id)
+                    || scope.is_some_and(|scope| {
+                        context.conversation_scope_id.as_deref() == Some(scope)
+                    })
+            })
+        })
+    }
+
     pub(crate) fn register(
         &self,
         context: &OperationContext,
@@ -108,6 +156,22 @@ impl ActivityRegistry {
                     && activity.context.turn_id.as_deref() == Some(turn_id)
             })
         })
+    }
+
+    pub(crate) fn cancel_task(&self, task_id: &str) {
+        let cancellations = self.active.lock().map_or_else(
+            |_| Vec::new(),
+            |active| {
+                active
+                    .values()
+                    .filter(|activity| activity.context.task_id.as_deref() == Some(task_id))
+                    .map(|activity| activity.context.cancellation.clone())
+                    .collect::<Vec<_>>()
+            },
+        );
+        for cancellation in cancellations {
+            cancellation.cancel();
+        }
     }
 
     fn remove(&self, activity_id: &str) {

@@ -8,7 +8,7 @@ ChatCMD is a local-first Rust application with an embedded or separately served 
 flowchart TB
     Client["MCP-compatible AI client"] -->|"Streamable HTTP + URL token"| Server["ChatCMD Rust server"]
     Browser["Signed-in ChatGPT tab"] <--> Extension["Optional MV3 extension"]
-    Extension <--> Local["Local API / encrypted WebSocket"]
+    Extension <--> Local["Local API / JSON WebSocket"]
     Console["React management console"] <--> Local
     Server --> Host["Runtime host"]
     Local --> Host
@@ -26,7 +26,7 @@ flowchart TB
 | `crates/chatcmd-storage/` | SQLite repository, migrations, device identity, event writer, recovery, and legacy import. |
 | `crates/chatcmd-runtime/` | Policy-aware filesystem, PTY shell, Git, process, workspace, and skill services. |
 | `crates/chatcmd-mcp/` | MCP schemas, tool router, authentication/origin enforcement, request identity, and sub-agent sampling protocol. |
-| `web/` | React/Vite management console, encrypted API client, real-time state, task UI, and tests. |
+| `web/` | React/Vite management console, JSON API client, real-time state, task UI, and tests. |
 | `chatgpt-extension/` | Chromium Manifest V3 bridge for an existing ChatGPT browser session. |
 | `scripts/` | Windows and macOS release packaging. |
 | `docs/` | User, protocol, architecture, and maintenance documentation. |
@@ -40,7 +40,7 @@ flowchart TB
 4. The current MCP tool catalog and permission preset are seeded into SQLite.
 5. ChatCMD creates the policy engine and the workspace, shell, Git, process, and skill services.
 6. `RuntimeHost` connects those services to task identity, approvals, sub-agents, persistence, and real-time events.
-7. Axum mounts the MCP router, health endpoints, encrypted local management API, WebSocket, and frontend assets on one listener.
+7. Axum mounts the MCP router, health endpoints, local JSON management API, WebSocket, and frontend assets on one listener.
 8. Release builds on Windows and macOS start the server behind a tray application; development builds run directly.
 
 ## MCP request flow
@@ -70,7 +70,7 @@ The management UI communicates with `/api/local/*`. Requests require `X-ChatCmdC
 
 The browser establishes an ephemeral P-256 ECDH session, derives an AES-256-GCM key with HKDF-SHA256, and encrypts local JSON request/response bodies. The WebSocket uses a similar per-connection handshake and rejects plaintext application frames after setup. HTTP associated data binds ciphertext to direction, method, full path/query, and response status.
 
-This layer reduces casual exposure in browser network tooling. It is not a trusted-execution boundary: code running in the browser can observe plaintext before encryption or after decryption. The fixed handshake key is obfuscation, not a durable secret. See [ENCRYPTION_PROTOCOL.md](ENCRYPTION_PROTOCOL.md).
+The local management API and WebSocket use ordinary JSON without a custom application-layer encryption handshake. Caller markers, GUI authentication, extension allowlists, and route authorization remain the security boundaries. See [Transport protocol](ENCRYPTION_PROTOCOL.md).
 
 ## Task and terminal lifecycle
 
@@ -104,8 +104,8 @@ Migrations in `crates/chatcmd-storage/migrations/` are append-only once released
 The React application uses:
 
 - React Router for dashboard, tasks, sessions, access profiles, skills, and settings;
-- an encrypted fetch wrapper for management API calls;
-- an encrypted WebSocket provider for live events;
+- a plaintext JSON fetch wrapper for management API calls;
+- a plaintext JSON WebSocket provider for live events;
 - xterm.js for interactive terminals;
 - sanitized Markdown and Prism-based code rendering for task output;
 - browser-local preferences for presentation choices, backed by server settings where appropriate.
@@ -124,7 +124,7 @@ It drives the visible ChatGPT DOM, tracks conversation/tab bindings, returns ass
 | --- | --- | --- |
 | AI client → MCP | URL token, hashed lookup, enabled profile, tool allowlist, schema validation, origin/host policy | Anyone with the full URL has the profile's authority. |
 | Runtime → filesystem/process | Canonical roots, structured arguments, policy decisions, approvals, limits, cancellation | Broadly configured roots or allow-all mode intentionally grant broad local power. |
-| Browser → local API | Caller marker, loopback expectation, encrypted bodies, session reset | A compromised local browser or OS account can inspect plaintext. |
+| Browser → local API | Caller marker, loopback expectation, GUI session, route authorization | A compromised local browser or OS account can inspect plaintext. |
 | Internet → public tunnel | Operator's HTTPS, access policy, firewall, and token secrecy | ChatCMD does not operate or secure the user's tunnel provider. |
 | Extension → ChatGPT | Restricted host permissions, no cookie permission, explicit DOM bridge | Other extensions or page changes can interfere with the same tab. |
 | Persistent storage | Local SQLite, profile-secret hashing, bounded event storage, cleanup | Public plugin tokens and application data are readable by the OS account and local administrators. |

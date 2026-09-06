@@ -18,6 +18,12 @@ async fn fixture() -> (Arc<AppState>, TempDir) {
     let (host, agent_id, directory) = test_host().await;
     let state =
         Arc::new(host.test_app_state(directory.path().join("chatcmd.db").display().to_string()));
+    sqlx::query(
+        "INSERT INTO settings(key,value_json,updated_at_ms) VALUES('ui_subagentConcurrency','5',0)",
+    )
+    .execute(state.repository.pool())
+    .await
+    .expect("enable fallback fixture");
     let now = now_ms();
     for (task_id, title, status) in [
         (PARENT_TASK_ID, "Fallback API parent", "running"),
@@ -63,11 +69,9 @@ async fn pending_api_returns_queued_child_with_marker_and_parent_identity() {
     assert_eq!(item["parentTaskId"], PARENT_TASK_ID);
     assert_eq!(item["parentTurnId"], PARENT_TURN_ID);
     assert_eq!(item["attempt"], 1);
-    assert!(
-        item["submittedContent"]
-            .as_str()
-            .is_some_and(|value| value.starts_with("Sử dụng plugin @User message sync test để thực hiện yêu cầu sau:"))
-    );
+    assert!(item["submittedContent"].as_str().is_some_and(|value| {
+        value.starts_with("Sử dụng plugin @User message sync test để thực hiện yêu cầu sau:")
+    }));
     assert!(
         item["submittedContent"]
             .as_str()
@@ -263,4 +267,96 @@ async fn browser_only_final_response_completes_child_and_saves_conversation() {
         .await
         .expect("read browser-only final answer");
     assert_eq!(stored_answer, "Browser-only delegated answer");
+    let report = chatcmd_storage::subagent_report::report_page(
+        state.repository.pool(),
+        SUBAGENT_ID,
+        0,
+        12_000,
+    )
+    .await
+    .expect("read browser report")
+    .expect("persisted final report");
+    assert_eq!(report["content"], stored_answer);
+    assert_eq!(report["source"], "browserFinal");
+    assert_eq!(report["workOutcome"], "unknown");
+    assert_eq!(report["verification"], "unknown");
+}
+
+async fn heartbeat_call(state: Arc<AppState>, attempt: i64) -> Value {
+    subagent_fallback_heartbeat(
+        State(state),
+        Path(SUBAGENT_ID.to_owned()),
+        Json(SubagentFallbackStarted {
+            attempt,
+            conversation_id: None,
+            conversation_url: None,
+        }),
+    )
+    .await
+    .unwrap()
+    .0
+}
+
+#[tokio::test]
+async fn subagent_browser_heartbeat_renews_thinking_child_without_mcp_calls() {
+    let (state, _dir) = fixture().await;
+    let now = now_ms();
+    sqlx::query("UPDATE subagent_runs SET status='running',fallback_state='claimed',worker_id='test-worker',attempt=1,started_at_ms=?,lease_expires_at_ms=?,max_runtime_ms=1800000 WHERE id=?")
+        .bind(now - 90_000).bind(now - 1).bind(SUBAGENT_ID).execute(state.repository.pool()).await.unwrap();
+    let reply = heartbeat_call(state.clone(), 1).await;
+    assert_eq!(reply["accepted"], true);
+    assert_eq!(reply["status"], "running");
+    let row = sqlx::query("SELECT lease_expires_at_ms,started_at_ms,max_runtime_ms,worker_id,attempt FROM subagent_runs WHERE id=?").bind(SUBAGENT_ID).fetch_one(state.repository.pool()).await.unwrap();
+    assert!(row.get::<i64, _>("lease_expires_at_ms") >= now + 170_000);
+    assert!(
+        row.get::<i64, _>("lease_expires_at_ms")
+            <= row.get::<i64, _>("started_at_ms") + row.get::<i64, _>("max_runtime_ms")
+    );
+    assert_eq!(row.get::<String, _>("worker_id"), "test-worker");
+    assert_eq!(row.get::<i64, _>("attempt"), 1);
+}
+
+#[tokio::test]
+async fn subagent_heartbeat_rejects_stale_attempt_and_does_not_revive_terminal_state() {
+    let (state, _dir) = fixture().await;
+    let reply = heartbeat_call(state.clone(), 2).await;
+    assert_eq!(reply["accepted"], false);
+    assert_eq!(reply["reason"], "stale_attempt");
+    sqlx::query("UPDATE subagent_runs SET status='timedOut',terminal_reason='expired',lease_expires_at_ms=NULL WHERE id=?").bind(SUBAGENT_ID).execute(state.repository.pool()).await.unwrap();
+    let reply = heartbeat_call(state.clone(), 1).await;
+    assert_eq!(reply["accepted"], false);
+    assert_eq!(reply["status"], "timedOut");
+    assert_eq!(reply["reason"], "expired");
+}
+
+#[tokio::test]
+async fn subagent_pending_heartbeat_is_bounded_by_hard_deadline_and_zero_policy() {
+    let (state, _dir) = fixture().await;
+    assert_eq!(heartbeat_call(state.clone(), 1).await["active"], true);
+    sqlx::query("UPDATE settings SET value_json='0' WHERE key='ui_subagentConcurrency'")
+        .execute(state.repository.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        heartbeat_call(state.clone(), 1).await["reason"],
+        "subagents_disabled"
+    );
+    assert!(
+        pending_subagent_fallbacks(State(state.clone()))
+            .await
+            .unwrap()
+            .0
+            .is_empty()
+    );
+    sqlx::query("UPDATE settings SET value_json='2' WHERE key='ui_subagentConcurrency'")
+        .execute(state.repository.pool())
+        .await
+        .unwrap();
+    sqlx::query("UPDATE subagent_runs SET created_at_ms=?,max_runtime_ms=60000 WHERE id=?")
+        .bind(now_ms() - 120_000)
+        .bind(SUBAGENT_ID)
+        .execute(state.repository.pool())
+        .await
+        .unwrap();
+    assert_eq!(heartbeat_call(state, 1).await["active"], false);
 }

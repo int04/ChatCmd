@@ -1,4 +1,5 @@
-import { AlertTriangle, Database, Info, MonitorCog, Save, ShieldCheck, SlidersHorizontal, TerminalSquare, Volume2 } from 'lucide-react';
+import { subagentLabel } from '../tasks/subagentPresentation';
+import { AlertTriangle, Database, Download, Info, LockKeyhole, MonitorCog, Save, ShieldCheck, SlidersHorizontal, TerminalSquare, Volume2 } from 'lucide-react';
 import { FormEvent, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../api';
@@ -6,19 +7,25 @@ import { ErrorState, Loading, Modal, PageHeading, ProblemBanner, StatusBadge } f
 import { applyAppFont, applyTaskFontScale, GOOGLE_FONT_PRESETS, normalizeFontFamily, normalizeTaskFontScale, TASK_FONT_SCALE_PRESETS } from '../fontPreferences';
 import { getAppLanguage, setAppLanguage, tr, translatedStatus } from '../i18n';
 import { DataSettings } from '../settings/DataSettings';
+import { SecuritySettings } from '../settings/SecuritySettings';
 import type { LocalSettings } from '../types';
+import { UpdateSettings } from '../updates/UpdateSettings';
+import { updateCopy } from '../updates/copy';
 import { useLoad } from '../useLoad';
 
-type SettingsTab = 'execution' | 'display' | 'sound' | 'data';
+type SettingsTab = 'execution' | 'display' | 'sound' | 'security' | 'data' | 'update';
 
 const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; description: string; icon: typeof SlidersHorizontal }> = [
   { id: 'execution', label: 'Execution', description: 'Agent and terminal rules', icon: SlidersHorizontal },
   { id: 'display', label: 'Display', description: 'Theme and language', icon: MonitorCog },
   { id: 'sound', label: 'Sound', description: 'Agent notifications', icon: Volume2 },
+  { id: 'security', label: 'Security', description: 'GUI password and sessions', icon: LockKeyhole },
   { id: 'data', label: 'Data', description: 'SQLite and application logs', icon: Database },
+  { id: 'update', label: 'Update', description: 'Version and updater', icon: Download },
 ];
 
 export function SettingsPage() {
+  const copy = updateCopy();
   const [searchParams, setSearchParams] = useSearchParams();
   const result = useLoad(api.settings, []);
   const [value, setValue] = useState<LocalSettings>();
@@ -80,9 +87,9 @@ export function SettingsPage() {
 
     <form className="settings-workspace-form" onSubmit={submit}>
       <div className="settings-category-grid" role="tablist" aria-label={tr('Settings categories')}>
-        {SETTINGS_TABS.map(({ id, label, description, icon: Icon }) => <button key={id} type="button" role="tab" aria-selected={activeTab === id} className={`settings-category-card ${activeTab === id ? 'active' : ''}`} onClick={() => { setActiveTab(id); setSearchParams(id === 'data' ? { tab: id } : {}); }}>
+        {SETTINGS_TABS.map(({ id, label, description, icon: Icon }) => <button key={id} type="button" role="tab" aria-selected={activeTab === id} className={`settings-category-card ${activeTab === id ? 'active' : ''}`} onClick={() => { setActiveTab(id); setSearchParams(id === 'data' || id === 'update' ? { tab: id } : {}); }}>
           <span className="settings-category-icon"><Icon aria-hidden="true" /></span>
-          <span><strong>{tr(label)}</strong><small>{tr(description)}</small></span>
+          <span><strong>{id === 'update' ? copy.tabLabel : tr(label)}</strong><small>{id === 'update' ? copy.tabDescription : tr(description)}</small></span>
         </button>)}
       </div>
 
@@ -90,9 +97,9 @@ export function SettingsPage() {
         <header className="settings-workspace-header">
           <div className="settings-workspace-title">
             <span><ActiveIcon aria-hidden="true" /></span>
-            <div><p>{tr('SETTINGS CATEGORY')}</p><h2>{tr(activeMeta.label)}</h2><small>{sectionDescription(activeTab)}</small></div>
+            <div><p>{tr('SETTINGS CATEGORY')}</p><h2>{activeTab === 'update' ? copy.tabLabel : tr(activeMeta.label)}</h2><small>{sectionDescription(activeTab)}</small></div>
           </div>
-          {activeTab !== 'data' && <div className="settings-workspace-status">{saved ? <strong>{tr('Settings saved.')}</strong> : <span>{tr('Changes are stored locally after saving.')}</span>}</div>}
+          {activeTab !== 'data' && activeTab !== 'security' && activeTab !== 'update' && <div className="settings-workspace-status">{saved ? <strong>{tr('Settings saved.')}</strong> : <span>{tr('Changes are stored locally after saving.')}</span>}</div>}
         </header>
 
         <div className="settings-workspace-body">
@@ -111,7 +118,7 @@ export function SettingsPage() {
                 <SettingField label={tr('Terminal executable')} hint={tr('Shell launched for terminal sessions.')} detail={tr('Use an executable available on this device, for example PowerShell, cmd, bash, or zsh. An invalid path can prevent terminal sessions from starting.')}><input value={value.terminalExecutable} onChange={(event) => update('terminalExecutable', event.target.value)} /></SettingField>
                 <SettingField label={tr('Task concurrency')} hint={tr('Maximum tasks allowed to run at once.')} detail={tr('Higher values improve parallel throughput but can increase CPU, memory, disk, and network usage. Lower this value on weaker devices.')}><input type="number" min="1" max="64" value={value.taskConcurrency} onChange={(event) => update('taskConcurrency', Number(event.target.value))} /></SettingField>
                 <SettingField label={tr('Session concurrency')} hint={tr('Maximum terminal sessions allowed at once.')} detail={tr('Limits how many terminal processes can remain active simultaneously. Too many sessions may consume memory even when they are idle.')}><input type="number" min="1" max="64" value={value.sessionConcurrency} onChange={(event) => update('sessionConcurrency', Number(event.target.value))} /></SettingField>
-                <SettingField label={tr('Sub-agent count')} hint={tr('Maximum child Agents running globally at once.')} detail={tr('When the limit is reached, new child Agents wait for a free slot. As soon as one Agent finishes, the next waiting Agent can start immediately.')}><select value={value.subagentConcurrency} onChange={(event) => update('subagentConcurrency', Number(event.target.value))}>{[1, 2, 3, 4, 5].map((count) => <option key={count} value={count}>{count}</option>)}</select></SettingField>
+                <SettingField label={tr('Sub-agent count')} hint={subagentLabel('policy')} detail={subagentLabel('capacity')}><select value={value.subagentConcurrency} onChange={(event) => update('subagentConcurrency', Number(event.target.value))}>{[0, 1, 2, 3, 4, 5].map((count) => <option key={count} value={count}>{count === 0 ? subagentLabel('disabled') : count}</option>)}</select></SettingField>
               </div>
             </div>
           </div>}
@@ -131,10 +138,12 @@ export function SettingsPage() {
               <ToggleSetting checked={value.finishedTaskSound} onChange={(checked) => update('finishedTaskSound', checked)} label={tr('Sound when a task finishes')} hint={tr('Play a sound when the Agent sends the final response.')} detail={tr('Useful for long-running tasks so you can switch to other work and return after the Agent finishes.')} />
             </div></div>
           </div>}
+          {activeTab === 'security' && <SecuritySettings />}
           {activeTab === 'data' && <DataSettings />}
+          {activeTab === 'update' && <UpdateSettings />}
         </div>
 
-        {activeTab !== 'data' && <footer className="settings-workspace-footer"><span>{saved ? tr('Saved successfully') : tr('Review changes before applying them.')}</span><button className="button primary"><Save />{tr('Save settings')}</button></footer>}
+        {activeTab !== 'data' && activeTab !== 'security' && activeTab !== 'update' && <footer className="settings-workspace-footer"><span>{saved ? tr('Saved successfully') : tr('Review changes before applying them.')}</span><button className="button primary"><Save />{tr('Save settings')}</button></footer>}
       </section>
     </form>
 
@@ -168,8 +177,10 @@ function ToggleSetting({ checked, onChange, label, hint, detail }: { checked: bo
 }
 
 function sectionDescription(tab: SettingsTab) {
+  if (tab === 'update') return updateCopy().categoryDescription;
   if (tab === 'execution') return tr('Defaults for new tasks and terminal processes.');
   if (tab === 'display') return tr('Stored locally for this browser.');
+  if (tab === 'security') return tr('Protect access to the ChatCMD management interface.');
   if (tab === 'data') return tr('Inspect local SQLite storage and application logs.');
   return tr('Choose a separate notification sound for each Agent event type.');
 }

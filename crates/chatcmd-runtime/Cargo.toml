@@ -9,15 +9,37 @@ publish = false
 [dependencies]
 anyhow = "1"
 base64 = "0.22"
+hmac = "0.12"
 ignore = "0.4"
+globset = "0.4"
+regex = "1"
 portable-pty = "0.9"
+schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["fs", "io-util", "macros", "process", "rt-multi-thread", "sync", "time"] }
 tokio-util = { version = "0.7", features = ["rt"] }
+tracing = "0.1"
 uuid = { version = "1", features = ["v4", "serde"] }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
+
 [dev-dependencies]
+criterion = "0.5"
+libc = "0.2"
+proptest = "1"
+serial_test = "3"
 tempfile = "3"
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
+
+[[bench]]
+name = "tool_telemetry"
+harness = false
+
+[[bench]]
+name = "filesystem_workloads"
+harness = false

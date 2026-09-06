@@ -1,0 +1,225 @@
+# Plan 14 — Tối ưu TurnFileChangeTracker cho monorepo và diff lớn
+
+## Cần kiểm tra lại sau triển khai
+
+- Toàn bộ bộ test frontend `npm test -- --run` còn 7 lỗi trong `src/test/App.test.tsx` tại các điều kiện kiểm tra về tình trạng API, định tuyến và quy trình agent; các test liên quan đến timeline/tool-output đều đạt và `npm run build` cũng đạt. Cần xác minh và sửa riêng môi trường chạy test của `App.test.tsx`.
+- Chạy benchmark thủ công trên watcher của từng nền tảng với workspace gồm 100.000 file và bản build shell tạo 100.000 event để đo mức sử dụng CPU/RAM và số event backend bị mất trong thực tế. Kiểm thử tải đơn vị với 100.000 event đã xác nhận queue giữ đúng giới hạn và đếm được số event bị loại.
+- Chạy fixture sparse 1 GiB với range edit native, đồng thời đo số byte hệ điều hành đọc để xác nhận tổng dữ liệu snapshot được đọc không vượt 200.000 byte trên Windows/macOS/Linux. Kiểm thử snapshot đơn vị hiện đã xác nhận prefix/suffix được giới hạn với file 1 MB.
+- Watcher backend có thể làm mất event mà không báo trước khi callback được gọi. Hiện lỗi backend hoặc queue overflow được báo qua `fileChangeTrackingIncomplete`, nhưng việc đối soát toàn bộ manifest cần workspace index của Plan 20 để kiểm chứng tính đầy đủ.
+- Các thao tác copy/move/delete ở quy mô thư mục đã dùng `detailArtifactRef` khi runtime cung cấp. Giao diện chưa thể tải lười và render riêng diff artifact vì chưa có API tải artifact phù hợp; cần kiểm tra sau khi contract persistence của artifact hoàn tất.
+- Atomic writer chưa có callback xuyên crate để đăng ký chính xác file tạm nội bộ. Tracker hiện gộp mọi path được tạo rồi xóa trong debounce window. Nếu giao diện vẫn hiển thị staging path trên một backend watcher cụ thể, cần nối operation-ID với registry temp-path và kiểm thử cả file người dùng có tên giống tempfile.
+- `cargo clippy --workspace --all-targets -- -D warnings` còn lỗi có sẵn ngoài Plan 14 trong `filesystem_find.rs`, `filesystem_read.rs`, `filesystem.rs` và `filesystem/file_version.rs`; không sửa chéo phạm vi plan này.
+
+## Nhiệm vụ dùng cho chat mới
+
+Trong project `/Users/ducnghia/Downloads/dev/ChatCmdClient`, hãy thiết kế lại cơ chế theo dõi “Các file đã thay đổi” theo turn. Native filesystem tools phải phát change record trực tiếp; recursive OS watcher chỉ dùng như fallback cho shell/external process và phải có debounce, quota, overflow recovery, ignore policy chung và snapshot bounded. Không commit.
+
+## Ưu tiên
+
+**P1 — hiệu năng, độ chính xác và dung lượng.** Hiện mỗi turn có thể mở watcher recursive trên toàn project; build/restore trong monorepo dễ tạo event storm. Snapshot giới hạn 200 KiB nhưng vẫn đọc toàn file trước khi truncate.
+
+## Bằng chứng hiện tại cần kiểm tra lại
+
+- `src/runtime_host/turn_file_changes.rs:35-76` tạo `RecommendedWatcher` và gọi `watch(&root, RecursiveMode::Recursive)` cho mỗi turn.
+- `turn_file_changes.rs:78-112` nhận `__chatcmdDiff` chứa before/after từ output tool.
+- `turn_file_changes.rs:114-167` kết thúc turn, đọc current snapshot và đưa full bounded before/after vào result.
+- `turn_file_changes.rs:187-239` watcher callback giữ mutex và xử lý từng event/path.
+- `turn_file_changes.rs:244-312` hard-code ignored components riêng.
+- `turn_file_changes.rs:345-359` `read_text_snapshot` gọi `std::fs::read(path)` toàn file, decode toàn `String`, sau đó mới truncate 200.000 bytes.
+- `src/runtime_host/filesystem_dispatch.rs:108-177` native write/replace/delete đã tạo `__chatcmdDiff`, nhưng bằng full snapshot; đây là điểm có thể thay bằng typed explicit change.
+
+Plan này cần phối hợp với plan 07 ignore/path safety, plan 11 atomic writer, plan 13 artifact/persistence và plan 22 shell event lifecycle.
+
+## Mục tiêu
+
+1. Native `fs_write_text`, `fs_apply_edits`, `fs_copy`, `fs_move`, `fs_delete`, `fs_create_directory` phát `FileChangeRecord` chính xác tại commit; không cần watcher phát hiện lại.
+2. Chỉ bật recursive watcher khi turn có shell/external process có thể thay file; watcher lifecycle gắn với activity/session, không mặc định mọi turn.
+3. Watcher event được debounce/coalesce, bounded theo files/events/bytes/time và không giữ global mutex lâu.
+4. Snapshot không đọc toàn file khi chỉ cần preview; stat size trước, stream prefix/suffix/range quanh edit hoặc dùng artifact/diff engine.
+5. File lớn/binary trả summary/hash/version + artifact ref, không full before/after.
+6. Event overflow/loss được phát hiện và reconcile có budget; không im lặng cho diff sai.
+7. File create rồi delete trong cùng turn tiếp tục bị ẩn đúng; rename/move được nhận diện tốt hơn delete+add khi có identity.
+8. Kết quả deterministic, dedupe theo canonical path/file identity và không ghi nhận temp files của atomic writer.
+
+## Thiết kế typed record
+
+Tạo type chung thay `__chatcmdDiff` ad hoc:
+
+```rust
+FileChangeRecord {
+    path: PathBuf,
+    previous_path: Option<PathBuf>,
+    kind: FileChangeKind,
+    origin: ChangeOrigin,
+    old_version: Option<String>,
+    new_version: Option<String>,
+    old_size: Option<u64>,
+    new_size: Option<u64>,
+    additions: Option<u64>,
+    deletions: Option<u64>,
+    preview: Option<DiffPreview>,
+    diff_artifact_ref: Option<String>,
+    confidence: ChangeConfidence,
+}
+```
+
+`origin`: `nativeTool`, `shellWatcher`, `externalWatcher`, `reconciled`.
+
+`confidence`: `exact`, `sampled`, `metadataOnly`, `unknownDueToOverflow`.
+
+Native tool commit trả record riêng cho tracker, không cần nhét private `__chatcmdDiff` vào public MCP output. Public result có summary cần thiết theo plan 02.
+
+## Native tool integration
+
+- Atomic writer biết old/new version, size, path và có thể tạo bounded diff preview trong lúc stream.
+- Range edit biết chính xác ranges/additions/deletions.
+- Copy/move/delete journal biết danh sách/counters; nếu quá nhiều file, emit aggregate + artifact manifest thay vì một record mỗi file trong RAM.
+- Temp/staging/quarantine path được đánh dấu internal và không xuất hiện trong user-facing changes.
+- Record chỉ được publish sau commit; failure/cancel trước commit không ghi modified target.
+
+## Watcher fallback
+
+### Lifecycle
+
+- Bật watcher lazy trước khi `shell_create`/external tool bắt đầu thay đổi workspace.
+- Một watcher có thể dùng chung theo workspace root với subscriber theo active turn thay vì một OS watcher mỗi turn, nếu ownership và event routing được thiết kế an toàn.
+- Dừng/unsubscribe khi không còn relevant activity; cleanup khi turn/task/app kết thúc.
+
+### Debounce/coalesce
+
+- Callback chỉ đẩy raw event nhỏ vào bounded channel, không đọc file hoặc giữ tracker mutex lâu.
+- Worker debounce theo path khoảng 50–250 ms configurable.
+- Coalesce create/modify/remove/rename state machine.
+- Rate-limit progress/UI updates; final aggregation có cap.
+
+### Overflow
+
+- Detect backend overflow/rescan-needed event.
+- Mark tracker degraded và chạy bounded reconcile dựa trên baseline manifest/version index nếu có.
+- Nếu không thể reconcile trong budget, trả warning `fileChangeTrackingIncomplete=true` và confidence thấp, không giả vờ đầy đủ.
+
+## Snapshot/diff strategy
+
+Không gọi `std::fs::read` toàn file rồi truncate. Thay bằng:
+
+1. `stat` trước.
+2. File nhỏ dưới threshold: đọc bounded toàn file.
+3. File lớn:
+   - metadata/hash/version;
+   - prefix/suffix sample;
+   - range quanh native edit nếu biết;
+   - hoặc tạo unified diff artifact streaming/bounded.
+4. Binary: không decode; trả size/hash/version và binary flag.
+5. Invalid UTF-8: metadata-only hoặc binary behavior rõ.
+
+Line delta hiện tại so prefix/suffix của snapshot bị cắt có thể sai. Với native edit, dùng edit metadata; với watcher unknown, dùng diff engine có budget hoặc `additions/deletions=null` kèm confidence.
+
+## Ignore/temp policy
+
+- Dùng một `WorkspaceIgnorePolicy` từ plan 07.
+- Tách “không traverse mặc định” khỏi “không bao giờ hiển thị”: nếu user trực tiếp sửa file trong `build`/`target`, semantics phải được quyết định rõ.
+- Internal temp names không chỉ dựa vào pattern `.tmpXXXXXX`; atomic writer đăng ký exact internal paths/operation IDs để tracker bỏ qua an toàn.
+- Không bỏ nhầm file người dùng chỉ vì tên giống tempfile.
+
+## Các bước triển khai
+
+1. Viết test baseline cho behavior UI hiện tại: added/modified/deleted, create-then-delete, temp ignore.
+2. Tạo `FileChangeRecord` và tracker API `record_committed_change`.
+3. Migrate native filesystem mutations sang explicit records; loại `__chatcmdDiff` dần.
+4. Thay snapshot helper bằng bounded stat/read/diff service.
+5. Thiết kế watcher manager lazy/shared với bounded channel.
+6. Implement debounce/coalesce/overflow state.
+7. Dùng shared ignore policy và exact internal temp registry.
+8. Tích hợp artifact diff/manifest cho large/many-file changes.
+9. Sửa persistence/UI schema có version; lazy fetch diff artifact.
+10. Thêm startup/task cleanup và diagnostics counters.
+
+## Edge cases bắt buộc
+
+- Build tạo hàng chục nghìn event/giây.
+- File save kiểu temp + rename của editor.
+- Atomic writer temp + replace.
+- Rename trong/cross directory, case-only rename.
+- Create rồi delete; delete rồi recreate; repeated modifies.
+- Binary/invalid UTF-8/file >1 GB.
+- File bị khóa hoặc permission denied khi snapshot.
+- Watcher overflow, dropped channel events, app sleep/resume.
+- Hai turns/tasks cùng workspace đồng thời.
+- Shell process còn chạy khi parent turn kết thúc/stopped.
+- Ignored directory được user thao tác trực tiếp.
+
+## Test bắt buộc
+
+- Native tool record exact và không phụ thuộc watcher timing.
+- Watcher chỉ bật khi shell/external activity cần.
+- Event storm bounded: channel size, memory, UI event count.
+- Debounce state machine cho create/modify/remove/rename.
+- Overflow tạo warning/reconcile, không silent success.
+- Snapshot file lớn không đọc toàn file; instrument bytes read.
+- Binary/invalid UTF-8 metadata-only behavior.
+- Temp internal không hiện; user file tên tương tự vẫn hiện.
+- Concurrent turns không trộn changes.
+- Tracker cleanup sau cancel/crash/restart.
+- Frontend tests cho exact/sampled/incomplete/diff artifact states.
+
+## Benchmark bắt buộc
+
+- Workspace 100.000 file; idle turn không mở watcher hoặc không tăng đáng kể tài nguyên.
+- Shell build giả lập 100.000 events; đo CPU, memory, channel drops, final records và UI messages.
+- File 1 GB modified bằng range edit; bytes snapshot đọc phải bounded.
+
+## Tiêu chí nghiệm thu
+
+- Native tool changes đi qua typed explicit record, không public full `__chatcmdDiff`.
+- Recursive watcher không được tạo mặc định cho mọi turn.
+- Callback watcher không đọc file/giữ mutex nặng.
+- Snapshot large file bounded và binary-safe.
+- Overflow/incomplete tracking được báo rõ.
+- UI vẫn hiển thị file changes chính xác, có confidence/artifact khi cần.
+- Internal temp/staging không gây file change rác.
+
+## Validation tối thiểu
+
+```bash
+cargo fmt --check
+cargo check --workspace
+cargo test --workspace
+```
+
+Chạy frontend typecheck/test/build nếu sửa timeline/diff UI.
+
+## Kết quả AI phải trả về
+
+- Tracker architecture trước/sau.
+- Native record và watcher lifecycle.
+- Diff/snapshot thresholds và confidence semantics.
+- File/UI/schema đã đổi.
+- Event-storm/large-file benchmark.
+- Test và các giới hạn platform watcher còn lại.
+
+## Công việc chưa hoàn thiện sau rà soát 2026-09-04
+
+### Đã xác minh và hoàn thiện trong lần rà soát này
+
+- Sửa môi trường test frontend để `localStorage` luôn dùng implementation xác định trong jsdom, tránh lỗi `getItem/clear is not a function` từ Node runtime hiện tại.
+- Cập nhật `src/test/App.test.tsx` theo API mã hóa và shape endpoint hiện tại thay vì mock `fetch` quá rộng; toàn bộ frontend test hiện đạt `54/54`, riêng `App.test.tsx` đạt `12/12`.
+- Khôi phục việc hiển thị one-time Plugin connection link ngay sau khi tạo agent bằng cách đưa kết quả `createAgent` vào `SecretModal`.
+- Test lõi của `TurnFileChangeTracker` đạt `6/6`, bao gồm event storm 100.000 event vẫn bounded và fixture sparse 1 GiB giữ snapshot/read path bounded theo contract hiện tại.
+- `npm run build` đạt; `cargo fmt -- --check` và `cargo check --workspace` đạt.
+
+### Chưa thể hoàn tất trong môi trường hiện tại
+
+- Benchmark watcher bắt buộc trên cả Windows/macOS/Linux với workspace 100.000 file và shell tạo 100.000 event chưa thể chứng minh đủ ba nền tảng từ máy macOS hiện tại. Unit/load test đã xác minh queue bounded và drop accounting nhưng không thay thế được số đo CPU/RAM/backend event loss của từng OS watcher.
+- Phép đo OS-level cho sparse file 1 GiB để chứng minh tổng bytes snapshot đọc dưới ngưỡng trên Windows/macOS/Linux mới chỉ kiểm tra được contract/unit fixture trong môi trường hiện tại; không thể xác nhận Windows/Linux khi không có các môi trường đó.
+- Reconcile đầy đủ khi watcher backend tự làm mất event vẫn phụ thuộc workspace index của Plan 20; Plan 20 chưa hoàn tất nên Plan 14 chưa thể tự chứng minh full-manifest reconciliation.
+- Lazy fetch/render riêng diff artifact vẫn phụ thuộc contract/API persistence artifact hoàn chỉnh; phần này không thể khép kín chỉ trong Plan 14.
+- Exact internal temp-path registry/operation-ID xuyên crate cho atomic writer chưa có contract hoàn chỉnh; tracker hiện vẫn phải dùng coalescing/debounce fallback cho staging path.
+
+### Kết quả validation và giới hạn ngoài Plan 14
+
+- `npm test -- --run`: đạt `15/15` test files, `54/54` tests.
+- `npm run build`: đạt.
+- `cargo fmt -- --check`: đạt.
+- `cargo check --workspace`: đạt.
+- `cargo test --workspace`: các test Plan 14 đều đạt, nhưng toàn workspace chưa ổn định do test ngoài Plan 14. Một lần `process_kill_before_commit_keeps_old_target_complete` thất bại vì kỳ vọng một orphan temp nhưng nhận 0; chạy riêng test này sau đó đạt. Lần chạy full tiếp theo thất bại ở `simultaneous_expected_version_writers_have_one_commit_winner` vì có 2 writer cùng commit thay vì 1.
+- `npm run lint` hiện còn 8 errors và 8 warnings ở các file ngoài phạm vi Plan 14, chủ yếu cấu hình Node globals và React hook lint; đây không phải validation tối thiểu của Plan 14 và chưa được sửa chéo phạm vi.

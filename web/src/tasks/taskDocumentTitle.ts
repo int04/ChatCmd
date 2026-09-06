@@ -75,7 +75,7 @@ export function titleLabelForEvent(event: TimelineEvent) {
   if (status && status !== 'started') return tr('Thinking');
   const tool = stringValue(payload.tool) || 'tool';
   const target = compactTitleTarget(payload.input);
-  if (/^(?:fs_read_text|fs_list|fs_stat|fs_directory_sizes|view_image|file_download|skill_read)$/i.test(tool)) return `${tr('Reading')}${target ? ` ${target}` : ''}`;
+  if (/^(?:fs_read_text|fs_list|fs_list_v2|fs_stat|fs_directory_sizes|view_image|file_download|skill_read)$/i.test(tool)) return `${tr('Reading')}${target ? ` ${target}` : ''}`;
   if (tool === 'fs_search' || tool === 'fs_find') return `${tr('Searching')}${target ? ` ${target}` : ''}`;
   if (/^(?:apply_patch|fs_write_text|fs_replace_text|file_upload)$/i.test(tool)) return `${tr('Editing')}${target ? ` ${target}` : ''}`;
   if (tool === 'fs_create_directory') return `${tr('Creating')}${target ? ` ${target}` : ''}`;

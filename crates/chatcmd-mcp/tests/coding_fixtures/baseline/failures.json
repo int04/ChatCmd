@@ -1,0 +1,6 @@
+{
+  "baseline": ["legacy::known_failure"],
+  "candidate": ["legacy::known_failure", "new::regression"],
+  "expectedNew": ["new::regression"]
+}
+

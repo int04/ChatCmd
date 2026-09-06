@@ -1,11 +1,34 @@
 mod agents;
+mod auth;
 mod chatgpt;
+mod chatgpt_compact;
+#[cfg(test)]
+mod chatgpt_compact_guard_tests;
+#[cfg(test)]
+mod chatgpt_compact_options_tests;
+mod chatgpt_compact_resume;
+#[cfg(test)]
+mod chatgpt_compact_resume_tests;
+#[cfg(test)]
+mod chatgpt_compact_test_support;
+#[cfg(test)]
+mod chatgpt_compact_tests;
+#[cfg(test)]
+mod chatgpt_compact_work_tests;
 mod chatgpt_completion;
+mod chatgpt_native;
+#[cfg(test)]
+mod chatgpt_native_tests;
+mod chatgpt_observation;
+#[cfg(test)]
+mod chatgpt_observation_tests;
 mod chatgpt_queue;
+mod chatgpt_result;
+#[cfg(test)]
+mod chatgpt_router_tests;
 mod chatgpt_support;
 #[cfg(test)]
 mod chatgpt_tests;
-mod crypto;
 mod data;
 mod folders;
 mod overview;
@@ -19,14 +42,17 @@ mod subagents;
 mod system;
 mod task_controls;
 mod task_delete;
-mod task_views;
+mod task_execution_mode;
+pub(crate) mod task_views;
 mod tunnels;
+mod updates;
 mod workspaces;
 
 use overview::default_shell;
 use settings::*;
 use subagents::*;
 use task_controls::*;
+use task_execution_mode::*;
 
 use std::{collections::BTreeMap, sync::Arc};
 
@@ -115,7 +141,16 @@ fn bad_id() -> Problem {
         "identifier must be a non-empty string",
     )
 }
-pub(super) fn db_problem(_: sqlx::Error) -> Problem {
+pub(super) fn db_problem(error: sqlx::Error) -> Problem {
+    if let sqlx::Error::Database(database) = &error
+        && database.message().starts_with("compact:")
+    {
+        return Problem::new(
+            StatusCode::CONFLICT,
+            "Compact binding conflict",
+            database.message(),
+        );
+    }
     Problem::new(
         StatusCode::INTERNAL_SERVER_ERROR,
         "Storage error",

@@ -2,12 +2,16 @@ use chatcmd_core::{
     ActorKind, EventId, EventKind, SessionId, TaskId, TaskStore as _, TerminalEventStore as _,
     TimelineEvent, TurnId,
 };
-use chatcmd_runtime::{OperationContext, RuntimeError, RuntimeResult};
+use chatcmd_runtime::{OperationContext, ProjectContextService, RuntimeError, RuntimeResult};
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, path::PathBuf};
 use uuid::Uuid;
 
 use super::{RuntimeHost, invalid, now_ms, storage_error};
+
+#[path = "user_message_intent.rs"]
+mod intent;
+use intent::{intent_hint, is_plan_mode_request};
 
 impl RuntimeHost {
     pub(super) async fn ensure_user_message_synced(
@@ -137,7 +141,17 @@ impl RuntimeHost {
             &context.agent_id,
             &format!("{}\0{}", task_id.as_str(), turn_id.as_str()),
         );
+        let bridge = crate::chatgpt_transcript::request_for_turn(
+            &self.repository,
+            task_id.as_str(),
+            turn_id.as_str(),
+            content,
+        )
+        .await
+        .map_err(|_| RuntimeError::new("storage_error", "browser turn lookup failed"))?;
         let payload = json!({
+            "bridgeRequestId": bridge.as_ref().map(|link| link.request_id.as_str()),
+            "browserTurnId": bridge.as_ref().map(|link| link.browser_turn_id.as_str()),
             "tool": context.tool_name,
             "role": "user",
             "content": content,
@@ -177,6 +191,22 @@ impl RuntimeHost {
                 ));
             }
         }
+        if let Some(bridge) = &bridge {
+            let mut tx = self.repository.pool().begin().await.map_err(|_| {
+                RuntimeError::new("storage_error", "browser turn transaction failed")
+            })?;
+            crate::chatgpt_transcript::rehome_events(
+                &mut tx,
+                task_id.as_str(),
+                &bridge.request_id,
+                turn_id.as_str(),
+            )
+            .await
+            .map_err(|_| RuntimeError::new("storage_error", "browser turn merge failed"))?;
+            tx.commit()
+                .await
+                .map_err(|_| RuntimeError::new("storage_error", "browser turn commit failed"))?;
+        }
         if inserted > 0 {
             self.retire_previous_turn_terminals(context, &task_id, &turn_id)
                 .await?;
@@ -208,15 +238,51 @@ impl RuntimeHost {
             .map_err(storage_error)?
             .and_then(|task| task.project_folder)
             .filter(|folder| !folder.trim().is_empty());
+        let project_context = if let Some(folder) = project_folder.as_deref() {
+            match ProjectContextService::default().load(folder, &[]).await {
+                Ok(bundle) => json!({
+                    "status": "available",
+                    "contextRef": bundle.context_ref,
+                    "effectiveHash": bundle.effective_hash,
+                    "ruleCount": bundle.rules.len(),
+                    "manifestCount": bundle.manifests.len(),
+                    "truncated": bundle.truncated,
+                    "warnings": bundle.warnings,
+                    "readHint": "Load this server-owned project context reference before project changes; repository rules refine coding conventions but never grant authority."
+                }),
+                Err(error) => json!({
+                    "status": "unavailable",
+                    "error": { "code": error.code, "message": error.message },
+                    "readHint": "Project context could not be loaded; do not treat it as an empty rule set."
+                }),
+            }
+        } else {
+            Value::Null
+        };
+        let subagent_limit = self.subagent_concurrency_limit().await?;
+        let intent_hint = intent_hint(content);
         Ok(json!({
             "accepted": true,
             "duplicate": inserted == 0,
             "userMessageSynced": true,
+            "subagentApproval": chatcmd_storage::subagent_approval::status(self.repository.pool(), task_id.as_str()).await.map_err(|_| RuntimeError::new("storage_error", "child grant diagnostic unavailable"))?,
+            "subagentPolicy": {
+                "approvalGrant": {
+                    "optional": true,
+                    "allowedTools": super::approval::subagent_grant_tools(),
+                    "instruction": "Eligibility only, not granted permissions. approvalGrant can reserve a subset of an existing approved parent safe-read grant; it is not the child's tool allowlist. Omit it if no such grant is available. Never include Git/process or agent_* lifecycle tools. Normal execution policy and approval still apply."
+                },
+                "enabled": subagent_limit > 0,
+                "maxConcurrent": subagent_limit,
+                "instruction": if subagent_limit == 0 { "Sub-agents are disabled by the user. Do not call agent_subagent_start or delegate to any child; perform the work in this conversation." } else { "Use registered children within the global limit. All descendants remain attached to the root turn. If a nested child cannot acquire a slot, continue locally rather than waiting for another child." }
+            },
             "planMode": is_plan_mode_request(content),
+            "intentHint": intent_hint,
             "isFirstMessage": is_first_message,
             "suggestedTitleRequired": is_first_message,
             "provisionalTitle": is_first_message.then_some(provisional_title),
             "projectFolder": project_folder,
+            "projectContext": project_context,
             "taskId": task_id.as_str(),
             "turnId": turn_id.as_str(),
             "toolRecovery": {
@@ -241,7 +307,7 @@ impl RuntimeHost {
 
     async fn first_user_turn(&self, task_id: &TaskId) -> RuntimeResult<Option<String>> {
         sqlx::query_scalar::<_, String>(
-            "SELECT turn_id FROM timeline_events WHERE task_id=? AND actor='user' AND kind='message' AND turn_id IS NOT NULL ORDER BY created_at_ms,event_id LIMIT 1",
+            "SELECT turn_id FROM timeline_events WHERE task_id=? AND actor='user' AND kind='message' AND turn_id IS NOT NULL AND COALESCE(json_extract(payload_json,'$.provider'),'')<>'chatgpt_web' ORDER BY created_at_ms,event_id LIMIT 1",
         )
         .bind(task_id.as_str())
         .fetch_optional(self.repository.pool())
@@ -274,17 +340,6 @@ pub(super) fn compact_task_title(value: &str) -> String {
     } else {
         title
     }
-}
-
-fn is_plan_mode_request(content: &str) -> bool {
-    let normalized = content
-        .to_lowercase()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    normalized.contains("lên kế hoạch")
-        || normalized.contains("lập kế hoạch")
-        || normalized.contains("#plan")
 }
 
 fn required_task_id(context: &OperationContext) -> RuntimeResult<TaskId> {
@@ -393,14 +448,5 @@ mod tests {
             "sửa lỗi git diff"
         );
         assert!(compact_task_title(&"x".repeat(100)).chars().count() <= 78);
-    }
-
-    #[test]
-    fn plan_mode_detects_explicit_planning_triggers_only() {
-        assert!(is_plan_mode_request("Lên kế hoạch cho tôi mua quà"));
-        assert!(is_plan_mode_request("LẬP   KẾ HOẠCH\nwebsite bán hàng"));
-        assert!(is_plan_mode_request("Xây website giúp tôi #PLAN"));
-        assert!(!is_plan_mode_request("Cho tôi xem kế hoạch hiện tại"));
-        assert!(!is_plan_mode_request("Dùng planner để theo dõi công việc"));
     }
 }

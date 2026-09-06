@@ -9,6 +9,7 @@ function formatKnownTool(tool: string, output: unknown): string {
   const value = asObject(output);
   switch (tool) {
     case 'fs_list': return formatFsList(output);
+    case 'fs_list_v2': return formatFsListEnvelope(value);
     case 'fs_find': return formatPathList(output);
     case 'fs_stat': return formatFsEntry(value);
     case 'fs_create_directory': return actionPath('Đã tạo thư mục', value);
@@ -22,6 +23,7 @@ function formatKnownTool(tool: string, output: unknown): string {
     case 'process_list': return formatProcessList(output);
     case 'process_inspect': return formatProcess(value);
     case 'process_kill': return booleanAction('Đã dừng process', value.killed ?? value.terminated, stringish(value.processId ?? value.pid));
+    case 'command_run': return formatCommandExecution(value);
     case 'shell_create': return formatShell(value, 'Đã tạo terminal session');
     case 'shell_inspect': return formatShell(value, 'Terminal session');
     case 'shell_list': return formatShellList(output);
@@ -42,6 +44,24 @@ function formatKnownTool(tool: string, output: unknown): string {
   }
 }
 
+function formatCommandExecution(value: Record<string, unknown>) {
+  const command = asObject(value.command);
+  return compact([
+    label('Execution ID', value.executionId),
+    label('Lệnh', command.executable),
+    label('Số đối số', command.argumentCount),
+    label('Thư mục', value.cwd),
+    label('Trạng thái', value.terminalState),
+    value.exitCode !== undefined ? `Exit code: ${value.exitCode ?? '—'}` : '',
+    value.timedOut === true ? 'Đã hết thời gian.' : '',
+    value.cancelled === true ? 'Đã hủy.' : '',
+    label('Thời gian', value.elapsedMs !== undefined ? `${value.elapsedMs} ms` : undefined),
+    label('Artifact', value.artifactRef),
+    stringish(value.stdout) ? `stdout:\n${stringish(value.stdout)}` : '',
+    stringish(value.stderr) ? `stderr:\n${stringish(value.stderr)}` : '',
+  ]);
+}
+
 function formatFsList(output: unknown) {
   if (!Array.isArray(output)) return '';
   if (!output.length) return 'Thư mục trống.';
@@ -52,6 +72,22 @@ function formatFsList(output: unknown) {
     const size = value.size !== undefined ? ` · ${value.size} byte` : '';
     return `${type === 'directory' ? '📁' : '📄'} ${path}${size}`;
   }).join('\n');
+}
+
+function formatFsListEnvelope(value: Record<string, unknown>) {
+  const data = asObject(value.data);
+  const body = formatFsList(data.items ?? value.data);
+  const page = asObject(value.page);
+  const truncation = asObject(value.truncation);
+  const contentRef = asObject(value.contentRef);
+  return compact([
+    body,
+    stringish(data.sort) ? `Thứ tự: ${humanKey(stringish(data.sort))}` : '',
+    stringish(data.directoryVersion) ? `Phiên bản thư mục: ${stringish(data.directoryVersion)}` : '',
+    page.hasMore === true ? 'Còn dữ liệu ở trang tiếp theo.' : '',
+    truncation.truncated === true ? `Kết quả bị cắt${stringish(truncation.reason) ? `: ${humanKey(stringish(truncation.reason))}` : '.'}` : '',
+    stringish(contentRef.id) ? `Nội dung đầy đủ: ${stringish(contentRef.id)}` : '',
+  ]);
 }
 
 function formatPathList(output: unknown, prefix = '') {

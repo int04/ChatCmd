@@ -167,7 +167,7 @@ try {
                 String::from_utf8_lossy(&output.stderr).trim().to_string(),
             ));
         }
-        return Ok(clean_path(&output.stdout));
+        Ok(clean_path(&output.stdout))
     }
 
     #[cfg(target_os = "macos")]
@@ -182,7 +182,7 @@ try {
         if !output.status.success() {
             return Ok(None);
         }
-        return Ok(clean_path(&output.stdout).map(|value| value.trim_end_matches('/').to_string()));
+        Ok(clean_path(&output.stdout).map(|value| value.trim_end_matches('/').to_string()))
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]

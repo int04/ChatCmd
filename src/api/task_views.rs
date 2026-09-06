@@ -147,7 +147,9 @@ pub(super) async fn pending_activity_approvals(
                 "taskId": task_id,
                 "turnId": request.get("turnId").and_then(Value::as_str),
                 "tool": request.get("tool").and_then(Value::as_str).unwrap_or("tool"),
-                "input": request.get("input").cloned().unwrap_or(Value::Null),
+                "input": request.get("summary").cloned().unwrap_or(Value::Null),
+                "riskClass": request.get("riskClass").cloned().unwrap_or(Value::Null),
+                "grantPreview": request.get("grantPreview").cloned().unwrap_or(Value::Null),
                 "createdAtUtc": iso_ms(created_at_ms),
                 "approvalDeadlineUtc": iso_ms(created_at_ms.saturating_add(120_000)),
             })
@@ -176,7 +178,7 @@ pub(super) async fn task(
     .await
 }
 
-pub(super) async fn task_activity(
+pub(crate) async fn task_activity(
     State(state): State<Arc<AppState>>,
     Path((id, activity_id)): Path<(String, String)>,
 ) -> Result<Json<Value>, Problem> {
@@ -191,6 +193,7 @@ pub(super) async fn task_activity(
         return Err(not_found());
     }
     let mut detail = serde_json::Map::new();
+    let mut external_artifact_ref: Option<String> = None;
     for row in rows {
         let kind = row.get::<String, _>("kind");
         let payload = serde_json::from_str::<Value>(&row.get::<String, _>("payload_json"))
@@ -206,6 +209,12 @@ pub(super) async fn task_activity(
         if kind == "tool_result" {
             if let Some(value) = payload.get("output") {
                 detail.insert("output".to_owned(), value.clone());
+            }
+            if payload.get("payloadExternalized").and_then(Value::as_bool) == Some(true) {
+                external_artifact_ref = payload
+                    .get("artifactRef")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned);
             }
         }
         for key in [
@@ -229,6 +238,72 @@ pub(super) async fn task_activity(
                 detail.insert("error".to_owned(), value.clone());
             } else if !detail.contains_key("errorDetails") {
                 detail.insert("errorDetails".to_owned(), value.clone());
+            }
+        }
+    }
+    if let Some(artifact_id) = external_artifact_ref.as_deref() {
+        let row = sqlx::query(
+            "SELECT artifact_registry.relative_path,tasks.agent_id FROM artifact_registry JOIN tasks ON tasks.id=artifact_registry.task_id WHERE artifact_registry.id=? AND artifact_registry.task_id=? LIMIT 1",
+        )
+        .bind(artifact_id)
+        .bind(&id)
+        .fetch_optional(state.repository.pool())
+        .await
+        .map_err(db_problem)?;
+        if let Some(row) = row {
+            let relative_path = row.get::<String, _>("relative_path");
+            if let Some(content_ref) =
+                relative_path.strip_prefix(crate::runtime_host::MANAGED_ARTIFACT_PREFIX)
+            {
+                let agent_id = row.get::<String, _>("agent_id");
+                let mut context = chatcmd_runtime::OperationContext::new(
+                    format!("local-artifact-{activity_id}"),
+                    agent_id,
+                    "task_artifact_read",
+                );
+                context.task_id = Some(id.clone());
+                let detail_limit = 2 * 1024 * 1024usize;
+                let mut artifact_content = String::new();
+                let mut offset = 0u64;
+                let mut artifact_truncated = false;
+                loop {
+                    let remaining = detail_limit.saturating_sub(artifact_content.len());
+                    if remaining == 0 {
+                        artifact_truncated = true;
+                        break;
+                    }
+                    let read = match state.blob_store.read_artifact_text_range(
+                        &context,
+                        content_ref,
+                        offset,
+                        remaining.min(256 * 1024),
+                    ) {
+                        Ok(read) => read,
+                        Err(_) => break,
+                    };
+                    artifact_content.push_str(&read.content);
+                    artifact_truncated = read.truncated;
+                    let Some(next_offset) = read.next_offset else {
+                        break;
+                    };
+                    if next_offset <= offset {
+                        artifact_truncated = true;
+                        break;
+                    }
+                    offset = next_offset;
+                }
+                if let Ok(output) = serde_json::from_str::<Value>(&artifact_content) {
+                    detail.insert("output".to_owned(), output);
+                }
+                detail.insert("payloadExternalized".to_owned(), Value::Bool(true));
+                detail.insert(
+                    "artifactRef".to_owned(),
+                    Value::String(artifact_id.to_owned()),
+                );
+                detail.insert(
+                    "artifactTruncated".to_owned(),
+                    Value::Bool(artifact_truncated),
+                );
             }
         }
     }
@@ -414,6 +489,19 @@ async fn task_detail_page(
         .map(|(_, _, value)| value)
         .collect::<Vec<_>>();
     let subagent_approvals = pending_subagent_approvals(state, id).await?;
+    let approval_grants = sqlx::query("SELECT id,allowed_tools_json,path_scopes_json,max_calls,used_calls,max_files_scanned,used_files_scanned,max_bytes_read,used_bytes_read,expires_at_ms,state,inherited_from,child_attempt FROM approval_grants WHERE task_id=? AND state='active' AND expires_at_ms>? ORDER BY created_at_ms DESC")
+        .bind(id).bind(now_ms()).fetch_all(state.repository.pool()).await.map_err(db_problem)?
+        .into_iter().map(|row| json!({
+            "id": row.get::<String,_>("id"),
+            "allowedTools": serde_json::from_str::<Value>(&row.get::<String,_>("allowed_tools_json")).unwrap_or_else(|_| json!([])),
+            "pathScopes": serde_json::from_str::<Value>(&row.get::<String,_>("path_scopes_json")).unwrap_or_else(|_| json!([])),
+            "maxCalls": row.get::<i64,_>("max_calls"), "usedCalls": row.get::<i64,_>("used_calls"),
+            "maxFilesScanned": row.get::<Option<i64>,_>("max_files_scanned"), "usedFilesScanned": row.get::<i64,_>("used_files_scanned"),
+            "maxBytesRead": row.get::<Option<i64>,_>("max_bytes_read"), "usedBytesRead": row.get::<i64,_>("used_bytes_read"),
+            "expiresAtUtc": iso_ms(row.get::<i64,_>("expires_at_ms")), "state": row.get::<String,_>("state"),
+            "inheritedFrom": row.get::<Option<String>,_>("inherited_from"),
+            "childAttempt": row.get::<Option<i64>,_>("child_attempt")
+        })).collect::<Vec<_>>();
     let execution_mode_id = TaskId::new(execution_mode_task_id).map_err(|_| bad_id())?;
     Ok(Json(json!({
         "task": task_value,
@@ -422,6 +510,7 @@ async fn task_detail_page(
         "nextCursor": next_cursor,
         "subagents": subagents,
         "subagentApprovals": subagent_approvals,
+        "approvalGrants": approval_grants,
         "executionMode": execution_mode_name(state.repository.execution_mode(Some(&execution_mode_id)).await.map_err(storage_problem)?),
         "executionModeSourceTaskId": execution_mode_task_id
     })))
@@ -436,7 +525,7 @@ async fn fetch_timeline_rows(
         return Ok(Vec::new());
     }
     let mut query = QueryBuilder::<Sqlite>::new(
-        "SELECT event_id,turn_id,session_id,kind,payload_json,created_at_ms FROM timeline_events WHERE task_id=",
+        "SELECT event_id,turn_id,session_id,kind,CASE WHEN payload_size_bytes>131072 AND kind IN ('tool_call','tool_result') THEN json_object('activityId',json_extract(payload_json,'$.activityId'),'tool',json_extract(payload_json,'$.tool'),'status',json_extract(payload_json,'$.status'),'schemaVersion',schema_version,'legacyPayloadOmitted',1,'originalPayloadBytes',payload_size_bytes,'artifactRef',artifact_id) ELSE payload_json END AS payload_json,created_at_ms FROM timeline_events WHERE task_id=",
     );
     query.push_bind(task_id).push(" AND turn_id IN (");
     let mut separated = query.separated(",");

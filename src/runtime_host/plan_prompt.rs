@@ -5,14 +5,36 @@ use std::{
 };
 
 use chatcmd_runtime::{OperationContext, RuntimeError, RuntimeResult};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
-use super::{RuntimeHost, now_ms};
+use super::{
+    RuntimeHost, now_ms,
+    plan_prompt_persistence::{
+        cancel_abandoned_plan_prompt, persist_pending_plan_prompt, persist_plan_prompt_timeout,
+    },
+};
 
 const PLAN_QUESTION_TIMEOUT_MS: i64 = 120_000;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum PlanQuestionKind {
+    #[default]
+    Clarification,
+    ExecutionConsent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) enum ConsentState {
+    Approved,
+    Denied,
+    Expired,
+    Cancelled,
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,6 +44,9 @@ pub(crate) struct PlanPromptView {
     pub(crate) turn_id: String,
     pub(crate) question: String,
     pub(crate) options: [String; 2],
+    pub(crate) question_kind: PlanQuestionKind,
+    pub(crate) issuer_agent_id: String,
+    pub(crate) scope_digest: String,
     pub(crate) created_at_ms: i64,
     pub(crate) deadline_at_ms: i64,
 }
@@ -31,12 +56,16 @@ pub(crate) struct PlanPromptAnswer {
     pub(crate) option_index: Option<u8>,
     pub(crate) text: String,
     pub(crate) custom: bool,
+    pub(crate) consent_state: Option<ConsentState>,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) enum PlanPromptResolution {
     Option(u8),
     Custom(String),
+    ApproveExecution,
+    DenyExecution,
+    Cancel,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +74,9 @@ pub(crate) enum PlanPromptResolveError {
     NotFound,
     InvalidOption,
     InvalidCustom,
+    InvalidResolution,
+    ScopeMismatch,
+    Expired,
     ReceiverGone,
 }
 
@@ -61,15 +93,19 @@ pub(crate) struct PlanPromptRegistry {
 pub(crate) struct PlanPromptGuard {
     registry: PlanPromptRegistry,
     id: String,
+    persisted: Option<(sqlx::SqlitePool, PlanPromptView)>,
 }
 
 impl PlanPromptRegistry {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn register(
         &self,
         task_id: String,
         turn_id: String,
+        issuer_agent_id: String,
         question: String,
         options: [String; 2],
+        question_kind: PlanQuestionKind,
         created_at_ms: i64,
         timeout_ms: i64,
     ) -> Result<
@@ -80,12 +116,24 @@ impl PlanPromptRegistry {
         ),
         PlanPromptResolveError,
     > {
+        let scope_digest = Uuid::new_v5(
+            &Uuid::NAMESPACE_OID,
+            format!(
+                "{task_id}\0{turn_id}\0{issuer_agent_id}\0{question_kind:?}\0{question}\0{}\0{}",
+                options[0], options[1]
+            )
+            .as_bytes(),
+        )
+        .to_string();
         let view = PlanPromptView {
             id: format!("plan-question-{}", Uuid::new_v4()),
             task_id,
             turn_id,
             question,
             options,
+            question_kind,
+            issuer_agent_id,
+            scope_digest,
             created_at_ms,
             deadline_at_ms: created_at_ms.saturating_add(timeout_ms),
         };
@@ -105,6 +153,7 @@ impl PlanPromptRegistry {
         let guard = PlanPromptGuard {
             registry: self.clone(),
             id: view.id.clone(),
+            persisted: None,
         };
         Ok((view, receiver, guard))
     }
@@ -126,10 +175,22 @@ impl PlanPromptRegistry {
         Ok(values)
     }
 
+    pub(crate) fn view(&self, id: &str) -> Result<PlanPromptView, PlanPromptResolveError> {
+        self.pending
+            .lock()
+            .map_err(|_| PlanPromptResolveError::Unavailable)?
+            .get(id)
+            .map(|entry| entry.view.clone())
+            .ok_or(PlanPromptResolveError::NotFound)
+    }
+
     pub(crate) fn resolve(
         &self,
         id: &str,
+        task_id: Option<&str>,
+        turn_id: Option<&str>,
         resolution: PlanPromptResolution,
+        resolved_at_ms: i64,
     ) -> Result<PlanPromptView, PlanPromptResolveError> {
         let mut pending = self
             .pending
@@ -137,16 +198,33 @@ impl PlanPromptRegistry {
             .map_err(|_| PlanPromptResolveError::Unavailable)?;
         let answer = {
             let entry = pending.get(id).ok_or(PlanPromptResolveError::NotFound)?;
-            match resolution {
-                PlanPromptResolution::Option(index @ 1..=2) => PlanPromptAnswer {
-                    option_index: Some(index),
-                    text: entry.view.options[usize::from(index - 1)].clone(),
-                    custom: false,
-                },
-                PlanPromptResolution::Option(_) => {
+            if entry.view.question_kind == PlanQuestionKind::ExecutionConsent
+                && (task_id.is_none() || turn_id.is_none())
+            {
+                return Err(PlanPromptResolveError::ScopeMismatch);
+            }
+            if task_id.is_some_and(|value| value != entry.view.task_id)
+                || turn_id.is_some_and(|value| value != entry.view.turn_id)
+            {
+                return Err(PlanPromptResolveError::ScopeMismatch);
+            }
+            if resolved_at_ms >= entry.view.deadline_at_ms {
+                pending.remove(id);
+                return Err(PlanPromptResolveError::Expired);
+            }
+            match (entry.view.question_kind, resolution) {
+                (PlanQuestionKind::Clarification, PlanPromptResolution::Option(index @ 1..=2)) => {
+                    PlanPromptAnswer {
+                        option_index: Some(index),
+                        text: entry.view.options[usize::from(index - 1)].clone(),
+                        custom: false,
+                        consent_state: None,
+                    }
+                }
+                (PlanQuestionKind::Clarification, PlanPromptResolution::Option(_)) => {
                     return Err(PlanPromptResolveError::InvalidOption);
                 }
-                PlanPromptResolution::Custom(text) => {
+                (PlanQuestionKind::Clarification, PlanPromptResolution::Custom(text)) => {
                     let text = text.trim();
                     if text.is_empty() || text.chars().count() > 2_000 {
                         return Err(PlanPromptResolveError::InvalidCustom);
@@ -155,8 +233,34 @@ impl PlanPromptRegistry {
                         option_index: None,
                         text: text.to_owned(),
                         custom: true,
+                        consent_state: None,
                     }
                 }
+                (PlanQuestionKind::ExecutionConsent, PlanPromptResolution::ApproveExecution) => {
+                    PlanPromptAnswer {
+                        option_index: None,
+                        text: "Approved".to_owned(),
+                        custom: false,
+                        consent_state: Some(ConsentState::Approved),
+                    }
+                }
+                (PlanQuestionKind::ExecutionConsent, PlanPromptResolution::DenyExecution) => {
+                    PlanPromptAnswer {
+                        option_index: None,
+                        text: "Denied".to_owned(),
+                        custom: false,
+                        consent_state: Some(ConsentState::Denied),
+                    }
+                }
+                (PlanQuestionKind::ExecutionConsent, PlanPromptResolution::Cancel) => {
+                    PlanPromptAnswer {
+                        option_index: None,
+                        text: "Cancelled".to_owned(),
+                        custom: false,
+                        consent_state: Some(ConsentState::Cancelled),
+                    }
+                }
+                _ => return Err(PlanPromptResolveError::InvalidResolution),
             }
         };
         let entry = pending.remove(id).ok_or(PlanPromptResolveError::NotFound)?;
@@ -173,14 +277,50 @@ impl PlanPromptRegistry {
             pending.remove(id);
         }
     }
+
+    pub(crate) fn expire(
+        &self,
+        id: &str,
+        now_ms: i64,
+    ) -> Result<PlanPromptView, PlanPromptResolveError> {
+        let mut pending = self
+            .pending
+            .lock()
+            .map_err(|_| PlanPromptResolveError::Unavailable)?;
+        let entry = pending.get(id).ok_or(PlanPromptResolveError::NotFound)?;
+        if now_ms < entry.view.deadline_at_ms {
+            return Err(PlanPromptResolveError::InvalidResolution);
+        }
+        pending
+            .remove(id)
+            .map(|entry| entry.view)
+            .ok_or(PlanPromptResolveError::NotFound)
+    }
 }
 
 impl RuntimeHost {
+    #[allow(dead_code)] // Backward-compatible clarification entry point for non-MCP callers.
     pub(super) async fn ask_plan_question(
         &self,
         context: &OperationContext,
         question: String,
         options: [String; 2],
+    ) -> RuntimeResult<serde_json::Value> {
+        self.ask_plan_question_with_kind(
+            context,
+            question,
+            options,
+            PlanQuestionKind::Clarification,
+        )
+        .await
+    }
+
+    pub(super) async fn ask_plan_question_with_kind(
+        &self,
+        context: &OperationContext,
+        question: String,
+        options: [String; 2],
+        question_kind: PlanQuestionKind,
     ) -> RuntimeResult<serde_json::Value> {
         let question = question.trim();
         if question.is_empty() || question.chars().count() > 2_000 {
@@ -212,13 +352,15 @@ impl RuntimeHost {
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| RuntimeError::new("invalid_arguments", "turnId is required"))?
             .to_owned();
-        let (view, receiver, _guard) = self
+        let (view, receiver, mut guard) = self
             .plan_prompts
             .register(
                 task_id.clone(),
                 turn_id.clone(),
+                context.agent_id.clone(),
                 question.to_owned(),
                 options,
+                question_kind,
                 now_ms(),
                 PLAN_QUESTION_TIMEOUT_MS,
             )
@@ -228,6 +370,8 @@ impl RuntimeHost {
                     "plan question registry is unavailable",
                 )
             })?;
+        persist_pending_plan_prompt(self.repository.pool(), &view).await?;
+        guard.persisted = Some((self.repository.pool().clone(), view.clone()));
         self.publish_event(
             format!("{}-pending", view.id),
             "plan.question_pending",
@@ -238,6 +382,8 @@ impl RuntimeHost {
                 "questionId": view.id,
                 "question": view.question,
                 "options": view.options,
+                "questionKind": view.question_kind,
+                "scopeDigest": view.scope_digest,
                 "createdAtMs": view.created_at_ms,
                 "deadlineAtMs": view.deadline_at_ms,
             }),
@@ -250,13 +396,22 @@ impl RuntimeHost {
         .await
         {
             Ok(Ok(answer)) => {
+                let consent_state = answer.consent_state;
                 self.publish_event(
                     format!("{}-resolved", view.id),
                     "plan.question_resolved",
                     Some(task_id),
                     None,
                     Some(turn_id),
-                    json!({ "questionId": view.id, "resolution": "answered" }),
+                    json!({
+                        "questionId": view.id,
+                        "resolution": consent_state.map_or("answered", |state| match state {
+                            ConsentState::Approved => "approved",
+                            ConsentState::Denied => "denied",
+                            ConsentState::Expired => "expired",
+                            ConsentState::Cancelled => "cancelled",
+                        })
+                    }),
                 );
                 let progress_message = format!(
                     "Câu hỏi lập kế hoạch: {}\nTrả lời: {}",
@@ -265,6 +420,9 @@ impl RuntimeHost {
                 Ok(json!({
                     "questionId": view.id,
                     "timedOut": false,
+                    "questionKind": view.question_kind,
+                    "consentState": consent_state,
+                    "executionAuthorized": consent_state == Some(ConsentState::Approved),
                     "answer": {
                         "kind": if answer.custom { "custom" } else { "option" },
                         "optionIndex": answer.option_index,
@@ -279,7 +437,15 @@ impl RuntimeHost {
                 "plan question response channel closed before an answer was received",
             )),
             Err(_) => {
-                self.plan_prompts.remove(&view.id);
+                persist_plan_prompt_timeout(self.repository.pool(), &view, view.deadline_at_ms)
+                    .await
+                    .map_err(|_| {
+                        RuntimeError::new(
+                            "plan_question_unavailable",
+                            "plan question terminal state could not be persisted",
+                        )
+                    })?;
+                let _ = self.plan_prompts.expire(&view.id, view.deadline_at_ms);
                 self.publish_event(
                     format!("{}-timeout", view.id),
                     "plan.question_resolved",
@@ -288,14 +454,27 @@ impl RuntimeHost {
                     Some(turn_id),
                     json!({ "questionId": view.id, "resolution": "timeout" }),
                 );
-                Ok(json!({
-                    "questionId": view.id,
-                    "timedOut": true,
-                    "question": view.question,
-                    "options": view.options,
-                    "mustChooseOneOption": true,
-                    "mustCallAgentProgressBeforeContinuing": true,
-                }))
+                if question_kind == PlanQuestionKind::ExecutionConsent {
+                    Ok(json!({
+                        "questionId": view.id,
+                        "timedOut": true,
+                        "questionKind": view.question_kind,
+                        "consentState": ConsentState::Expired,
+                        "executionAuthorized": false,
+                        "mustChooseOneOption": false,
+                        "mustCallAgentProgressBeforeContinuing": true,
+                    }))
+                } else {
+                    Ok(json!({
+                        "questionId": view.id,
+                        "timedOut": true,
+                        "questionKind": view.question_kind,
+                        "question": view.question,
+                        "options": view.options,
+                        "mustChooseOneOption": true,
+                        "mustCallAgentProgressBeforeContinuing": true,
+                    }))
+                }
             }
         }
     }
@@ -304,68 +483,15 @@ impl RuntimeHost {
 impl Drop for PlanPromptGuard {
     fn drop(&mut self) {
         self.registry.remove(&self.id);
+        let Some((pool, view)) = self.persisted.take() else {
+            return;
+        };
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(cancel_abandoned_plan_prompt(pool, view, now_ms()));
+        }
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn resolves_option_using_server_owned_option_text() {
-        let registry = PlanPromptRegistry::default();
-        let (view, receiver, _guard) = registry
-            .register(
-                "task-1".to_owned(),
-                "turn-1".to_owned(),
-                "Choose".to_owned(),
-                ["PHP".to_owned(), "C#".to_owned()],
-                10,
-                120_000,
-            )
-            .expect("register prompt");
-
-        registry
-            .resolve(&view.id, PlanPromptResolution::Option(2))
-            .expect("resolve option");
-        let answer = receiver.await.expect("receive answer");
-        assert_eq!(answer.option_index, Some(2));
-        assert_eq!(answer.text, "C#");
-        assert!(!answer.custom);
-        assert!(registry.pending().expect("pending prompts").is_empty());
-    }
-
-    #[test]
-    fn pending_prompts_are_fifo_and_invalid_answer_keeps_prompt() {
-        let registry = PlanPromptRegistry::default();
-        let (second, _receiver, _guard) = registry
-            .register(
-                "task-2".to_owned(),
-                "turn-2".to_owned(),
-                "Second".to_owned(),
-                ["A".to_owned(), "B".to_owned()],
-                20,
-                120_000,
-            )
-            .expect("register second prompt");
-        let (first, _receiver, _guard) = registry
-            .register(
-                "task-1".to_owned(),
-                "turn-1".to_owned(),
-                "First".to_owned(),
-                ["A".to_owned(), "B".to_owned()],
-                10,
-                120_000,
-            )
-            .expect("register first prompt");
-
-        assert!(matches!(
-            registry.resolve(&first.id, PlanPromptResolution::Option(3)),
-            Err(PlanPromptResolveError::InvalidOption)
-        ));
-        let pending = registry.pending().expect("pending prompts");
-        assert_eq!(pending.len(), 2);
-        assert_eq!(pending[0].id, first.id);
-        assert_eq!(pending[1].id, second.id);
-    }
-}
+#[path = "plan_prompt_tests.rs"]
+mod tests;

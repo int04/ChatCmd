@@ -1,4 +1,4 @@
-import { AlertTriangle, Bot, ChevronDown, ChevronUp, FolderOpen, LayoutDashboard, LoaderCircle, Plus, Power, Search, Settings, TerminalSquare, Trash2, Wrench } from 'lucide-react';
+import { AlertTriangle, Bot, ChevronDown, ChevronUp, FolderOpen, LayoutDashboard, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Power, Search, Settings, TerminalSquare, Trash2, Wrench } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type MouseEventHandler } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 
@@ -23,7 +23,7 @@ const menuItems = [
   { to: '/settings', label: 'Setting', icon: Settings },
 ];
 
-export function FunctionRail() {
+export function FunctionRail({ taskRailCollapsed, onTaskRailToggle }: { taskRailCollapsed: boolean; onTaskRailToggle: () => void }) {
   const navigate = useNavigate();
   const [confirmExit, setConfirmExit] = useState(false);
   const [exiting, setExiting] = useState(false);
@@ -42,6 +42,7 @@ export function FunctionRail() {
   return <>
     <nav className="function-rail" aria-label={tr('Application navigation')}>
       <Link className="function-rail-brand" to="/" aria-label="ChatCMD"><img src="/icons/logo-icon-master-1024.png" alt="" /></Link>
+      {taskRailCollapsed && <button className="function-rail-action task-rail-reopen" type="button" aria-label="Mở rails đoạn trò chuyện" title="Mở rails đoạn trò chuyện" onClick={onTaskRailToggle}><PanelLeftOpen /><span className="sr-only">Mở rails đoạn trò chuyện</span></button>}
       <div className="function-rail-items">
         {menuItems.map(({ to, end, label, icon: Icon }) => <NavLink to={to} end={end} key={to} aria-label={tr(label)} title={tr(label)}><Icon /><span className="sr-only">{tr(label)}</span></NavLink>)}
         <button className="function-rail-action function-rail-exit" type="button" aria-label="Dừng ứng dụng" title="Dừng ứng dụng" onClick={() => { setExitError(''); setConfirmExit(true); }}><Power /><span className="sr-only">Dừng ứng dụng</span></button>
@@ -51,7 +52,7 @@ export function FunctionRail() {
   </>;
 }
 
-export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function TaskRail({ open, onClose, onDesktopCollapse }: { open: boolean; onClose: () => void; onDesktopCollapse: () => void }) {
   const location = useLocation(); const navigate = useNavigate(); const taskId = activeTaskId(location.pathname);
   const [loadedTasks, setLoadedTasks] = useState<Task[]>([]); const [nextCursor, setNextCursor] = useState<string>(); const [loading, setLoading] = useState(true); const [loadingMore, setLoadingMore] = useState(false); const [error, setError] = useState(''); const [query, setQuery] = useState(''); const [contextMenu, setContextMenu] = useState<{ task: Task; x: number; y: number }>(); const [deleteTarget, setDeleteTarget] = useState<Task>(); const [deleting, setDeleting] = useState(false); const [deleteError, setDeleteError] = useState('');
   const [readFinalCounts, setReadFinalCounts] = useState<Record<string, number>>(readStoredFinalCounts);
@@ -61,7 +62,8 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
   const [visibleGroupCounts, setVisibleGroupCounts] = useState<Record<string, number>>({});
   const [projectHasMore, setProjectHasMore] = useState<Record<string, boolean>>({});
   const [loadingProjectMore, setLoadingProjectMore] = useState<Record<string, boolean>>({});
-  const [projectModalOpen, setProjectModalOpen] = useState(false); const [projectName, setProjectName] = useState(''); const [projectPath, setProjectPath] = useState(''); const [projectFolderPicking, setProjectFolderPicking] = useState(false); const [projectSaving, setProjectSaving] = useState(false); const [projectError, setProjectError] = useState('');
+  const [projectModalOpen, setProjectModalOpen] = useState(false); const [editingProject, setEditingProject] = useState<WorkspaceProject>(); const [projectName, setProjectName] = useState(''); const [projectPath, setProjectPath] = useState(''); const [projectChatGptUrl, setProjectChatGptUrl] = useState(''); const [projectFolderPicking, setProjectFolderPicking] = useState(false); const [projectSaving, setProjectSaving] = useState(false); const [projectError, setProjectError] = useState('');
+  const [projectContextMenu, setProjectContextMenu] = useState<{ project: WorkspaceProject; x: number; y: number }>(); const [deleteProjectTarget, setDeleteProjectTarget] = useState<WorkspaceProject>(); const [deletingProject, setDeletingProject] = useState(false); const [deleteProjectError, setDeleteProjectError] = useState('');
   const visibleTaskIds = useRef(new Set<string>()); const loadingMoreRef = useRef(false); const groupExpansionInitialized = useRef(false); const hadStoredReadCounts = useRef(typeof localStorage !== 'undefined' && localStorage.getItem(READ_FINAL_COUNTS_KEY) !== null);
   const railResize = useResizableWidth({ storageKey: 'chatcmd.layout.taskRailWidth.v1', cssVariable: '--task-rail-width', defaultWidth: typeof window !== 'undefined' && window.innerWidth <= 1180 ? 270 : 284, minWidth: 240, maxWidth: 480 });
 
@@ -91,8 +93,8 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
   useRealtime(handleRealtime);
   useEffect(() => { try { localStorage.setItem(READ_FINAL_COUNTS_KEY, JSON.stringify(readFinalCounts)); } catch { /* unavailable */ } }, [readFinalCounts]);
   useEffect(() => { if (!taskId) return; const task = loadedTasks.find((item) => item.id === taskId); if (!task) return; const count = task.finalResponseCount ?? 0; setReadFinalCounts((current) => (current[taskId] ?? 0) >= count ? current : { ...current, [taskId]: count }); }, [taskId, loadedTasks]);
-  useEffect(() => { setContextMenu(undefined); onClose(); }, [location.pathname, onClose]);
-  useEffect(() => { if (!contextMenu) return; const close = () => setContextMenu(undefined); window.addEventListener('pointerdown', close); window.addEventListener('blur', close); return () => { window.removeEventListener('pointerdown', close); window.removeEventListener('blur', close); }; }, [contextMenu]);
+  useEffect(() => { setContextMenu(undefined); setProjectContextMenu(undefined); onClose(); }, [location.pathname, onClose]);
+  useEffect(() => { if (!contextMenu && !projectContextMenu) return; const close = () => { setContextMenu(undefined); setProjectContextMenu(undefined); }; window.addEventListener('pointerdown', close); window.addEventListener('blur', close); return () => { window.removeEventListener('pointerdown', close); window.removeEventListener('blur', close); }; }, [contextMenu, projectContextMenu]);
   const deleteConversation = useCallback(async () => {
     if (!deleteTarget || !canDeleteTask(deleteTarget)) return; setDeleting(true); setDeleteError('');
     try { await api.deleteTask(deleteTarget.id); setLoadedTasks((current) => current.filter((task) => task.id !== deleteTarget.id)); setReadFinalCounts((current) => { const next = { ...current }; delete next[deleteTarget.id]; return next; }); if (taskId === deleteTarget.id) navigate('/tasks'); setDeleteTarget(undefined); }
@@ -135,8 +137,8 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
     try { await api.reorderWorkspaceProjects(next.map((project) => project.id)); }
     catch (value) { setProjects(previous); setError(value instanceof Error ? value.message : 'Không thể lưu thứ tự dự án.'); }
   };
-  const startTask = (project?: WorkspaceProject) => navigate('/tasks/new', { state: project ? { projectFolder: project.path, projectName: project.name } : undefined });
-  const openProjectModal = () => { setProjectName(''); setProjectPath(''); setProjectError(''); setProjectModalOpen(true); };
+  const startTask = (project?: WorkspaceProject) => navigate('/tasks/new', { state: project ? { projectFolder: project.path, projectName: project.name, chatGptProjectUrl: project.chatGptProjectUrl ?? undefined } : undefined });
+  const openProjectModal = (project?: WorkspaceProject) => { setEditingProject(project); setProjectName(project?.name ?? ''); setProjectPath(project?.path ?? ''); setProjectChatGptUrl(project?.chatGptProjectUrl ?? ''); setProjectError(''); setProjectModalOpen(true); };
   const pickProjectFolder = async () => {
     if (projectFolderPicking) return;
     setProjectFolderPicking(true); setProjectError('');
@@ -146,12 +148,28 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
   };
   const saveProject = async () => {
     if (!projectName.trim() || !projectPath.trim()) { setProjectError('Vui lòng nhập tên và chọn thư mục dự án.'); return; }
+    const chatGptProjectUrl = projectChatGptUrl.trim();
+    if (chatGptProjectUrl && !isValidChatGptProjectUrl(chatGptProjectUrl)) { setProjectError('Link dự án ChatGPT phải có dạng https://chatgpt.com/g/g-p-{MÃ}/project.'); return; }
     setProjectSaving(true); setProjectError('');
-    try { await api.saveWorkspaceProject({ name: projectName.trim(), path: projectPath.trim() }); setProjects(await api.workspaceProjects()); setProjectModalOpen(false); }
+    try {
+      const input = { name: projectName.trim(), path: projectPath.trim(), chatGptProjectUrl };
+      if (editingProject) await api.updateWorkspaceProject(editingProject.id, input); else await api.saveWorkspaceProject(input);
+      setProjects(await api.workspaceProjects()); setProjectModalOpen(false); setEditingProject(undefined);
+    }
     catch (reason) { setProjectError(reason instanceof Error ? reason.message : 'Không thể lưu dự án.'); }
     finally { setProjectSaving(false); }
   };
-  const renderRow = (task: Task) => <TaskRailRow task={task} selected={task.id === taskId} unread={Math.max(0, (task.finalResponseCount ?? 0) - (readFinalCounts[task.id] ?? 0))} onRenamed={(updated) => setLoadedTasks((current) => current.map((item) => item.id === updated.id ? { ...item, ...updated } : item))} onContextMenu={(event) => { event.preventDefault(); setContextMenu({ task, x: Math.min(event.clientX, window.innerWidth - 236), y: Math.min(event.clientY, window.innerHeight - 108) }); }} key={task.id} />;
+  const deleteProject = async () => {
+    if (!deleteProjectTarget || deletingProject) return;
+    setDeletingProject(true); setDeleteProjectError('');
+    try {
+      await api.deleteWorkspaceProject(deleteProjectTarget.id);
+      setDeleteProjectTarget(undefined);
+      await applyFirstPage();
+    } catch (reason) { setDeleteProjectError(reason instanceof Error ? reason.message : 'Không thể xóa dự án.'); }
+    finally { setDeletingProject(false); }
+  };
+  const renderRow = (task: Task) => <TaskRailRow task={task} selected={task.id === taskId} unread={Math.max(0, (task.finalResponseCount ?? 0) - (readFinalCounts[task.id] ?? 0))} onRenamed={(updated) => setLoadedTasks((current) => current.map((item) => item.id === updated.id ? { ...item, ...updated } : item))} onContextMenu={(event) => { event.preventDefault(); event.stopPropagation(); setProjectContextMenu(undefined); setContextMenu({ task, x: Math.min(event.clientX, window.innerWidth - 236), y: Math.min(event.clientY, window.innerHeight - 108) }); }} key={task.id} />;
   const loadMoreProject = async (key: string, project: WorkspaceProject, visible: Task[]) => {
     if (loadingProjectMore[key] || !visible.length) return;
     setLoadingProjectMore((current) => ({ ...current, [key]: true }));
@@ -177,7 +195,7 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
     const dragClass = project ? `${draggedProjectId === key ? ' dragging' : ''}${dragOverProjectId === key && draggedProjectId !== key ? ' drag-over' : ''}` : '';
     const handleDragOver = project ? (event: ReactDragEvent<HTMLElement>) => { event.preventDefault(); if (!draggedProjectId || draggedProjectId === project.id) return; event.dataTransfer.dropEffect = 'move'; setDragOverProjectId(project.id); } : undefined;
     const handleDrop = project ? (event: ReactDragEvent<HTMLElement>) => { event.preventDefault(); const sourceId = draggedProjectId || event.dataTransfer.getData('text/plain'); setDraggedProjectId(undefined); setDragOverProjectId(undefined); if (sourceId) void reorderProjects(sourceId, project.id); } : undefined;
-    return <section className={`task-project-group ${expanded ? 'expanded' : 'collapsed'}${dragClass}`} key={key} onDragOver={handleDragOver} onDrop={handleDrop}>
+    return <section className={`task-project-group ${expanded ? 'expanded' : 'collapsed'}${dragClass}`} key={key} onDragOver={handleDragOver} onDrop={handleDrop} onContextMenu={project ? (event) => { event.preventDefault(); setContextMenu(undefined); setProjectContextMenu({ project, x: Math.min(event.clientX, window.innerWidth - 236), y: Math.min(event.clientY, window.innerHeight - 112) }); } : undefined}>
       <header className="task-project-heading"><button className="task-project-toggle" type="button" onClick={toggleExpanded} aria-expanded={expanded} aria-label={`${expanded ? 'Ẩn' : 'Hiện'} đoạn trò chuyện của ${name}`}><ChevronDown /><span className={project ? 'task-project-title-drag-handle' : undefined} draggable={Boolean(project)} title={project ? `Kéo để sắp xếp ${name}` : undefined} onDragStart={project ? (event) => { setDraggedProjectId(project.id); setDragOverProjectId(undefined); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setData('text/plain', project.id); } : undefined} onDragEnd={project ? () => { setDraggedProjectId(undefined); setDragOverProjectId(undefined); } : undefined}><strong title={project?.path}>{name}</strong>{project && <small title={project.path}>{project.path}</small>}</span></button><button className="task-project-add" type="button" onClick={() => startTask(project)} aria-label={`Tạo đoạn trò chuyện trong ${name}`} title={`Tạo đoạn trò chuyện trong ${name}`}><Plus /></button></header>
       {expanded && <><div className="task-project-conversations">{visible.length ? visible.map(renderRow) : <p className="task-project-empty">Chưa có đoạn trò chuyện</p>}</div>
       {(canShowMore || visibleCount > COLLAPSED_PROJECT_TASKS) && <div className="task-project-more-actions">{canShowMore && <button className="task-project-more" type="button" disabled={Boolean(loadingProjectMore[key])} onClick={() => project ? void loadMoreProject(key, project, visible) : setVisibleGroupCounts((current) => ({ ...current, [key]: visibleCount + COLLAPSED_PROJECT_TASKS }))}>{loadingProjectMore[key] ? <LoaderCircle className="spin" /> : <ChevronDown />}Xem thêm</button>}{visibleCount > COLLAPSED_PROJECT_TASKS && <><span aria-hidden="true">|</span><button className="task-project-more" type="button" onClick={() => setVisibleGroupCounts((current) => ({ ...current, [key]: COLLAPSED_PROJECT_TASKS }))}><ChevronUp />Ẩn bớt</button></>}</div>}</>}
@@ -188,10 +206,11 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
     <div className="panel-resize-handle task-rail-resize-handle" role="separator" aria-label={tr('Resize conversations')} aria-orientation="vertical" aria-valuemin={240} aria-valuemax={480} aria-valuenow={railResize.width} tabIndex={0} onPointerDown={railResize.onPointerDown} onKeyDown={railResize.onKeyDown} />
     <header className="task-rail-header">
       <div className="task-rail-toolbar">
+        <button className="task-rail-collapse" type="button" aria-label="Đóng rails đoạn trò chuyện" title="Đóng rails đoạn trò chuyện" onClick={onDesktopCollapse}><PanelLeftClose /></button>
         <label className="tasks-conversation-search"><Search /><span className="sr-only">{tr('Search conversations')}</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={tr('Search')} /></label>
         <Link className="task-rail-new-message" to="/tasks/new" aria-label={tr('New message')} title={tr('New message')}><Plus /></Link>
       </div>
-      <div className="task-projects-title"><strong>Dự án</strong><button type="button" onClick={openProjectModal} aria-label="Thêm dự án" title="Thêm dự án"><Plus /></button></div>
+      <div className="task-projects-title"><strong>Dự án</strong><button type="button" onClick={() => openProjectModal()} aria-label="Thêm dự án" title="Thêm dự án"><Plus /></button></div>
     </header>
     <div className="task-rail-body"><div className="task-rail-list" onScroll={(event) => { const target = event.currentTarget; if (target.scrollHeight - target.scrollTop - target.clientHeight < 180) void loadMore(); }}>
       {loading ? <Loading label={tr('Loading tasks')} /> : error && !tasks.length ? <ErrorState message={error} retry={() => void applyFirstPage()} /> : <>
@@ -204,8 +223,10 @@ export function TaskRail({ open, onClose }: { open: boolean; onClose: () => void
       </>}
     </div></div>
     {contextMenu && <div className="task-context-menu" role="menu" style={{ left: contextMenu.x, top: contextMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button type="button" role="menuitem" className="danger" disabled={!canDeleteTask(contextMenu.task)} onClick={() => { setDeleteError(''); setDeleteTarget(contextMenu.task); setContextMenu(undefined); }}><Trash2 /><span>{tr('Delete conversation')}</span></button>{!canDeleteTask(contextMenu.task) && <small>{tr('You can only delete a task after it has finished.')}</small>}</div>}
+    {projectContextMenu && <div className="task-context-menu" role="menu" style={{ left: projectContextMenu.x, top: projectContextMenu.y }} onPointerDown={(event) => event.stopPropagation()}><button type="button" role="menuitem" onClick={() => { const project = projectContextMenu.project; setProjectContextMenu(undefined); openProjectModal(project); }}><Pencil /><span>Sửa dự án</span></button><button type="button" role="menuitem" className="danger" onClick={() => { setDeleteProjectError(''); setDeleteProjectTarget(projectContextMenu.project); setProjectContextMenu(undefined); }}><Trash2 /><span>Xóa dự án</span></button></div>}
     {deleteTarget && <Modal title={tr('Delete conversation?')} description={conversationName(deleteTarget)} close={() => !deleting && setDeleteTarget(undefined)} dangerous><div className="task-delete-warning"><AlertTriangle /><div><strong>{tr('Warning')}</strong><p>{tr('Deleting removes this conversation and its linked data from the list. This conversation may not work again in the future.')}</p></div></div>{deleteError && <p className="task-delete-error" role="alert">{deleteError}</p>}<div className="modal-actions"><button className="button secondary" type="button" disabled={deleting} onClick={() => setDeleteTarget(undefined)}>{tr('Cancel')}</button><button className="button danger" type="button" disabled={deleting} onClick={() => void deleteConversation()}>{deleting ? tr('Deleting…') : tr('Delete conversation')}</button></div></Modal>}
-    {projectModalOpen && <Modal className="workspace-project-modal" title="Thêm dự án" description="Lưu tên hiển thị và thư mục gốc để nhóm các đoạn trò chuyện theo dự án." close={() => !projectFolderPicking && !projectSaving && setProjectModalOpen(false)}><div className="workspace-project-form"><label><span>Tên</span><input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="Ví dụ: Dotty" autoFocus maxLength={160} disabled={projectSaving} /></label><label><span>Thư mục dự án</span><button className={`workspace-project-folder ${projectPath ? '' : 'empty'}`} type="button" onClick={() => void pickProjectFolder()} disabled={projectFolderPicking || projectSaving}>{projectFolderPicking ? <LoaderCircle className="spin" /> : <FolderOpen />}<span>{projectPath || 'Chọn folder'}</span></button></label>{projectError && <p className="workspace-project-error" role="alert">{projectError}</p>}<div className="modal-actions"><button className="button secondary" type="button" onClick={() => setProjectModalOpen(false)} disabled={projectFolderPicking || projectSaving}>Hủy</button><button className="button primary" type="button" onClick={() => void saveProject()} disabled={projectFolderPicking || projectSaving || !projectName.trim() || !projectPath.trim()}>{projectSaving ? 'Đang lưu…' : 'Lưu'}</button></div></div></Modal>}
+    {deleteProjectTarget && <Modal title="Xóa dự án?" description={deleteProjectTarget.name} close={() => !deletingProject && setDeleteProjectTarget(undefined)} dangerous><div className="task-delete-warning"><AlertTriangle /><div><strong>Toàn bộ dự án sẽ bị xóa</strong><p>Các cuộc trò chuyện đã hoàn tất trong dự án cũng sẽ bị xóa. Cuộc trò chuyện chưa hoàn tất sẽ được giữ lại và chuyển vào mục “Chưa phân loại”.</p></div></div>{deleteProjectError && <p className="task-delete-error" role="alert">{deleteProjectError}</p>}<div className="modal-actions"><button className="button secondary" type="button" disabled={deletingProject} onClick={() => setDeleteProjectTarget(undefined)}>Hủy</button><button className="button danger" type="button" disabled={deletingProject} onClick={() => void deleteProject()}>{deletingProject ? 'Đang xóa…' : 'Xóa dự án'}</button></div></Modal>}
+    {projectModalOpen && <Modal className="workspace-project-modal" title={editingProject ? 'Sửa dự án' : 'Thêm dự án'} description={editingProject ? 'Cập nhật tên hiển thị hoặc thư mục gốc của dự án.' : 'Lưu tên hiển thị và thư mục gốc để nhóm các đoạn trò chuyện theo dự án.'} close={() => { if (!projectFolderPicking && !projectSaving) { setProjectModalOpen(false); setEditingProject(undefined); } }}><div className="workspace-project-form"><label><span>Tên</span><input value={projectName} onChange={(event) => setProjectName(event.target.value)} placeholder="Ví dụ: Dotty" autoFocus maxLength={160} disabled={projectSaving} /></label><label><span>Thư mục dự án</span><button className={`workspace-project-folder ${projectPath ? '' : 'empty'}`} type="button" onClick={() => void pickProjectFolder()} disabled={projectFolderPicking || projectSaving}>{projectFolderPicking ? <LoaderCircle className="spin" /> : <FolderOpen />}<span>{projectPath || 'Chọn folder'}</span></button></label><label><span>Link dự án (dành cho ChatGPT)</span><input value={projectChatGptUrl} onChange={(event) => setProjectChatGptUrl(event.target.value)} placeholder="https://chatgpt.com/g/g-p-{MÃ}/project" disabled={projectSaving} /><small>Link folder dự án trên ChatGPT, giúp khi tạo mới cuộc trò chuyện trên ChatCMD sẽ vào đúng dự án đó. Ví dụ: {'https://chatgpt.com/g/g-p-{MÃ}/project'}</small></label>{projectError && <p className="workspace-project-error" role="alert">{projectError}</p>}<div className="modal-actions"><button className="button secondary" type="button" onClick={() => { setProjectModalOpen(false); setEditingProject(undefined); }} disabled={projectFolderPicking || projectSaving}>Hủy</button><button className="button primary" type="button" onClick={() => void saveProject()} disabled={projectFolderPicking || projectSaving || !projectName.trim() || !projectPath.trim()}>{projectSaving ? 'Đang lưu…' : editingProject ? 'Lưu thay đổi' : 'Lưu'}</button></div></div></Modal>}
   </aside>;
 }
 
@@ -255,3 +276,4 @@ function activeTaskId(pathname: string) { if (!pathname.startsWith('/tasks/')) r
 function readStoredFinalCounts(): Record<string, number> { try { const value = JSON.parse(localStorage.getItem(READ_FINAL_COUNTS_KEY) ?? '{}') as Record<string, unknown>; return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, number] => typeof entry[1] === 'number' && Number.isFinite(entry[1]) && entry[1] >= 0)); } catch { return {}; } }
 function conversationName(task: Task) { return task.title?.trim() || task.agentName?.trim() || generatedConversationName(task.id); }
 function generatedConversationName(id: string) { const first = [tr('Cloud'), tr('Star'), tr('Wind'), tr('Sun'), tr('Moon'), tr('Sea'), tr('Forest'), tr('Mist')]; const second = [tr('Blue'), tr('Soft'), tr('Morning'), tr('Night'), tr('New'), tr('Far'), tr('Warm'), tr('Bright')]; let hash = 2166136261; for (let index = 0; index < id.length; index++) { hash ^= id.charCodeAt(index); hash = Math.imul(hash, 16777619); } const value = hash >>> 0; return `${first[value % first.length]} ${second[Math.floor(value / first.length) % second.length]} ${String(value % 97 + 1).padStart(2, '0')}`; }
+function isValidChatGptProjectUrl(value: string) { return /^https:\/\/chatgpt\.com\/g\/g-p-[A-Za-z0-9_-]+\/project$/.test(value); }

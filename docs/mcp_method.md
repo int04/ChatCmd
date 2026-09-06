@@ -4,10 +4,10 @@ Tài liệu này liệt kê các MCP tool/method mà `chatcmd-mcp` hiện expose
 
 Nguồn đối chiếu chính:
 
-- `crates/chatcmd-mcp/src/tool_catalog.rs` — danh sách method ổn định được expose.
-- `crates/chatcmd-mcp/src/lib.rs` — schema/description của từng method.
+- `crates/chatcmd-mcp/src/lib.rs` — đăng ký rmcp router + schema/description của từng method; đây là source of truth runtime.
+- `crates/chatcmd-mcp/src/tool_catalog.rs` — sinh canonical manifest, capability flags, metadata và `catalogHash` trực tiếp từ rmcp router; không duy trì danh sách tool thủ công thứ hai.
 
-> Tổng số hiện tại: **46 methods**.
+> Tổng số method phải lấy từ generated catalog/runtime thay vì hard-code trong tài liệu hoặc connector.
 
 ## Quy ước chung
 
@@ -44,7 +44,7 @@ Các method này quản lý terminal session dạng PTY chạy lâu dài, dùng 
 
 | Method | Tham số chính | Ý nghĩa |
 |---|---|---|
-| `shell_create` | `workingDirectory?`, `executable?`, `arguments?`, `environment?`, `columns?`, `rows?` | Tạo một persistent PTY/terminal session. `workingDirectory` là field chuẩn; `cwd` và `initialWorkingDirectory` chỉ là alias tương thích. |
+| `shell_create` | `workingDirectory?`, `executable?`, `arguments?`, `environment?`, `columns?`, `rows?` | Tạo một persistent PTY/terminal session sau khi execution policy cho phép. `workingDirectory` là field chuẩn; `cwd` và `initialWorkingDirectory` chỉ là alias tương thích. Shell chạy với quyền OS của tiến trình ChatCMD, không phải sandbox chỉ-đọc. |
 | `shell_write` | `sessionId`, `text`, `appendNewLine?` | Gửi input literal vào terminal session. `input` là alias tương thích của `text`. |
 | `shell_wait` | `sessionId`, `timeoutMs?` | Chờ terminal/process trong PTY thay đổi hoặc kết thúc. Hết timeout không tự kill session. |
 | `shell_read` | `sessionId`, `afterSequence?`, `maxEvents?` | Đọc output replayable của PTY theo sequence. `afterSequence` là cursor chuẩn; `startSequence`/`fromSequence` là alias tương thích. |
@@ -53,6 +53,16 @@ Các method này quản lý terminal session dạng PTY chạy lâu dài, dùng 
 | `shell_close` | `sessionId`, `force?` | Đóng PTY session; có thể force-close khi cần. |
 | `shell_list` | Không có tham số riêng | Liệt kê các PTY session hiện có. |
 | `shell_inspect` | `sessionId` | Xem trạng thái/thông tin của một PTY session. |
+
+### Non-interactive command execution
+
+| Method | Tham số chính | Ý nghĩa |
+|---|---|---|
+| `command_run` | `executable`, `cwd`, `arguments?`, `environment?`, `idempotencyKey?`, `maxStdoutBytes?`, `maxStderrBytes?`, `maxArtifactBytes?`, `timeoutMs?`, `killOnOutputLimit?` | Chạy đúng một process non-interactive sau authorization. Không shell interpolation trừ khi caller chọn shell làm executable. Result có `executionId`, `terminalState`, nullable `exitCode`/`signal`, timeout/cancel, timestamps, bounded stdout/stderr và artifact metadata. Tool success không đồng nghĩa exit 0. |
+
+Retry cùng task/agent và idempotency key reuse execution đang chạy hoặc đã hoàn tất; cùng key nhưng
+command khác trả `idempotency_conflict`. Execution lookup fail closed ngoài owner. Record hiện chỉ sống
+trong process runtime, nên restart làm evidence ref cũ thành unresolved/unknown thay vì tự chạy lại.
 
 ---
 
@@ -63,18 +73,26 @@ Các method `fs_*` thao tác trực tiếp trong canonical workspace scope và t
 | Method | Tham số chính | Ý nghĩa |
 |---|---|---|
 | `workspace_roots` | Không có tham số riêng | Liệt kê các canonical workspace root mà agent được phép thao tác. |
-| `fs_list` | `path`, `offset?`, `limit?` | Liệt kê file/thư mục con bên trong một path. |
+| `project_context` | `targetPaths?`, `policy?`, `range?` | Đọc bounded rule bundle của project hiện tại với provenance/hash/scope. `CLAUDE.md` mặc định không tải; chỉ tải thành record riêng khi `policy.loadClaudeMd=true`, không merge ngầm với `AGENTS.md`. `range {path, offset, versionToken}` đọc chunk UTF-8 kế tiếp và fail nếu version cũ. Manifest chỉ được đọc metadata/prefix, không thực thi. |
+| `fs_list` | `path`, `offset?`, `limit?` | Legacy compatibility: trả trực tiếp mảng `FsEntry`, global sort theo tên rồi mới offset/limit; runtime cap `limit` ở 2.000. Với thư mục lớn nên dùng `fs_list_v2`. |
+| `fs_list_v2` | `path`, `cursor?`, `limit?`, `sort?`, `metadata?`, `includeHidden?`, `budget?` | Cursor pagination bounded-work theo `sort=filesystem` (không hứa global alphabetical). `metadata` hỗ trợ `type`, `size`, `readonly`; mặc định `[]` để tránh stat. Result envelope v1 có `data.items`, `data.directoryVersion`, `data.sort`, `page.nextCursor/hasMore`, usage `entriesScanned/metadataCalls`, truncation/warnings khi cần. Cursor chỉ dùng lại cho cùng path/options; directory đổi thì continuation fail và phải restart. |
 | `fs_search` | `path`, `query`, `caseSensitive?`, `maxResults?`, `maxFileBytes?`, `includeIgnored?`, `exclude?` | Tìm kiếm **nội dung text** trong workspace. Khi tìm từ root nên dùng `path: "."`. |
-| `fs_find` | `path`, `pattern`, `maxResults?`, `maxDepth?` | Tìm **đường dẫn/tên file hoặc thư mục** theo pattern. Nên dùng khi chưa chắc relative path thay vì đoán path. |
-| `fs_read_text` | `path`, `startLine?`, `lineCount?`, `maxCharacters?` | Đọc file text UTF-8; hỗ trợ đọc theo range để tránh tải file lớn toàn bộ. |
+| `fs_find` | `path`, `pattern`, `patternMode?`, `caseSensitive?`, `entryTypes?`, `maxDepth?`, `includeIgnored?`, `includeHidden?`, `exclude?`, `extensions?`, `cursor?`, `limit?`, `budget?` (`maxResults?` legacy) | Tìm **đường dẫn/tên file hoặc thư mục** bằng traversal có early-stop và cursor. `patternMode=literal` tìm chuỗi trong filename; `glob` match path tương đối như `**/*.rs`; `regex` match regex trên path tương đối. Kết quả dùng `ToolResultEnvelope`, tiếp tục bằng `page.nextCursor` với cùng path/options. Bỏ `patternMode` giữ tương thích legacy `*foo*` literal-contains và trả warning. |
+| `fs_read_text` | `path`, `startLine?`, `lineCount?`, `maxCharacters?` | Adapter tương thích cho contract cũ; nội bộ dùng reader streaming/range, không còn tải toàn file vào RAM. Với file lớn/resumable nên dùng `fs_read_text_v2`. |
+| `fs_read_text_v2` | `path`, `range { unit: line\|byte, start, limit }`, `maxBytes?`, `includeLineEndings?`, `expectedVersion?`, `budget { timeoutMs?, maxBytesRead? }?` | Reader streaming/range bounded-memory. Trả `range`, `nextStartLine`/`nextByteOffset`, `truncated` + `truncationReason`, `bytesRead`, `sizeBytes`, `versionToken`, UTF-8/BOM và newline metadata; `expectedVersion` chặn continuation stale khi file đã đổi. |
+| `fs_batch_read` | `requests[]`, `maxItems?`, `maxTotalOutputBytes?`, `concurrency?` | Đọc nhiều range qua reader v2, giữ thứ tự input, trả lỗi theo item và enforce aggregate output cap. |
 | `fs_write_text` | `path`, `content`, `overwrite?` | Ghi nguyên tử nội dung UTF-8 vào file; dùng cho tạo mới hoặc thay toàn bộ file. |
 | `fs_replace_text` | `path`, `oldText`, `newText`, `expectedOccurrences?` | Chỉnh sửa an toàn bằng exact text replacement. `oldText` phải khớp nội dung hiện tại. |
+| `fs_apply_edits` | `path`, `expectedVersion`, `coordinateSystem`, `edits`, `columnEncoding?`, `dryRun?`, `preserveLineEndings?`, `preserveBom?`, `budget?` | Sửa nhiều range UTF-8 không chồng lấn bằng streaming temp-file transaction; kiểm tra version trước xử lý và ngay trước atomic commit. |
 | `fs_write_raw` | `path`, `base64`, `overwrite?` | Decode Base64 và ghi atomically dữ liệu binary/raw vào workspace. |
 | `fs_stat` | `path` | Xem metadata của một file/thư mục: loại entry, size, readonly, v.v. |
+| `fs_batch_stat` | `paths[]`, `versionStrength?`, `maxItems?`, `budget?` | Stat tối đa 500 path, giữ thứ tự và trả outcome riêng từng item. |
+| `workspace_index_status` | `path` | Xem generation, freshness, schema, số entry và lỗi gần nhất của metadata index. |
+| `workspace_index_rebuild` | `path` | Rebuild metadata index có cancellation và hard entry cap; không lưu content. |
 | `fs_create_directory` | `path` | Tạo thư mục trong workspace. |
-| `fs_copy` | `source`, `destination`, `overwrite?` | Copy file/thư mục trong canonical workspace scope. |
-| `fs_move` | `source`, `destination`, `overwrite?` | Move/rename file hoặc thư mục trong canonical workspace scope. |
-| `fs_delete` | `path`, `recursive?` | Xóa file/thư mục theo policy; thư mục có thể cần `recursive`. |
+| `fs_copy` | `source`, `destination`, `conflictPolicy?`, `atomicPublish?`, `verify?`, `preserveMetadata?`, `followSymlinks?`, `dryRun?`, `expectedSourceVersion?`, `expectedDestinationVersion?`, `budget?`, `overwrite?` | Preflight bounded, copy vào sibling staging, verify rồi atomic publish; `overwrite` là adapter cũ cho `replace`. Symlink/reparse không được follow. |
+| `fs_move` | giống `fs_copy` | Stage-copy → verify → publish trước khi xóa source; báo `completedWithSourceRemaining` nếu cleanup source lỗi. |
+| `fs_delete` | `path`, `recursive?`, `mode?`, `expectedVersion?`, `dryRun?`, `budget?` | `mode=quarantine` mặc định; permanent phải explicit. Root/grant root bị từ chối và traversal dùng no-follow. |
 
 ### Phân biệt nhanh `fs_search` và `fs_find`
 
@@ -89,12 +107,21 @@ Các Git method được thiết kế để tránh shell interpolation và truy�
 
 | Method | Tham số chính | Ý nghĩa |
 |---|---|---|
-| `git_status` | `cwd?` | Xem trạng thái working tree của repository. `path` cũ được chấp nhận như alias của `cwd`. |
-| `git_diff` | `cwd?`, `staged?`, `stat?`, `path?` | Lấy Git diff; có thể lọc staged, chỉ stat hoặc theo một file cụ thể. |
+| `git_status` | `cwd?`, Git limits | Xem porcelain v2 và branch metadata của working tree. `path` cũ được chấp nhận như alias của `cwd`. |
+| `git_diff` | `cwd?`, `staged?`, `stat?`, `path?`, Git limits | Lấy Git diff; nên gọi `stat=true` trước khi yêu cầu patch lớn. Ext-diff và màu luôn bị tắt. |
 | `git_log` | `cwd?`, `count?`, `path?` | Xem lịch sử commit có giới hạn số lượng; có thể lọc theo path. |
-| `git_branch` | `cwd?` | Liệt kê các Git branch. |
+| `git_branch` | `cwd?`, Git limits | Liệt kê branch bằng format machine-readable. |
 | `git_show` | `revision`, `cwd?`, `path?` | Xem nội dung của một revision/commit đã được validate; có thể lọc theo path. |
-| `git_commit` | `message`, `cwd?`, `all?`, `paths?` | Tạo Git commit mà không dùng shell interpolation. `all` mặc định là `true`; không được gọi với object rỗng. |
+| `git_commit` | `message`, `cwd?`, `all?`, `paths?` | Tạo Git commit không qua shell interpolation. Phải chọn đúng một phạm vi: `paths` chuẩn hóa, không rỗng hoặc `all=true`; `all` mặc định `false`, chỉ commit thay đổi đã stage và fail closed nếu còn unstaged/untracked. Runtime từ chối preview cũ, staged path ngoài scope, đường dẫn mơ hồ và file được chọn có cả staged/unstaged changes. |
+
+Mọi Git method nhận thêm `outputMode` (`inline` hoặc `inlineOrArtifact`),
+`maxOutputBytes`, `maxStderrBytes`, `timeoutMs`, `maxRuntimeMs`,
+`artifactMaxBytes` và `killOnLimit`. Mặc định timeout là 30 giây, stdout preview
+512 KiB, stderr preview 128 KiB và artifact tối đa 256 MiB. Result giữ các field
+cũ (`exitCode`, `stdout`, `stderr`, `truncated`) và bổ sung byte counters,
+`truncationReason`, `artifactRef`, SHA-256, elapsed time, timeout/cancellation.
+Git chạy với stdin/pager/credential prompt bị vô hiệu hóa; path luôn được truyền sau
+`--`, không qua shell interpolation.
 
 ---
 
@@ -123,7 +150,7 @@ Các Git method được thiết kế để tránh shell interpolation và truy�
 |---|---|---|
 | `task_get` | Dùng `taskId` chung | Đọc state hiện tại của ChatCMD task. |
 | `task_list` | Không có tham số riêng | Liệt kê các task. |
-| `task_set_execution_mode` | `mode` | Đổi execution mode của task hiện tại. |
+| `task_set_execution_mode` | `mode` | Adapter tương thích: MCP không được tự đổi quyền và luôn nhận lỗi `permission_change_requires_user`. Chỉ local UI đã xác thực có thể đổi execution mode. |
 | `task_artifact_list` | Dùng `taskId` chung | Liệt kê các artifact được gắn với task. |
 | `task_artifact_read` | `artifactId` | Đọc một task artifact cụ thể. |
 
@@ -137,67 +164,33 @@ Các Git method được thiết kế để tránh shell interpolation và truy�
 |---|---|---|
 | `agent_user_message` | `content` | **Bắt buộc là MCP call đầu tiên và chỉ gọi đúng một lần trong mỗi user turn.** Đồng bộ nguyên văn user message lên ChatCMD và thiết lập/correlate `taskId` + `turnId`. `content` phải đúng nguyên văn message hiện tại. Không dùng method này cho progress/reflection/finding sau tool result; các cập nhật đó phải dùng `agent_progress`. |
 | `agent_progress` | `message`, `suggestedTitle?` | **Rule phía AI cho mọi turn project không-trivial.** Ngay sau `agent_user_message` nên gửi progress tóm tắt yêu cầu + hành động kế tiếp. Sau các kết quả `fs_*` có ý nghĩa (đặc biệt `fs_find`, `fs_search`, `fs_read_text`, edit/write/delete), Git/process, `shell_read`/`shell_wait` còn pending, sub-agent wait chưa xong, hoặc failure/non-zero, AI nên gửi progress mô tả kết quả quan sát được và bước tiếp theo trước khi tiếp tục. Đây không phải runtime gate: server không reject tool chỉ vì thiếu progress; các thao tác low-level liên quan chặt có thể gom thành một checkpoint để tránh làm chậm tiến độ và tránh callback MCP không cần thiết. Không gửi private chain-of-thought. |
-| `agent_plan_question` | `question`, `options` | Tạm dừng plan để hỏi người dùng một câu hỏi có hai lựa chọn rõ ràng; câu trả lời được tiếp tục qua hàng đợi phê duyệt của ChatCMD. |
-| `agent_subagent_start` | `name`, `request` | Tạo và dispatch một child agent khi ChatGPT chủ động chia việc hoặc người dùng yêu cầu chia agent. Chỉ sử dụng model sampling do ChatGPT/MCP host cung cấp; nếu host không hỗ trợ sampling thì trả `samplingUnavailable`/`failed` và tuyệt đối không khởi chạy Codex hay executor local. |
-| `agent_subagent_wait` | `timeoutMs?` | Chờ các child agent của parent turn. Nếu `allFinished=false` thì tiếp tục gọi lại trước khi finalize. |
-| `agent_turn_complete` | `content`, `suggestedTitle?` | **Bắt buộc là MCP call cuối cùng.** Xác nhận turn đã hoàn tất và gửi đúng nội dung cuối cùng agent sẽ trả cho user. Chỉ được gọi đúng một lần sau khi mọi tool/sub-agent đã xong. |
+| `agent_plan_question` | `question`, `options`, `questionKind?` | `questionKind` mặc định `clarification`; `executionConsent` dùng semantics consent do server định nghĩa. Lifecycle được audit durable; restart/disconnect/timeout/custom answer fail closed. Approved consent không đổi execution mode, không mint grant và mọi side effect vẫn qua C01 tool authorization. |
+| `agent_subagent_start` | `name`, `request` | Tạo hoặc reuse child. `samplingTools`/`samplingText` là worker sampling; `extensionFallback` là child pending để browser extension claim nên parent không làm trùng; `existing` không spawn lại. Startup lỗi sau registration trả structured `status=failed` + `startupError`. |
+| `agent_subagent_wait` | `timeoutMs?`, `subagentId?`, `reportOffset?`, `reportVersion?` | Chờ toàn bộ cây agent của parent turn và trả báo cáo công khai trong `subagents[].report.content`. `allFinished`/`allCompleted` chỉ là lifecycle; kiểm tra `workOutcome`, các bộ đếm lỗi và báo cáo thiếu. Nếu `allFinished=false` hoặc `reportPendingCount>0` thì tiếp tục gọi lại. Báo cáo dài trả `report.continuation` để truyền lại vào tool, không cần đọc lại repo. Xem [hợp đồng báo cáo sub-agent](subagent-reports.md). |
+| `agent_turn_complete` | `content`, `suggestedTitle?`, `workOutcome?`, `verificationIntent?`, `verificationReason?`, `verificationScope?`, `criteria?`, `evidenceRefs?`, `blockers?`, `limitations?` | **Bắt buộc là MCP call cuối cùng.** Xác nhận turn đã hoàn tất và gửi đúng nội dung cuối cùng agent sẽ trả cho user. `workOutcome` là agent assessment; verification do server resolve từ `command_run` execution IDs. Client cũ chỉ gửi `content` vẫn hợp lệ và được normalize thành legacy completed + `notRun`, không phải verified. |
 
 Lưu ý: `fs_find`, `fs_search`, `fs_read_text`, các tool sửa file, shell, Git... **không tạo thêm `agent_user_message`**. `agent_user_message` chỉ đại diện cho message thật của user ở đầu turn. Sau kết quả của các tool này, message cập nhật gửi cho user phải đi qua `agent_progress`.
 
 ---
 
-## 9. Danh sách đầy đủ theo thứ tự server expose
+## 9. Generated catalog, version và cache invalidation
 
-Thứ tự ổn định hiện tại trong `TOOL_NAMES`:
+`TOOL_NAMES` được sinh từ chính `McpServer::tool_router().list_all()` và sort deterministic. Không copy danh sách tool sang connector, UI, release script hoặc tài liệu.
 
-```text
-01. device_list
-02. device_get
-03. shell_create
-04. shell_write
-05. shell_wait
-06. shell_read
-07. shell_signal
-08. shell_resize
-09. shell_close
-10. shell_list
-11. shell_inspect
-12. workspace_roots
-13. fs_list
-14. fs_search
-15. fs_find
-16. fs_read_text
-17. fs_write_text
-18. fs_replace_text
-19. fs_write_raw
-20. fs_stat
-21. fs_create_directory
-22. fs_copy
-23. fs_move
-24. fs_delete
-25. git_status
-26. git_diff
-27. git_log
-28. git_branch
-29. git_show
-30. git_commit
-31. process_list
-32. process_inspect
-33. process_kill
-34. skills_list
-35. skill_read
-36. task_get
-37. task_list
-38. task_set_execution_mode
-39. task_artifact_list
-40. task_artifact_read
-41. agent_user_message
-42. agent_progress
-43. agent_plan_question
-44. agent_subagent_start
-45. agent_subagent_wait
-46. agent_turn_complete
-```
+Canonical manifest chứa `protocolVersion`, `catalogVersion` và với mỗi tool có `name`, normalized input schema, `resultSchema` cùng capability flags. Tool chưa migrate result contract có `resultSchema: null` và `resultSchemaVersion: null`; `fs_list_v2` và `fs_find` quảng bá `resultSchemaVersion: 1` cùng generated JSON schema của `ToolResultEnvelope<...>` tương ứng. Trước khi hash SHA-256, object keys được sort và metadata chỉ để mô tả như `description`/`title` được bỏ khỏi contract; vì vậy đổi wording không làm invalid cache, còn đổi input/result schema hoặc capability sẽ làm đổi `catalogHash`.
+
+Chi tiết semantics, cursor/error code, migration inventory và các ví dụ complete/paged/truncated/content-backed nằm tại `docs/tool_result_envelope.md`.
+
+Contract coding-agent, completion quality, compatibility và rollout nằm tại
+[`coding-agent-contract.md`](coding-agent-contract.md).
+
+Metadata runtime gồm `appVersion`, `protocolVersion`, `catalogVersion`, `catalogHash`, `instructionsVersion`, `instructionsHash`, `buildId`. `catalogHash` chỉ theo contract cấu trúc; instruction bundle và behavior descriptions có hash/version riêng để wording không làm invalid schema cache. MCP initialize trả metadata dưới prefix `CHATCMD_CATALOG_METADATA=...` trong server instructions. HTTP host cũng expose endpoint authenticated `GET /mcp/{token}/catalog` để diagnostics lấy metadata + canonical manifest; token vẫn chỉ ở auth boundary và không được ghi vào structured catalog log.
+
+Caller có thể gửi `clientCatalogHash` trong common tool arguments. Nếu hash khác server, request fail-fast với `error.code = "catalog_mismatch"`, kèm cả `clientCatalogHash`, `serverCatalogHash` và recovery instruction. Connector phải bỏ schema cache cũ, reconnect/initialize/list_tools lại và chỉ retry operation tối đa một lần sau refresh để tránh retry loop.
+
+Tool-level structured error có `code`, `message`, `retryable`, `approvalRequired`, `phase`, `outcome` và `recovery`; `usage` nằm cạnh error khi runtime có số liệu. `outcome` phân biệt `notStarted`, `unchanged`, `unknown`; riêng unknown/partial side effect phải inspect state trước khi retry. Exit code khác 0, timeout hoặc cancellation của command vẫn là command outcome trong result, không bị đổi thành tool error giả.
+
+Release gate cho catalog là `cargo test -p chatcmd-mcp --test release_catalog_smoke`: test spawn binary `catalog_smoke_server` qua stdio transport thật hai lần, gọi MCP initialize/list_tools, bắt buộc có các contract mới và so names + normalized schema với canonical manifest. Workflow adversarial chạy gate này trong platform matrix; desktop DEV packaging vẫn chỉ được khởi động thủ công bằng `workflow_dispatch`.
 
 ---
 
@@ -260,8 +253,8 @@ Nếu command/tool trả lỗi hoặc exit code khác 0, `agent_progress` phải
 
 Khi thêm/xóa/đổi tên MCP tool, cần đồng bộ ít nhất:
 
-1. `crates/chatcmd-mcp/src/tool_catalog.rs` — cập nhật `TOOL_NAMES`.
-2. `crates/chatcmd-mcp/src/lib.rs` — schema argument + tool description + handler/router.
-3. Runtime dispatch/handler tương ứng ở phía ChatCMD nếu method cần xử lý mới.
-4. Test liên quan tới tool catalog/schema/dispatch.
-5. Cập nhật lại file `docs/mcp_method.md` này để tài liệu không lệch code.
+1. `crates/chatcmd-mcp/src/lib.rs` — thêm/sửa schema argument + tool description + handler trong rmcp router. `TOOL_NAMES` và canonical manifest sẽ tự sinh từ router này.
+2. Runtime dispatch/handler tương ứng ở phía ChatCMD nếu method cần xử lý mới.
+3. Xác định capability flags trong `tool_catalog.rs` nếu semantics mới không được rule hiện tại bao phủ.
+4. Chạy invariant tests catalog/schema/dispatcher và `release_catalog_smoke`; mọi thay đổi contract hợp lệ phải làm `catalogHash` thay đổi.
+5. Cập nhật tài liệu về semantics nếu cần, nhưng không copy lại full tool list để tránh drift.
