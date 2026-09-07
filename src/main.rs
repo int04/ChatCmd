@@ -164,10 +164,7 @@ async fn run_server(ready: Option<std::sync::mpsc::Sender<()>>) -> Result<()> {
             .context("start filesystem journal persistence")?,
     );
 
-    let root = std::env::current_dir()
-        .context("resolve current workspace")?
-        .canonicalize()
-        .context("canonicalize workspace")?;
+    let root = resolve_workspace_root()?;
     let policy = ExecutionPolicy {
         default: PolicyDecision::Allow,
         per_agent_tool: BTreeMap::new(),
@@ -435,6 +432,28 @@ fn trace_route(path: &str) -> &str {
 
 fn user_home() -> Option<PathBuf> {
     std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" }).map(PathBuf::from)
+}
+
+fn resolve_workspace_root() -> Result<PathBuf> {
+    #[cfg(all(not(debug_assertions), feature = "embedded-web"))]
+    if let Some(home) = user_home() {
+        let workspace = if cfg!(target_os = "macos") {
+            home.join("Library/Application Support/ChatCmdClient/workspace")
+        } else if cfg!(target_os = "windows") {
+            home.join("AppData/Roaming/ChatCmdClient/workspace")
+        } else {
+            home.join(".local/share/ChatCmdClient/workspace")
+        };
+        std::fs::create_dir_all(&workspace).context("create packaged workspace")?;
+        return workspace
+            .canonicalize()
+            .context("canonicalize packaged workspace");
+    }
+
+    std::env::current_dir()
+        .context("resolve current workspace")?
+        .canonicalize()
+        .context("canonicalize workspace")
 }
 
 #[cfg(test)]
