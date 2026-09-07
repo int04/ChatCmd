@@ -1,12 +1,18 @@
 # ChatCMD
 
+
+
 <p align="center">
-  <img src="assets/icons/logo-transparent-master-1254.png" alt="ChatCMD logo" title="ChatCMD" width="420">
+  <img src="assets/icons/logo-transparent-master-1254.png" alt="ChatCMD logo" title="ChatCMD" width="100">
 </p>
 
 <p align="center">
   Turn web-based AI into a local worker through the Model Context Protocol.
 </p>
+
+> [!CAUTION]
+> If the pre-built versions from GitHub fail to open, please download the entire project repository and open it using https://www.jetbrains.com/rust/. The issue may stem from the GitHub Actions compiler malfunctioning on certain machines.
+
 
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-2ea44f.svg"></a>
