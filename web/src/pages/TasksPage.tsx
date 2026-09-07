@@ -56,6 +56,7 @@ function TasksWorkspace() {
       return;
     }
     if (event.taskId === taskId && (event.type === 'approval.pending' || event.type === 'conversation.approval_pending' || event.type === 'conversation.title_updated')) { setDetailVersion((value) => value + 1); return; }
+    if (event.taskId === taskId && event.type.startsWith('chatgpt.queue.')) return;
     if (event.taskId === taskId) {
       const compactEvent = compactLiveToolEvent(event);
       setLiveEvents((current) => mergeTimelineEvents(current, [compactEvent]));
