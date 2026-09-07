@@ -3,6 +3,7 @@ import { AlertTriangle, Database, Download, Info, LockKeyhole, MonitorCog, Save,
 import { FormEvent, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../api';
+import { chatGptExtensionStatus } from '../chatgptBridge';
 import { ErrorState, Loading, Modal, PageHeading, ProblemBanner, StatusBadge } from '../components';
 import { applyAppFont, applyTaskFontScale, GOOGLE_FONT_PRESETS, normalizeFontFamily, normalizeTaskFontScale, TASK_FONT_SCALE_PRESETS } from '../fontPreferences';
 import { getAppLanguage, setAppLanguage, tr, translatedStatus } from '../i18n';
@@ -62,6 +63,7 @@ export function SettingsPage() {
       result.setData(next);
       setValue(next);
       localStorage.setItem('chatcmd.preferences', JSON.stringify({ theme: next.theme, fontFamily: next.fontFamily, taskFontScale: next.taskFontScale, language: next.language, sound: next.sound, newAgentSound: next.newAgentSound, finishedTaskSound: next.finishedTaskSound }));
+      void chatGptExtensionStatus();
       document.documentElement.dataset.theme = next.theme;
       applyAppFont(next.fontFamily);
       applyTaskFontScale(next.taskFontScale);

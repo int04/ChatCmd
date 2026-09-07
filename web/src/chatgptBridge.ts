@@ -7,7 +7,7 @@ export const REQUIRED_CHATGPT_EXTENSION_VERSION = '0.1.9';
 
 type BridgeCommand =
   | { action: 'compact-resume'; nonce: string; jobId: string; taskId: string; localBaseUrl: string }
-  | { action: 'ping'; nonce: string; conversationUrl?: string }
+  | { action: 'ping'; nonce: string; conversationUrl?: string; approvalSoundEnabled: boolean }
   | { action: 'prepare-tab'; nonce: string; newConversationUrl?: string }
   | { action: 'open-tab'; nonce: string; conversationUrl: string }
   | { action: 'focus-tab'; nonce: string; conversationUrl: string }
@@ -27,7 +27,7 @@ export type ChatGptExtensionStatus = { ready: boolean; extensionVersion?: string
 
 export async function chatGptExtensionStatus(conversationUrl?: string): Promise<ChatGptExtensionStatus> {
   try {
-    const response = await bridge({ action: 'ping', nonce: nonce(), conversationUrl }, 1_500);
+    const response = await bridge({ action: 'ping', nonce: nonce(), conversationUrl, approvalSoundEnabled: approvalSoundPreference() }, 1_500);
     return {
       ready: true,
       extensionVersion: response.extensionVersion,
@@ -120,6 +120,16 @@ function isResponse(value: unknown): value is BridgeResponse & { type: string } 
   if (!value || typeof value !== 'object') return false;
   const record = value as Record<string, unknown>;
   return record.type === RESPONSE_TYPE && typeof record.nonce === 'string' && typeof record.ok === 'boolean';
+}
+
+function approvalSoundPreference() {
+  try {
+    const value = JSON.parse(localStorage.getItem('chatcmd.preferences') ?? '{}') as Record<string, unknown>;
+    if (typeof value.newAgentSound === 'boolean') return value.newAgentSound;
+    return value.sound !== false;
+  } catch {
+    return true;
+  }
 }
 
 function nonce() { return crypto.randomUUID(); }

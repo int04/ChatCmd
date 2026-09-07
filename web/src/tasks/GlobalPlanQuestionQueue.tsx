@@ -1,9 +1,10 @@
 import { Ban, Check, Clock3, ListChecks, LoaderCircle, MessageSquareMore, ShieldCheck, Sparkles } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, api } from '../api';
 import { Modal } from '../components';
 import { tr } from '../i18n';
 import { useRealtime } from '../realtime';
+import { soundNotifications } from '../soundNotifications';
 import type { PlanQuestion, PlanQuestionAnswer, TimelineEvent } from '../types';
 
 function sortQueue(items: PlanQuestion[]) {
@@ -24,6 +25,7 @@ export function GlobalPlanQuestionQueue() {
   const [customAnswer, setCustomAnswer] = useState('');
   const [remaining, setRemaining] = useState(0);
   const current = queue[0];
+  const activeSoundQuestion = useRef<string | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -50,6 +52,16 @@ export function GlobalPlanQuestionQueue() {
     setCustomOpen(false);
     setCustomAnswer('');
   }, [current?.id]);
+
+  useEffect(() => {
+    if (!current) {
+      activeSoundQuestion.current = null;
+      return;
+    }
+    if (activeSoundQuestion.current === current.id) return;
+    activeSoundQuestion.current = current.id;
+    soundNotifications.playApproval();
+  }, [current]);
 
   const deadline = current?.deadlineAtMs ?? 0;
   useEffect(() => {

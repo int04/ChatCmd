@@ -102,7 +102,7 @@ export function GlobalConversationApprovalQueue() {
 
   if (!current) return null;
 
-  return <Modal title="Xin phê duyệt" description={tr('A new ChatGPT Website conversation is waiting for approval before the Agent can execute anything.')} close={() => void decide(false)} dangerous>
+  return <Modal title="Xin phê duyệt" description={tr('A new ChatGPT Website conversation is waiting for approval before the Agent can execute anything.')} close={() => {}} dismissible={false} dangerous>
     <div className="warning-block"><ListChecks /><p>{tr('{count} conversation(s) waiting. Requests are shown one at a time so none are missed.', { count: queue.length })}</p></div>
     <div className="warning-block"><Clock3 /><p>{tr('Approval expires in {seconds} seconds.', { seconds: remaining })}</p></div>
     <p><strong>{current.title?.trim() || current.id}</strong></p>

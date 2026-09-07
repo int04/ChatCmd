@@ -6,6 +6,7 @@ let approvalSocket = null;
 let approvalReconnectTimer = null;
 let approvalReconnectAttempt = 0;
 let approvalConnectionGeneration = 0;
+let approvalSoundEnabled = true;
 
 async function startApprovalBridge() {
   const stored = await chrome.storage.local.get(APPROVAL_BASE_URL_KEY);
@@ -171,8 +172,13 @@ async function resyncApprovalQueue() {
   }
 }
 
+function configureApprovalSound(enabled) {
+  approvalSoundEnabled = enabled !== false;
+  void broadcastApprovalState();
+}
+
 async function approvalBridgeState() {
-  return { items: sortedApprovalItems(), baseUrl: approvalBaseUrl, connected: Boolean(approvalSocket && approvalSocket.readyState === WebSocket.OPEN) };
+  return { items: sortedApprovalItems(), baseUrl: approvalBaseUrl, connected: Boolean(approvalSocket && approvalSocket.readyState === WebSocket.OPEN), soundEnabled: approvalSoundEnabled };
 }
 
 async function resolveGlobalApproval(message) {
@@ -219,7 +225,7 @@ async function resolveGlobalApproval(message) {
 }
 
 async function broadcastApprovalState() {
-  const payload = { type: 'chatcmd-global-approval-state', items: sortedApprovalItems() };
+  const payload = { type: 'chatcmd-global-approval-state', items: sortedApprovalItems(), soundEnabled: approvalSoundEnabled };
   const tabs = await chatGptTabs();
   await Promise.all(tabs.filter((tab) => tab.id).map(async (tab) => {
     try { await sendToChatGpt(tab.id, payload, { quiet: true }); } catch { /* tab can still be loading */ }

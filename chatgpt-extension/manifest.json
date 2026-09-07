@@ -6,6 +6,9 @@
   "permissions": ["tabs", "storage", "scripting", "alarms"],
   "host_permissions": ["https://chatgpt.com/*", "http://localhost/*", "http://127.0.0.1/*"],
   "background": { "service_worker": "background.js" },
+  "web_accessible_resources": [
+    { "resources": ["sounds/sound_exe.mp3"], "matches": ["https://chatgpt.com/*"] }
+  ],
   "content_scripts": [
     {
       "matches": ["https://chatgpt.com/*"],
