@@ -27,9 +27,30 @@ if (-not (Test-Path $extensionSource)) {
 
 Push-Location (Join-Path $root 'web')
 try {
-    npm ci
+    $packageJson = Join-Path $root 'web/package.json'
+    $packageLock = Join-Path $root 'web/package-lock.json'
+    $installMarker = Join-Path $root 'web/node_modules/.package-lock.json'
+    $needsInstall = -not (Test-Path $installMarker)
+    if (-not $needsInstall) {
+        $markerTime = (Get-Item $installMarker).LastWriteTimeUtc
+        $needsInstall = ((Get-Item $packageJson).LastWriteTimeUtc -gt $markerTime) -or ((Get-Item $packageLock).LastWriteTimeUtc -gt $markerTime)
+    }
+
+    if ($needsInstall) {
+        npm ci --prefer-offline --no-audit --no-fund
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Failed to install web dependencies'
+        }
+    }
+    else {
+        Write-Host 'Web dependencies unchanged; skipping npm ci.'
+    }
+
     npm run build
-    npm run obfuscate -- dist
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Web build failed'
+    }
+
     $sourceMaps = Get-ChildItem -Path (Join-Path $root 'web/dist') -Recurse -File -Filter '*.map'
     if ($sourceMaps) {
         throw "Source map files were generated in web/dist: $($sourceMaps.FullName -join ', ')"
@@ -43,9 +64,16 @@ if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
     throw 'rustup is required to install both Windows Rust targets'
 }
 
-rustup target add x86_64-pc-windows-msvc i686-pc-windows-msvc
-if ($LASTEXITCODE -ne 0) {
-    throw 'Failed to install required Windows Rust targets'
+$installedTargets = @(rustup target list --installed)
+$missingTargets = @($targets.RustTarget | Where-Object { $_ -notin $installedTargets })
+if ($missingTargets.Count -gt 0) {
+    rustup target add @missingTargets
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Failed to install required Windows Rust targets'
+    }
+}
+else {
+    Write-Host 'Windows Rust targets already installed; skipping rustup target add.'
 }
 
 foreach ($entry in $targets) {
@@ -67,17 +95,9 @@ foreach ($entry in $targets) {
     Copy-Item $binary (Join-Path $output 'ChatCMD.exe')
     Copy-Item $extensionSource $extensionOutput -Recurse -Force
 
-    Push-Location (Join-Path $root 'web')
-    try {
-        npm run obfuscate -- $extensionOutput
-    }
-    finally {
-        Pop-Location
-    }
-
     $zip = "$output.zip"
     if (Test-Path $zip) { Remove-Item $zip -Force }
-    Compress-Archive -Path "$output/*" -DestinationPath $zip -CompressionLevel Optimal
+    Compress-Archive -Path "$output/*" -DestinationPath $zip -CompressionLevel NoCompression
 
     Write-Host "Build completed: $output"
     Write-Host "Archive: $zip"

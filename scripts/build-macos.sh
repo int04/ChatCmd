@@ -33,9 +33,13 @@ if [[ ! -d "$EXTENSION_SOURCE" ]]; then
 fi
 
 cd "$ROOT/web"
-npm ci
+INSTALL_MARKER="$ROOT/web/node_modules/.package-lock.json"
+if [[ ! -f "$INSTALL_MARKER" || "$ROOT/web/package.json" -nt "$INSTALL_MARKER" || "$ROOT/web/package-lock.json" -nt "$INSTALL_MARKER" ]]; then
+  npm ci --prefer-offline --no-audit --no-fund
+else
+  printf 'Web dependencies unchanged; skipping npm ci.\n'
+fi
 npm run build
-npm run obfuscate -- dist
 if find "$ROOT/web/dist" -type f -name '*.map' -print -quit | grep -q .; then
   echo "Source map files were generated in web/dist" >&2
   exit 1
@@ -78,7 +82,18 @@ if [[ -n "${MACOS_NOTARY_PROFILE:-}" ]]; then
   fi
 fi
 
-rustup target add aarch64-apple-darwin x86_64-apple-darwin
+INSTALLED_TARGETS="$(rustup target list --installed)"
+MISSING_TARGETS=()
+for rust_target in aarch64-apple-darwin x86_64-apple-darwin; do
+  if ! grep -Fxq "$rust_target" <<< "$INSTALLED_TARGETS"; then
+    MISSING_TARGETS+=("$rust_target")
+  fi
+done
+if (( ${#MISSING_TARGETS[@]} > 0 )); then
+  rustup target add "${MISSING_TARGETS[@]}"
+else
+  printf 'macOS Rust targets already installed; skipping rustup target add.\n'
+fi
 
 create_icns() {
   local destination="$1"
@@ -117,9 +132,6 @@ package_target() {
   chmod +x "$macos/ChatCMD"
   mkdir -p "$output/chatgpt-extension"
   cp -R "$EXTENSION_SOURCE/." "$output/chatgpt-extension/"
-  cd "$ROOT/web"
-  npm run obfuscate -- "$output/chatgpt-extension"
-  cd "$ROOT"
   create_icns "$resources/ChatCMD.icns"
 
   cat > "$contents/Info.plist" <<EOF
@@ -156,7 +168,7 @@ EOF
   codesign --verify --deep --strict --verbose=2 "$app"
 
   rm -f "$archive"
-  ditto -c -k --sequesterRsrc --keepParent "$output" "$archive"
+  ditto -c -k --sequesterRsrc --keepParent --zlibCompressionLevel 0 "$output" "$archive"
 
   if [[ -n "${MACOS_NOTARY_PROFILE:-}" ]]; then
     printf 'Submitting %s for notarization...\n' "$label"
@@ -168,7 +180,7 @@ EOF
     codesign --verify --deep --strict --verbose=2 "$app"
 
     rm -f "$archive"
-    ditto -c -k --sequesterRsrc --keepParent "$output" "$archive"
+    ditto -c -k --sequesterRsrc --keepParent --zlibCompressionLevel 0 "$output" "$archive"
   fi
 
   printf 'Build completed: %s\nArchive: %s\n' "$output" "$archive"

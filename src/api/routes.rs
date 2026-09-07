@@ -41,6 +41,14 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
             post(copy_plugin_link),
         )
         .route("/system/folder-picker", post(pick_project_folder))
+        .route(
+            "/system/chatgpt-extension-folder/open",
+            post(open_chatgpt_extension_folder),
+        )
+        .route(
+            "/system/browser-extensions/open",
+            post(open_browser_extensions),
+        )
         .route("/system/exit", post(exit_application))
         .route(
             "/workspaces/projects",

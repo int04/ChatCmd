@@ -30,7 +30,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.localBaseUrl) void configureApprovalBridge(message.localBaseUrl).catch(() => undefined);
     if (message.action === 'ping') {
       void chatGptTabStatus(message.conversationUrl, sender.tab?.id)
-        .then((status) => sendResponse({ ok: true, ...status }))
+        .then((status) => sendResponse({ ok: true, extensionVersion: chrome.runtime.getManifest().version, ...status }))
         .catch((error) => sendResponse({ ok: false, error: errorMessage(error) }));
       return true;
     }
