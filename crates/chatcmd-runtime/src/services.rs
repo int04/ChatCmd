@@ -3,6 +3,16 @@ use crate::{
 };
 use tokio::process::Command;
 
+fn background_command(program: &str) -> Command {
+    let mut command = Command::new(program);
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
+}
+
 #[derive(Clone)]
 pub struct ProcessService {
     policy: PolicyEngine,
@@ -15,12 +25,12 @@ impl ProcessService {
     }
     pub async fn list(&self) -> RuntimeResult<Vec<ProcessInfo>> {
         let output = if cfg!(windows) {
-            Command::new("tasklist.exe")
+            background_command("tasklist.exe")
                 .args(["/FO", "CSV", "/NH"])
                 .output()
                 .await
         } else {
-            Command::new("ps")
+            background_command("ps")
                 .args(["-eo", "pid=,comm=,args="])
                 .output()
                 .await
@@ -83,14 +93,14 @@ impl ProcessService {
             })
             .await?;
         let output = if cfg!(windows) {
-            let mut command = Command::new("taskkill.exe");
+            let mut command = background_command("taskkill.exe");
             command.args(["/PID", &process_id.to_string(), "/F"]);
             if entire_tree {
                 command.arg("/T");
             }
             command.output().await
         } else {
-            Command::new("kill")
+            background_command("kill")
                 .args(["-TERM", &process_id.to_string()])
                 .output()
                 .await
