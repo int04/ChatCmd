@@ -60,10 +60,19 @@ jobs:
           rustup toolchain install 1.98.0 --profile minimal
           rustup default 1.98.0
 
+      - name: Restore Rust build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-rust-1.98.0-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            windows-rust-1.98.0-
+
       - name: Build Windows packages
         shell: pwsh
-        env:
-          RUSTFLAGS: -C target-feature=+crt-static
         run: ./scripts/build-windows.ps1 -Version '${{ needs.prepare.outputs.version }}'
 
       - name: Give release assets stable names
@@ -97,6 +106,17 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: web/package-lock.json
+
+      - name: Restore Rust build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: macos-rust-${{ runner.arch }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            macos-rust-${{ runner.arch }}-
 
       - name: Build macOS packages
         shell: bash

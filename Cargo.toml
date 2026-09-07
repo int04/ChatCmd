@@ -65,7 +65,10 @@ tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
 
 [profile.release]
-opt-level = 3
-lto = "fat"
-codegen-units = 1
-strip = true
+# Prioritize build speed for packaged builds. ChatCMD is primarily I/O-bound,
+# so expensive whole-program optimization adds a lot of build time for little benefit.
+opt-level = 1
+lto = false
+codegen-units = 256
+incremental = true
+strip = false
