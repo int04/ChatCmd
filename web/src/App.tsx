@@ -73,6 +73,7 @@ function SoundNotificationsBridge() {
   const onEvent = useCallback((event: TimelineEvent) => {
     const payload = event.payload && typeof event.payload === 'object' && !Array.isArray(event.payload) ? event.payload as Record<string, unknown> : {};
     if (isNewConversationEvent(event, payload)) soundNotifications.playNewAgent();
+    if (event.type === 'approval.pending' || event.type === 'subagent.approval_pending') soundNotifications.playApproval();
     if (isFinalResponseEvent(event, payload)) soundNotifications.playFinishedTask();
   }, []);
   useRealtime(onEvent);

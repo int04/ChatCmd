@@ -28,6 +28,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   if (message.type === 'chatcmd-local-command') {
     if (message.localBaseUrl) void configureApprovalBridge(message.localBaseUrl).catch(() => undefined);
+    if (typeof message.approvalSoundEnabled === 'boolean') configureApprovalSound(message.approvalSoundEnabled);
     if (message.action === 'ping') {
       void chatGptTabStatus(message.conversationUrl, sender.tab?.id)
         .then((status) => sendResponse({ ok: true, extensionVersion: chrome.runtime.getManifest().version, ...status }))

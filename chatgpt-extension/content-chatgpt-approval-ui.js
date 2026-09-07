@@ -8,6 +8,8 @@
   let rejecting = false;
   let reason = '';
   let lastSoundKey = null;
+  let approvalSoundEnabled = true;
+  let approvalAudio = null;
   let previousTitle = null;
   let countdownTimer = null;
 
@@ -22,7 +24,8 @@
     return shadow;
   }
 
-  function render(nextItems) {
+  function render(nextItems, soundEnabled = approvalSoundEnabled) {
+    approvalSoundEnabled = soundEnabled !== false;
     items = Array.isArray(nextItems) ? nextItems : [];
     const current = items[0];
     const shadow = ensureRoot();
@@ -176,23 +179,11 @@
   }
 
   function playApprovalSound() {
+    if (!approvalSoundEnabled) return;
     try {
-      const AudioContextCtor = globalThis.AudioContext || globalThis.webkitAudioContext;
-      if (!AudioContextCtor) return;
-      const context = new AudioContextCtor();
-      const now = context.currentTime;
-      for (const [offset, frequency] of [[0, 660], [.13, 880]]) {
-        const oscillator = context.createOscillator();
-        const gain = context.createGain();
-        oscillator.frequency.value = frequency;
-        gain.gain.setValueAtTime(0.0001, now + offset);
-        gain.gain.exponentialRampToValueAtTime(0.08, now + offset + .015);
-        gain.gain.exponentialRampToValueAtTime(0.0001, now + offset + .11);
-        oscillator.connect(gain).connect(context.destination);
-        oscillator.start(now + offset);
-        oscillator.stop(now + offset + .12);
-      }
-      setTimeout(() => void context.close(), 500);
+      approvalAudio ??= new Audio(chrome.runtime.getURL('sounds/sound_exe.mp3'));
+      approvalAudio.currentTime = 0;
+      void approvalAudio.play().catch(() => undefined);
     } catch { /* Browser autoplay policy can block audio until user interaction. */ }
   }
 
@@ -208,13 +199,13 @@
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type !== 'chatcmd-global-approval-state') return false;
-    render(message.items);
+    render(message.items, message.soundEnabled);
     sendResponse({ ok: true });
     return false;
   });
 
   void globalThis.ChatCmdRuntime.sendMessage({ type: 'chatcmd-approval-state-request' }, (response) => {
-    if (response?.ok) render(response.items);
+    if (response?.ok) render(response.items, response.soundEnabled);
   });
 
   globalThis.ChatCmdGlobalApprovalUi = Object.freeze({ render });
