@@ -342,7 +342,13 @@ async fn terminate_tree(child: &mut Child, pid: Option<u32>) {
 #[cfg(windows)]
 fn configure_process_group(command: &mut Command) {
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-    command.creation_flags(CREATE_NEW_PROCESS_GROUP);
+    configure_windows_hidden(command, CREATE_NEW_PROCESS_GROUP);
+}
+
+#[cfg(windows)]
+fn configure_windows_hidden(command: &mut Command, extra_flags: u32) {
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW | extra_flags);
 }
 
 #[cfg(unix)]
@@ -355,7 +361,9 @@ fn configure_process_group(_command: &mut Command) {}
 
 #[cfg(windows)]
 async fn kill_process_tree(pid: u32) {
-    let _ = Command::new("taskkill.exe")
+    let mut command = Command::new("taskkill.exe");
+    configure_windows_hidden(&mut command, 0);
+    let _ = command
         .args(["/PID", &pid.to_string(), "/T", "/F"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
