@@ -165,6 +165,7 @@ async function startRequest(message) {
     requestId: message.requestId,
     submittedContent: message.submittedContent,
     model: message.model || 'Auto',
+    attachments: Array.isArray(message.attachments) ? message.attachments : [],
   });
 }
 

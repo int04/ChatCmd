@@ -1,5 +1,5 @@
-import { CircleAlert, CircleStop, ExternalLink, FolderOpen, LoaderCircle, PlugZap, Send, Unplug, X } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { CircleAlert, CircleStop, ExternalLink, FileText, FolderOpen, LoaderCircle, PlugZap, Send, Unplug, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../api';
 import { chatGptExtensionAvailable, chatGptExtensionStatus, closeChatGptConversationTab, dispatchChatGptRequest, focusChatGptConversationTab, openChatGptConversationTab, reconcileChatGptRequest, recoverChatGptIdentity, stopChatGptRequest } from '../chatgptBridge';
@@ -13,6 +13,7 @@ import { useCompact } from './compact/CompactProvider';
 import { useCompactBridgeSync } from './compact/useCompactBridgeSync';
 import { compactText } from './compact/copy';
 import { prepareChatGptMessage } from './messageAttachments';
+import { fileAttachmentPayloads, messageContentWithTextAttachments, textAttachmentFromPaste, type ChatGptTextAttachment } from './pasteAttachments';
 const DEFAULT_MODEL = 'Auto';
 
 export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
@@ -24,6 +25,8 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
   const [identitySyncError, setIdentitySyncError] = useState<{ taskId: string; message: string } | null>(null);
   const syncError = identitySyncError?.taskId === taskId ? identitySyncError.message : '';
   const [content, setContent] = useState('');
+  const [textAttachments, setTextAttachments] = useState<ChatGptTextAttachment[]>([]);
+  const pasteSequence = useRef(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [extensionReady, setExtensionReady] = useState<boolean | null>(null);
@@ -117,6 +120,14 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
     setAttachedAgentId('');
     setAttachedProjectFolder('');
   };
+  const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const text = event.clipboardData.getData('text/plain');
+    const attachment = textAttachmentFromPaste(text, pasteSequence.current + 1);
+    if (!attachment) return;
+    event.preventDefault();
+    pasteSequence.current += 1;
+    setTextAttachments((current) => [...current, attachment]);
+  };
   const pickFolder = async () => {
     if (busy || folderPicking) return;
     setFolderPicking(true); setError('');
@@ -131,7 +142,7 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
     } finally { setFolderPicking(false); }
   };
 
-  const sendContent = async (message: string, clearComposer = true): Promise<boolean> => {
+  const sendContent = async (message: string, clearComposer = true, fileAttachments: ChatGptTextAttachment[] = []): Promise<boolean> => {
     if (!bridge.data || busy || compact?.isBlocked() || bridgeSync) return false;
     setBusy(true); setError('');
     try {
@@ -145,7 +156,7 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
       if (!status.conversationReady) throw new Error(tr('ChatGPT is not ready for another message yet.'));
       if (compact?.isBlocked() || bridgeSync) return false;
       const request = await api.sendChatGptMessage(taskId, { model: DEFAULT_MODEL, content: message });
-      await dispatchChatGptRequest({ requestId: request.id, submittedContent: request.submittedContent, model: request.model, conversationUrl });
+      await dispatchChatGptRequest({ requestId: request.id, submittedContent: request.submittedContent, model: request.model, conversationUrl, attachments: fileAttachmentPayloads(fileAttachments) });
       const latest = await waitForDispatchState(request.id);
       if (latest.status === 'failed') throw new Error(latest.errorMessage || tr('Could not send the message to ChatGPT.'));
       if (clearComposer) setContent('');
@@ -159,10 +170,13 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
 
   const send = async (event: FormEvent) => {
     event.preventDefault();
-    const message = content.trim();
+    const message = messageContentWithTextAttachments(content, textAttachments);
     if (!message || busy || active || compactPaused || bridgeSync || extensionReady !== true || chatGptTabOpen !== true || chatGptReady !== true || !bridge.data) return;
-    const sent = await sendContent(prepareMessage(message));
-    if (sent) clearAttachments();
+    const sent = await sendContent(prepareMessage(message), true, textAttachments);
+    if (sent) {
+      clearAttachments();
+      setTextAttachments([]);
+    }
   };
 
   const stop = async () => {
@@ -230,14 +244,15 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
       onMessageCreated={clearAttachments}
     />
     <form className="chatgpt-composer" hidden={!conversationUrl} onSubmit={(event) => void send(event)}>
-      {(attachedPlugin || attachedProjectFolder) && <div className="chatgpt-message-attachments" aria-label={'Đính kèm cho tin nhắn tiếp theo'}>
+      {(attachedPlugin || attachedProjectFolder || textAttachments.length > 0) && <div className="chatgpt-message-attachments" aria-label={'Đính kèm cho tin nhắn tiếp theo'}>
         {attachedPlugin && <span><PlugZap />@{attachedPlugin.name}<button type="button" aria-label="Bỏ plugin đính kèm" onClick={() => setAttachedAgentId('')}><X /></button></span>}
         {attachedProjectFolder && <span title={attachedProjectFolder}><FolderOpen />{attachedProjectFolder}<button type="button" aria-label="Bỏ dự án đính kèm" onClick={() => setAttachedProjectFolder('')}><X /></button></span>}
+        {textAttachments.map((attachment) => <span key={attachment.id} title={`${attachment.name} · ${attachment.content.length.toLocaleString()} ký tự`}><FileText />{attachment.name}<button type="button" aria-label={`Bỏ tệp ${attachment.name}`} onClick={() => setTextAttachments((current) => current.filter((item) => item.id !== attachment.id))}><X /></button></span>)}
       </div>}
       <div className="chatgpt-composer-row">
-        <textarea aria-label={tr('Next message to ChatGPT')} rows={2} value={content} onChange={(event) => setContent(event.target.value)} disabled={active || busy || compactPaused || bridgeSync || extensionReady === false || chatGptTabOpen === false} placeholder={answerCompletedWaitingForUi ? tr('Answer completed; waiting for the ChatGPT UI before continuing.') : active ? tr('ChatGPT is responding…') : tr('Continue the ChatGPT conversation…')} />
+        <textarea aria-label={tr('Next message to ChatGPT')} rows={2} value={content} onChange={(event) => setContent(event.target.value)} onPaste={handlePaste} disabled={active || busy || compactPaused || bridgeSync || extensionReady === false || chatGptTabOpen === false} placeholder={answerCompletedWaitingForUi ? tr('Answer completed; waiting for the ChatGPT UI before continuing.') : active ? tr('ChatGPT is responding…') : tr('Continue the ChatGPT conversation…')} />
         {active ? <button type="button" className="chatgpt-stop-button" onClick={() => void stop()} disabled={busy || compactPaused || bridgeSync || bridge.data?.activeStatus === 'stop_requested'}><CircleStop /><span>{bridge.data?.activeStatus === 'stop_requested' ? tr('Stopping…') : tr('Stop')}</span></button>
-          : <button type="submit" className="chatgpt-composer-send" disabled={busy || compactPaused || bridgeSync || extensionReady !== true || chatGptTabOpen !== true || chatGptReady !== true || !content.trim()}><Send /><span>{tr('Send')}</span></button>}
+          : <button type="submit" className="chatgpt-composer-send" disabled={busy || compactPaused || bridgeSync || extensionReady !== true || chatGptTabOpen !== true || chatGptReady !== true || (!content.trim() && textAttachments.length === 0)}><Send /><span>{tr('Send')}</span></button>}
       </div>
       <div className="chatgpt-composer-meta chatgpt-composer-actions">
         <button type="button" onClick={() => void closeTab()} disabled={busy || compactPaused || bridgeSync}>{tr('Close this tab')}</button><span aria-hidden="true">|</span>

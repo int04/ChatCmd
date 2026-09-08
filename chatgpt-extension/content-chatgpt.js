@@ -109,6 +109,7 @@ async function runRequest(message) {
     if (owner) owner.observer = globalThis.ChatCmdObserver?.create(message.requestId, message.submittedContent, {
       current: () => activeRequest === owner && globalThis.ChatCmdRuntime.current(CONTENT_CONTEXT),
     });
+    await attachTextFiles(composer, message.attachments);
     setComposerText(composer, message.submittedContent);
     await submitPrompt(composer);
     ({ conversationId, conversationUrl } = await waitForConversationIdentity());
@@ -345,11 +346,75 @@ function setComposerText(composer, text) {
   composer.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
 }
 
+async function attachTextFiles(composer, rawAttachments) {
+  const attachments = normalizeTextFileAttachments(rawAttachments);
+  if (!attachments.length) return;
+  const files = attachments.map((attachment) => new File([attachment.content], attachment.name, {
+    type: attachment.mimeType,
+    lastModified: Date.now(),
+  }));
+  const input = findComposerFileInput(composer);
+  if (input) assignFilesToInput(input, files);
+  else pasteFilesIntoComposer(composer, files);
+  await waitFor(
+    () => files.every((file) => document.body?.textContent?.includes(file.name)) ? true : null,
+    12_000,
+    `ChatGPT không xác nhận tệp đính kèm ${files.map((file) => file.name).join(', ')}.`,
+  );
+}
+
+function normalizeTextFileAttachments(rawAttachments) {
+  if (!Array.isArray(rawAttachments)) return [];
+  return rawAttachments.flatMap((attachment, index) => {
+    if (!attachment || typeof attachment !== 'object' || typeof attachment.content !== 'string' || !attachment.content) return [];
+    const rawName = String(attachment.name || `pasted-text-${index + 1}.txt`).split(/[\\/]/).pop().trim();
+    const name = rawName.toLowerCase().endsWith('.txt') ? rawName : `${rawName || `pasted-text-${index + 1}`}.txt`;
+    return [{ name, content: attachment.content, mimeType: 'text/plain;charset=utf-8' }];
+  });
+}
+
+function findComposerFileInput(composer) {
+  const form = composer.closest('form');
+  const composerScope = composer.closest('[data-type="unified-composer"], [data-testid*="composer" i]');
+  const scoped = [
+    ...(form ? form.querySelectorAll('input[type="file"]') : []),
+    ...(composerScope && composerScope !== form ? composerScope.querySelectorAll('input[type="file"]') : []),
+  ].filter((input, index, items) => input instanceof HTMLInputElement && !input.disabled && items.indexOf(input) === index);
+  const compatibleScoped = scoped.filter((input) => fileInputScore(input) > 0);
+  if (compatibleScoped.length) return compatibleScoped.sort((left, right) => fileInputScore(right) - fileInputScore(left))[0];
+  const explicit = [...document.querySelectorAll('input[type="file"][data-testid*="composer" i], input[type="file"][data-testid*="upload" i]')]
+    .filter((input) => input instanceof HTMLInputElement && !input.disabled && fileInputScore(input) > 0);
+  return explicit.sort((left, right) => fileInputScore(right) - fileInputScore(left))[0] || null;
+}
+
+function fileInputScore(input) {
+  const accept = String(input.accept || '').toLowerCase();
+  if (!accept || accept.includes('text') || accept.includes('.txt') || accept.includes('*/*')) return 3 + (input.multiple ? 1 : 0);
+  return 0;
+}
+
+function assignFilesToInput(input, files) {
+  const transfer = new DataTransfer();
+  for (const existing of input.files || []) transfer.items.add(existing);
+  for (const file of files) transfer.items.add(file);
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'files')?.set;
+  if (setter) setter.call(input, transfer.files); else input.files = transfer.files;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+function pasteFilesIntoComposer(composer, files) {
+  const transfer = new DataTransfer();
+  for (const file of files) transfer.items.add(file);
+  const event = new ClipboardEvent('paste', { bubbles: true, cancelable: true, composed: true, clipboardData: transfer });
+  composer.dispatchEvent(event);
+}
+
 async function submitPrompt(composer) {
   await delay(100);
   const button = await waitFor(findSendButton, 5_000, 'Không tìm thấy nút gửi của ChatGPT.');
   if (button.disabled || button.getAttribute('aria-disabled') === 'true') {
-    await waitFor(() => !button.disabled && button.getAttribute('aria-disabled') !== 'true' ? button : null, 4_000, 'Nút gửi ChatGPT đang bị vô hiệu hóa.');
+    await waitFor(() => !button.disabled && button.getAttribute('aria-disabled') !== 'true' ? button : null, 20_000, 'Nút gửi ChatGPT đang bị vô hiệu hóa hoặc tệp đính kèm chưa tải xong.');
   }
   button.click();
   composer.blur();

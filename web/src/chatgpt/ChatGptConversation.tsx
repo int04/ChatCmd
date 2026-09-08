@@ -1,6 +1,6 @@
-import { Bot, CircleAlert, CircleStop, ExternalLink, FolderOpen, LoaderCircle, MessageSquarePlus, Send, ShieldCheck, Sparkles, Unplug, X } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
-import type { FormEvent } from 'react';
+import { Bot, CircleAlert, CircleStop, ExternalLink, FileText, FolderOpen, LoaderCircle, MessageSquarePlus, Send, ShieldCheck, Sparkles, Unplug, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { ClipboardEvent, FormEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 import { api } from '../api';
@@ -12,6 +12,7 @@ import type { Agent } from '../types';
 import { useLoad } from '../useLoad';
 export { ChatGptTaskComposer } from './ChatGptTaskComposer';
 import { useCompactBridgeSync } from './compact/useCompactBridgeSync';
+import { fileAttachmentPayloads, messageContentWithTextAttachments, textAttachmentFromPaste, type ChatGptTextAttachment } from './pasteAttachments';
 
 const DEFAULT_MODEL = 'Auto';
 
@@ -27,6 +28,8 @@ export function NewChatGptConversation() {
   const [projectFolder, setProjectFolder] = useState(launchProjectFolder);
   const [folderMenuOpen, setFolderMenuOpen] = useState(false);
   const [content, setContent] = useState('');
+  const [textAttachments, setTextAttachments] = useState<ChatGptTextAttachment[]>([]);
+  const pasteSequence = useRef(0);
   const [folderPicking, setFolderPicking] = useState(false);
   const [modelTabOpening, setModelTabOpening] = useState(false);
   const [confirmWithoutFolder, setConfirmWithoutFolder] = useState(false);
@@ -91,8 +94,18 @@ export function NewChatGptConversation() {
     } finally { setModelTabOpening(false); }
   };
 
+  const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const text = event.clipboardData.getData('text/plain');
+    const attachment = textAttachmentFromPaste(text, pasteSequence.current + 1);
+    if (!attachment) return;
+    event.preventDefault();
+    pasteSequence.current += 1;
+    setTextAttachments((current) => [...current, attachment]);
+  };
+  const effectiveContent = messageContentWithTextAttachments(content, textAttachments);
+
   const sendNewConversation = async (allowWithoutFolder: boolean) => {
-    if (!agentId || !content.trim() || busy) return;
+    if (!agentId || !effectiveContent || busy) return;
     if (!projectFolder.trim() && !allowWithoutFolder) {
       setConfirmWithoutFolder(true);
       return;
@@ -103,8 +116,8 @@ export function NewChatGptConversation() {
       const status = await chatGptExtensionStatus();
       setExtensionReady(status.ready); setChatGptTabOpen(status.chatGptTabOpen);
       if (!status.ready) throw new Error(tr('ChatCMD ChatGPT Bridge extension is not ready. Enable or reload it, then try again.'));
-      const request = await api.createChatGptRequest({ agentId, model: DEFAULT_MODEL, projectFolder: projectFolder.trim(), content: content.trim() });
-      await dispatchChatGptRequest({ requestId: request.id, submittedContent: request.submittedContent, model: request.model, newConversationUrl });
+      const request = await api.createChatGptRequest({ agentId, model: DEFAULT_MODEL, projectFolder: projectFolder.trim(), content: effectiveContent });
+      await dispatchChatGptRequest({ requestId: request.id, submittedContent: request.submittedContent, model: request.model, newConversationUrl, attachments: fileAttachmentPayloads(textAttachments) });
       const taskId = await waitForTaskBinding(request.id);
       navigate(`/tasks/${encodeURIComponent(taskId)}`, { replace: true });
     } catch (reason) {
@@ -140,7 +153,7 @@ export function NewChatGptConversation() {
           <span className="chatgpt-message-avatar"><Bot /></span>
           <div className="chatgpt-message-copy"><strong>ChatGPT</strong><p>{selectedAgent ? `Bạn muốn mình giao công việc gì cho @${selectedAgent.name}?` : 'Chọn một MCP agent để bắt đầu cuộc trò chuyện.'}</p><small>Yêu cầu của bạn sẽ được gửi qua ChatGPT và agent sẽ thực hiện công việc trong ChatCMD.</small></div>
         </div>
-        {content.trim() && <div className="chatgpt-user-message"><div>{content}</div></div>}
+        {(content.trim() || textAttachments.length > 0) && <div className="chatgpt-user-message"><div>{content.trim() ? content : effectiveContent}</div></div>}
       </div>
 
       <form className="chatgpt-chat-composer" onSubmit={(event) => void submit(event)}>
@@ -169,11 +182,14 @@ export function NewChatGptConversation() {
             </div>
           </div>
         </div>
+        {textAttachments.length > 0 && <div className="chatgpt-message-attachments" aria-label="Tệp văn bản từ clipboard">
+          {textAttachments.map((attachment) => <span key={attachment.id} title={`${attachment.name} · ${attachment.content.length.toLocaleString()} ký tự`}><FileText />{attachment.name}<button type="button" aria-label={`Bỏ tệp ${attachment.name}`} onClick={() => setTextAttachments((current) => current.filter((item) => item.id !== attachment.id))}><X /></button></span>)}
+        </div>}
         <div className="chatgpt-chat-input-wrap">
-          <textarea rows={3} value={content} onChange={(event) => setContent(event.target.value)} disabled={busy} placeholder={tr('Enter a request for ChatGPT…')} required />
-          <button className="chatgpt-chat-send" type="submit" aria-label={tr('Send to ChatGPT')} disabled={busy || !agentId || !content.trim() || extensionReady === false}>{busy ? <LoaderCircle className="spin" /> : <Send />}</button>
+          <textarea rows={3} value={content} onChange={(event) => setContent(event.target.value)} onPaste={handlePaste} disabled={busy} placeholder={tr('Enter a request for ChatGPT…')} />
+          <button className="chatgpt-chat-send" type="submit" aria-label={tr('Send to ChatGPT')} disabled={busy || !agentId || !effectiveContent || extensionReady === false}>{busy ? <LoaderCircle className="spin" /> : <Send />}</button>
         </div>
-        <div className="chatgpt-chat-composer-meta"><span>{selectedAgent ? `Gửi tới @${selectedAgent.name}` : tr('No enabled agent')}</span><span><ShieldCheck />{tr('Actual message')}: <code>{selectedPrompt(enabledAgents, agentId, projectFolder, content)}</code></span></div>
+        <div className="chatgpt-chat-composer-meta"><span>{selectedAgent ? `Gửi tới @${selectedAgent.name}` : tr('No enabled agent')}</span><span><ShieldCheck />{tr('Actual message')}: <code>{selectedPrompt(enabledAgents, agentId, projectFolder, effectiveContent)}</code></span></div>
       </form>
     </section>
     {folderMenuOpen && <Modal className="workspace-folder-modal" title="Chọn thư mục dự án" description="Chọn một dự án đã lưu hoặc mở trình chọn folder trên máy." close={() => !folderPicking && setFolderMenuOpen(false)}><div className="workspace-folder-choices"><div className="workspace-folder-project-list">{projects.loading ? <p className="workspace-folder-empty"><LoaderCircle className="spin" /> Đang tải dự án…</p> : projects.data?.length ? projects.data.map((project) => <button className={`workspace-folder-project ${canonicalProjectPath(projectFolder) === canonicalProjectPath(project.path) ? 'selected' : ''}`} type="button" onClick={() => { setProjectFolderFromUser(project.path); setFolderMenuOpen(false); }} key={project.id}><strong>{project.name}</strong><small>{project.path}</small></button>) : <p className="workspace-folder-empty">{projects.error || 'Chưa có dự án đã lưu.'}</p>}</div><button className="workspace-folder-browse" type="button" onClick={() => void pickFolder()} disabled={folderPicking}>{folderPicking ? <LoaderCircle className="spin" /> : <FolderOpen />}<span><strong>Chọn folder</strong><small>Mở trình chọn thư mục trên máy</small></span></button></div></Modal>}

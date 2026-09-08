@@ -7,8 +7,14 @@ import { tr } from '../i18n';
 import { useRealtime } from '../realtime';
 import type { ChatGptQueuedMessage } from '../types';
 import { useLoad } from '../useLoad';
+import { LONG_PASTE_TEXT_THRESHOLD } from './pasteAttachments';
 
 export type ChatGptQueueMode = 'queued' | 'immediate';
+export const CHATGPT_QUEUE_TEXT_LIMIT = LONG_PASTE_TEXT_THRESHOLD - 1;
+
+export function clampChatGptQueueDraft(value: string) {
+  return value.slice(0, CHATGPT_QUEUE_TEXT_LIMIT);
+}
 
 export function ChatGptMessageQueuePanel({
   taskId,
@@ -85,6 +91,7 @@ export function ChatGptMessageQueuePanel({
   }, [paused, autoSendingId, busyId, canAutoSend, editingId, onAutoSend, queueData, refreshQueue, taskId]);
 
   const create = async () => {
+    if (draft.length > CHATGPT_QUEUE_TEXT_LIMIT) return;
     const content = prepareMessage(draft);
     if (paused || !openMode || !content || creating) return;
     setCreating(true);
@@ -201,7 +208,8 @@ export function ChatGptMessageQueuePanel({
         : tr('This message will be sent automatically when this ChatGPT conversation is ready for the next message.')}
       close={() => !creating && onOpenModeChange(null)}
     >
-      <textarea rows={5} value={draft} onChange={(event) => setDraft(event.target.value)} autoFocus placeholder={tr('Enter message…')} disabled={creating} />
+      <textarea rows={5} value={draft} maxLength={CHATGPT_QUEUE_TEXT_LIMIT} onChange={(event) => setDraft(clampChatGptQueueDraft(event.target.value))} autoFocus placeholder={tr('Enter message…')} disabled={creating} />
+      <div className="chatgpt-queue-character-count" aria-live="polite">{draft.length.toLocaleString()} / {CHATGPT_QUEUE_TEXT_LIMIT.toLocaleString()}</div>
       <div className="modal-actions">
         <button className="button secondary" type="button" onClick={() => onOpenModeChange(null)} disabled={creating}>{tr('Cancel')}</button>
         <button className="button primary" type="button" onClick={() => void create()} disabled={paused || creating || !draft.trim()}>
