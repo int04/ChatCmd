@@ -45,15 +45,19 @@ async function compactDestination(job, record, tabs) {
   const probe = await compactSend(destination.id, 'probe', job, 'RESUME');
   if (probe.markerFound && probe.conversationId && !isProvisionalConversationId(probe.conversationId)) {
     if (probe.superseded) throw new Error('Chat mới đã nhận thêm nội dung trước khi chuyển task. Hãy kiểm tra tab trước khi tiếp tục.');
-    // First publish the recoverable destination URL, then wait for the bootstrap
-    // acknowledgement to finish. Only the final DB transaction changes task identity.
+    // Publish the recoverable destination identity first, then immediately re-probe the
+    // same tab instead of sleeping for another scheduler tick before the final commit.
+    let confirmed = probe;
     if (job.newConversationId !== probe.conversationId) {
-      await compactCheckpoint(record, job, { newConversationId: probe.conversationId, newConversationUrl: probe.conversationUrl, detail: null });
-      return;
+      job = await compactCheckpoint(record, job, { newConversationId: probe.conversationId,
+        newConversationUrl: probe.conversationUrl, detail: null });
+      confirmed = await compactSend(destination.id, 'probe', job, 'RESUME');
     }
-    if (probe.generating) return;
-    job = await compactCheckpoint(record, job, { phase: 'completed', newConversationId: probe.conversationId,
-      newConversationUrl: probe.conversationUrl, detail: null });
+    if (confirmed.superseded) throw new Error('Chat mới đã nhận thêm nội dung trước khi chuyển task. Hãy kiểm tra tab trước khi tiếp tục.');
+    if (!confirmed.markerFound || confirmed.conversationId !== job.newConversationId
+      || isProvisionalConversationId(confirmed.conversationId) || confirmed.generating) return;
+    job = await compactCheckpoint(record, job, { phase: 'completed', newConversationId: confirmed.conversationId,
+      newConversationUrl: confirmed.conversationUrl, detail: null });
     await finishCompactBrowser(job, record);
     return;
   }

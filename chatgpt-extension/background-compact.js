@@ -2,6 +2,7 @@
 // Neither a missing tab nor a lost HTTP response is proof that Send did not happen.
 const COMPACT_PREFIX = 'chatcmd-compact-job:';
 const COMPACT_ALARM = 'chatcmd-compact-recovery';
+const COMPACT_TICK_MS = 400;
 const compactFlights = new Map();
 const compactJobs = new Map();
 let compactTimer;
@@ -68,7 +69,7 @@ async function runCompactJob(id) {
 function scheduleCompactTick() {
   clearTimeout(compactTimer);
   if ([...compactJobs.values()].some((job) => !ChatCmdCompactProtocol.terminal(job))) {
-    compactTimer = setTimeout(() => { for (const id of compactJobs.keys()) void runCompactJob(id); }, 2000);
+    compactTimer = setTimeout(() => { for (const id of compactJobs.keys()) void runCompactJob(id); }, COMPACT_TICK_MS);
   }
 }
 async function compactTick(id) {
@@ -100,29 +101,29 @@ async function compactTick(id) {
       if (probe.superseded) throw new Error('Có tin nhắn mới sau yêu cầu handoff. Không lấy phản hồi của lượt khác; hãy hủy và kiểm tra cuộc trò chuyện.');
       if (probe.handoffText) {
         job = await compactCheckpoint(record, job, { phase: 'saving_handoff', handoffText: probe.handoffText, detail: null });
+      } else {
+        await compactDetail(record, job, probe.threadError
+          ? 'ChatGPT chưa hoàn tất handoff. Mở tab để kiểm tra lỗi; nội dung và task cũ được giữ nguyên.'
+          : 'Đang chờ ChatGPT viết xong handoff của đúng lượt này. Có thể đóng tab và mở lại sau.');
         return;
       }
-      await compactDetail(record, job, probe.threadError
-        ? 'ChatGPT chưa hoàn tất handoff. Mở tab để kiểm tra lỗi; nội dung và task cũ được giữ nguyên.'
-        : 'Đang chờ ChatGPT viết xong handoff của đúng lượt này. Có thể đóng tab và mở lại sau.');
+    } else {
+      const maySend = (job.phase === 'preparing' && record.sourceSend === 'not-attempted') || record.sourceSend === 'not-sent';
+      if (!maySend) {
+        await compactDetail(record, job, 'Đang đối chiếu lần gửi handoff đã ghi nhận. Không tự gửi lần hai khi chưa rõ kết quả; mở lại tab hoặc hủy để kiểm tra.');
+        return;
+      }
+      const ready = await compactSend(source.id, 'prepare', job, 'HANDOFF', probe.documentToken);
+      if (!ready.ready) { await compactDetail(record, job, 'Đang chuẩn bị: dừng phản hồi hiện tại và chờ ô nhập ChatGPT sẵn sàng.'); return; }
+      // The server transition is also the cross-document source dispatch permit.
+      job = await compactCheckpoint(record, job, { phase: 'writing_handoff', detail: null });
+      await compactDispatch(source.id, job, record, 'HANDOFF', probe.documentToken);
       return;
     }
-    const maySend = (job.phase === 'preparing' && record.sourceSend === 'not-attempted') || record.sourceSend === 'not-sent';
-    if (!maySend) {
-      await compactDetail(record, job, 'Đang đối chiếu lần gửi handoff đã ghi nhận. Không tự gửi lần hai khi chưa rõ kết quả; mở lại tab hoặc hủy để kiểm tra.');
-      return;
-    }
-    const ready = await compactSend(source.id, 'prepare', job, 'HANDOFF', probe.documentToken);
-    if (!ready.ready) { await compactDetail(record, job, 'Đang chuẩn bị: dừng phản hồi hiện tại và chờ ô nhập ChatGPT sẵn sàng.'); return; }
-    // The server transition is also the cross-document source dispatch permit.
-    job = await compactCheckpoint(record, job, { phase: 'writing_handoff', detail: null });
-    await compactDispatch(source.id, job, record, 'HANDOFF', probe.documentToken);
-    return;
   }
   if (job.phase === 'saving_handoff') {
     if (!job.handoffText) throw new Error('Handoff chưa được lưu bền vững; không mở chat mới.');
-    await compactCheckpoint(record, job, { phase: 'opening_new_chat', detail: null });
-    return;
+    job = await compactCheckpoint(record, job, { phase: 'opening_new_chat', detail: null });
   }
   if (job.phase === 'opening_new_chat') await compactDestination(job, record, tabs);
 }
@@ -152,7 +153,7 @@ async function recoverCompactJobs() {
     }
     for (const job of compactJobs.values()) if (!ChatCmdCompactProtocol.terminal(job)) void runCompactJob(job.id);
     const alarm = await chrome.alarms.get(COMPACT_ALARM);
-    if (!alarm) await chrome.alarms.create(COMPACT_ALARM, { periodInMinutes: 1 });
+    if (!alarm) await chrome.alarms.create(COMPACT_ALARM, { periodInMinutes: 0.5 });
   })().finally(() => { compactRecovery = null; });
   return compactRecovery;
 }

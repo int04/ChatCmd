@@ -16,7 +16,8 @@ function contentFixture(t, options = {}) {
   });
   const w = page.window;
   const onMessage = event();
-  const state = { current: true, clicks: 0, stops: 0, pauses: 0, writes: [], models: [], wakes: [], now: 10000 };
+  const state = { current: true, clicks: 0, stops: 0, pauses: 0, writes: [], models: [], wakes: [],
+    renderLeases: [], renderPulses: 0, now: 10000 };
   const controller = {
     current: () => state.current,
     findComposer: () => w.document.getElementById('prompt-textarea'),
@@ -35,6 +36,10 @@ function contentFixture(t, options = {}) {
   w.chrome = { runtime: { onMessage } };
   w.ChatCmdController = controller;
   w.ChatCmdRuntime = { sendMessage: async (message) => { state.wakes.push(message); return { ok: true }; } };
+  w.ChatCmdRenderBridge = {
+    setLease: (name, active) => state.renderLeases.push([name, active]),
+    pulse: () => { state.renderPulses++; },
+  };
   w.document.querySelector('[data-testid="send-button"]').addEventListener('click', () => {
     state.clicks++;
     state.onClick?.();
@@ -92,7 +97,7 @@ function contentFixture(t, options = {}) {
   function probe(compactJob = job(), kind = 'HANDOFF') { return w.ChatCmdCompact.probe(compactJob, kind); }
   function settled(compactJob = job(), kind = 'HANDOFF') {
     probe(compactJob, kind);
-    state.now += 2501;
+    state.now += 1201;
     return probe(compactJob, kind);
   }
   async function ready(compactJob = job(), kind = 'HANDOFF') {

@@ -199,7 +199,7 @@ test('pending server jobs with missing browser records recover without unsafe re
     assert.equal(restarted.record().initialOpenAllowed, false);
     assert.equal(restarted.shared.creates.length, 0);
     assert.equal(restarted.sends().length, 0);
-    assert.equal(restarted.shared.alarms.get('chatcmd-compact-recovery').periodInMinutes, 1);
+    assert.equal(restarted.shared.alarms.get('chatcmd-compact-recovery').periodInMinutes, 0.5);
   }
 });
 

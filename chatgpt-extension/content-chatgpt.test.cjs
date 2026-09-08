@@ -6,7 +6,7 @@ const vm = require('node:vm');
 
 const extensionRoot = __dirname;
 // Unit harness exposes runner locals; integration tests load its real IIFE through the manifest.
-const source = readFileSync(join(extensionRoot, 'content-chatgpt.js'), 'utf8').replace(/^\(\(\) => \{\n/, '').replace(/\}\)\(\);\s*$/, '').replace('const waitForAssistant =', 'let waitForAssistant =');
+const source = readFileSync(join(extensionRoot, 'content-chatgpt.js'), 'utf8').replace(/^\(\(\) => \{\r?\n/, '').replace(/\}\)\(\);\s*$/, '').replace('const waitForAssistant =', 'let waitForAssistant =');
 const monitorSource = readFileSync(join(extensionRoot, 'content-chatgpt-monitor.js'), 'utf8');
 const runtimeSource = readFileSync(join(extensionRoot, 'content-runtime.js'), 'utf8');
 const recoverySource = readFileSync(join(extensionRoot, 'background-recovery.js'), 'utf8');
