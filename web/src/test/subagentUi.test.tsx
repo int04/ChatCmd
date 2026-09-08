@@ -18,7 +18,7 @@ vi.mock('../chatgpt/compact/CompactHistoryCard', () => ({ CompactHistoryCard: ()
 vi.mock('../chatgpt/ChatGptConversation', () => ({ ChatGptTaskCard: () => null, ChatGptTaskComposer: () => <textarea aria-label="Message" />, NewChatGptConversation: () => null }));
 vi.mock('../tasks/TaskAccessCard', () => ({ TaskAccessCard: () => null }));
 vi.mock('../tasks/TaskTerminalSection', () => ({ TaskTerminalSection: () => null }));
-vi.mock('../tasks/TaskTurnBubble', () => ({ TaskTurnBubble: ({ subagents }: { subagents: SubagentRun[] }) => <div data-testid="turn-children">{subagents.map((v) => v.name).join(', ')}</div> }));
+vi.mock('../tasks/TaskTurnBubble', () => ({ TaskTurnBubble: ({ turn, subagents }: { turn: { id: string }; subagents: SubagentRun[] }) => <div data-testid="turn-children" data-turn-id={turn.id}>{subagents.map((v) => v.name).join(', ')}</div> }));
 
 function agent(id: string, parentTaskId: string, parentTurnId = 'root-turn'): SubagentRun {
   return { id, name: id, taskId: `task-${id}`, parentTaskId, parentTurnId, rootTurnId: 'root-turn', request: '', status: 'running', attempt: 1, maxRuntimeMs: 1800000, createdAtUtc: '2026-09-06T00:00:00Z', updatedAtUtc: '2026-09-06T00:00:00Z' };
@@ -49,6 +49,13 @@ describe('subagent tree and chat layout', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Đóng thông tin task' }));
     expect(container.querySelector('.task-detail-sidebar')).toBeNull();
     expect(container.querySelector('.task-detail-shell')).toHaveClass('sidebar-collapsed');
+  });
+  it('does not create a temporary turn bubble for ChatGPT queue events', async () => {
+    chat();
+    expect(screen.getByTestId('turn-children')).toHaveAttribute('data-turn-id', 'root-turn');
+    act(() => scene.listener?.({ id: 'queue-created', type: 'chatgpt.queue.created', taskId: 'task-chat-root', occurredAt: '2026-09-06T00:00:01Z', payload: { messageId: 'queued-1' } }));
+    await waitFor(() => expect(screen.getByTestId('turn-children')).toHaveAttribute('data-turn-id', 'root-turn'));
+    expect(screen.getAllByTestId('turn-children')).toHaveLength(1);
   });
   it('refreshes the root when a grandchild status arrives on the immediate parent task', async () => {
     chat();
