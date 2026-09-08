@@ -1,15 +1,16 @@
-import { CheckCircle2, CircleAlert, CircleHelp, ShieldCheck } from 'lucide-react';
+import { CheckCircle2, ChevronDown, CircleAlert, CircleHelp, ShieldCheck } from 'lucide-react';
 import type { CompletionQualityReport, VerificationState } from '../types';
 import { outcomeLabel, qualityCopy, verificationLabel } from './completionQualityCopy';
 
 export function CompletionQualityCard({ report }: { report: CompletionQualityReport }) {
   const labels = qualityCopy();
   const coveredCriteria = report.criteria.filter((item) => item.covered).length;
-  return <section className={`turn-quality-report ${report.verification}`} aria-label={labels.quality}>
-    <header className="turn-quality-header">
+  return <details className={`turn-quality-report ${report.verification}`}>
+    <summary className="turn-quality-header" aria-label={labels.quality}>
       <div><span className="turn-quality-kicker">{labels.quality}</span><h3>{outcomeLabel(report.workOutcome)}</h3></div>
-      <span className="turn-quality-mark">{verificationIcon(report.verification)}</span>
-    </header>
+      <span className="turn-quality-header-actions"><span className="turn-quality-mark">{verificationIcon(report.verification)}</span><ChevronDown className="turn-quality-chevron" aria-hidden="true" /></span>
+    </summary>
+    <div className="turn-quality-body">
     <div className="turn-quality-summary">
       <span><small>{labels.verification}</small><strong>{verificationLabel(report.verification)}</strong></span>
       <span><small>{labels.criteria}</small><strong>{coveredCriteria}/{report.criteria.length}</strong></span>
@@ -23,7 +24,8 @@ export function CompletionQualityCard({ report }: { report: CompletionQualityRep
     {report.evidence.length > 0 && <section className="turn-quality-section"><header><strong>{labels.evidence}</strong><span>{report.evidence.length}</span></header><ul className="turn-quality-evidence">{report.evidence.map((item) => <li key={item.executionId}><div><code>{item.command?.executable || item.executionId}</code>{item.exitCode !== undefined && <span>{labels.exit}: {item.exitCode ?? '—'}</span>}</div>{item.cwd && <code>{item.cwd}</code>}{item.reason && <small>{labels.reason}: {item.reason}</small>}</li>)}</ul></section>}
     {report.blockers.length > 0 && <QualityNotice title={labels.blockers} tone="danger" items={report.blockers} />}
     {report.limitations.length > 0 && <QualityNotice title={labels.limitations} tone="muted" items={report.limitations} />}
-  </section>;
+    </div>
+  </details>;
 }
 
 function QualityNotice({ title, tone, items }: { title: string; tone: 'danger' | 'muted'; items: string[] }) {

@@ -19,6 +19,7 @@ import {
   activityDuration,
   activityLabel,
   activityOutput,
+  activityInputDetails,
   buildProcessBlocks,
   duration,
   eventText,
@@ -299,11 +300,13 @@ function ActivityPopupContent({ activity, approvalPending, running }: { activity
   const failed = activity.status === 'failed';
   const command = activityCommand(activity);
   const output = activityOutput(activity);
+  const inputDetails = activityInputDetails(activity);
   const searchCodeViews = fsSearchCodeViews(activity);
   const diffView = activityDiffView(activity);
   const codeView = activityCodeView(activity);
   return <div className="activity-popup-content">
     <div className="activity-command"><FileCode2 /><code>{command}</code></div>
+    {inputDetails.length > 0 && <section className="activity-input-details" aria-label={tr('Tool input details')}><header><strong>{tr('Request details')}</strong><code>{activity.tool}</code></header><dl>{inputDetails.map((item) => <div key={`${item.label}:${item.value}`}><dt>{item.label}</dt><dd>{item.code ? <code>{item.value}</code> : item.value}</dd></div>)}</dl></section>}
     {failed && <div className="activity-error-detail" role="alert">
       <div className="activity-error-heading"><CircleAlert aria-hidden="true" /><strong>{tr('Tool failed')}</strong></div>
       {activity.errorCode && <div className="activity-error-row"><span>{tr('Error code')}</span><code>{activity.errorCode}</code></div>}
