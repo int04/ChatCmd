@@ -9,6 +9,7 @@ import { Modal } from '../components';
 import { tr } from '../i18n';
 import { canonicalProjectPath } from '../tasks/workspaceProjects';
 import type { Agent } from '../types';
+import { orderAgentsByRecentUse, rememberAgentUse } from './agentRecency';
 import { useLoad } from '../useLoad';
 export { ChatGptTaskComposer } from './ChatGptTaskComposer';
 import { useCompactBridgeSync } from './compact/useCompactBridgeSync';
@@ -23,8 +24,13 @@ export function NewChatGptConversation() {
   const navigate = useNavigate();
   const launchProjectFolder = routeProjectFolder(location.state);
   const launchProjectChatGptUrl = routeProjectChatGptUrl(location.state);
-  const enabledAgents = useMemo(() => (agents.data ?? []).filter((agent) => agent.enabled), [agents.data]);
+  const preferRecentAgents = routeAgentOrder(location.state) === 'recent';
+  const enabledAgents = useMemo(() => {
+    const enabled = (agents.data ?? []).filter((agent) => agent.enabled);
+    return preferRecentAgents ? orderAgentsByRecentUse(enabled) : enabled;
+  }, [agents.data, preferRecentAgents]);
   const [agentId, setAgentId] = useState('');
+  const agentLaunchKey = useRef(location.key);
   const [projectFolder, setProjectFolder] = useState(launchProjectFolder);
   const [folderMenuOpen, setFolderMenuOpen] = useState(false);
   const [content, setContent] = useState('');
@@ -40,10 +46,12 @@ export function NewChatGptConversation() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   useEffect(() => {
-    if (!agentId && enabledAgents[0]) {
-      setAgentId(enabledAgents[0].id);
-    }
-  }, [agentId, enabledAgents]);
+    const routeChanged = agentLaunchKey.current !== location.key;
+    if (routeChanged) agentLaunchKey.current = location.key;
+    const currentAvailable = enabledAgents.some((agent) => agent.id === agentId);
+    if ((routeChanged || !currentAvailable) && enabledAgents[0]) setAgentId(enabledAgents[0].id);
+    if (!enabledAgents.length && agentId) setAgentId('');
+  }, [agentId, enabledAgents, location.key]);
   useEffect(() => {
     if (!launchProjectFolder) return;
     setProjectFolder(launchProjectFolder);
@@ -117,6 +125,7 @@ export function NewChatGptConversation() {
       setExtensionReady(status.ready); setChatGptTabOpen(status.chatGptTabOpen);
       if (!status.ready) throw new Error(tr('ChatCMD ChatGPT Bridge extension is not ready. Enable or reload it, then try again.'));
       const request = await api.createChatGptRequest({ agentId, model: DEFAULT_MODEL, projectFolder: projectFolder.trim(), content: effectiveContent });
+      rememberAgentUse(agentId);
       await dispatchChatGptRequest({ requestId: request.id, submittedContent: request.submittedContent, model: request.model, newConversationUrl, attachments: fileAttachmentPayloads(textAttachments) });
       const taskId = await waitForTaskBinding(request.id);
       navigate(`/tasks/${encodeURIComponent(taskId)}`, { replace: true });
@@ -247,6 +256,10 @@ function routeProjectChatGptUrl(state: unknown) {
   if (!state || typeof state !== 'object' || Array.isArray(state)) return '';
   const value = (state as Record<string, unknown>).chatGptProjectUrl;
   return typeof value === 'string' ? value.trim() : '';
+}
+function routeAgentOrder(state: unknown) {
+  if (!state || typeof state !== 'object' || Array.isArray(state)) return '';
+  return (state as Record<string, unknown>).agentOrder === 'recent' ? 'recent' : '';
 }
 
 function errorText(reason: unknown) { return reason instanceof Error ? reason.message : tr('Could not complete the ChatGPT request.'); }

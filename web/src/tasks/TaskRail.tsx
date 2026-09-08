@@ -208,7 +208,7 @@ export function TaskRail({ open, onClose, onDesktopCollapse }: { open: boolean; 
       <div className="task-rail-toolbar">
         <button className="task-rail-collapse" type="button" aria-label="Đóng rails đoạn trò chuyện" title="Đóng rails đoạn trò chuyện" onClick={onDesktopCollapse}><PanelLeftClose /></button>
         <label className="tasks-conversation-search"><Search /><span className="sr-only">{tr('Search conversations')}</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={tr('Search')} /></label>
-        <Link className="task-rail-new-message" to="/tasks/new" aria-label={tr('New message')} title={tr('New message')}><Plus /></Link>
+        <Link className="task-rail-new-message" to="/tasks/new" state={{ agentOrder: 'recent' }} aria-label={tr('New message')} title={tr('New message')}><Plus /></Link>
       </div>
       <div className="task-projects-title"><strong>Dự án</strong><button type="button" onClick={() => openProjectModal()} aria-label="Thêm dự án" title="Thêm dự án"><Plus /></button></div>
     </header>
