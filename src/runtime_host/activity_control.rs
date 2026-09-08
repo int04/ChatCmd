@@ -5,6 +5,7 @@ use std::{
 
 use chatcmd_runtime::OperationContext;
 use serde_json::Value;
+use tokio::sync::Notify;
 
 #[derive(Clone, Default)]
 pub(crate) struct ActivityRegistry {
@@ -17,6 +18,8 @@ pub(crate) struct ActiveActivity {
     pub context: OperationContext,
     pub tool: String,
     pub shell_session_id: Option<String>,
+    allow_user_input: bool,
+    user_input_notify: Option<Arc<Notify>>,
     stop_reason: Arc<Mutex<Option<String>>>,
 }
 
@@ -90,6 +93,8 @@ impl ActivityRegistry {
             return None;
         }
         let activity_id = context.request_id.clone();
+        let allow_user_input = tool == "shell_wait"
+            && arguments.get("allowUserInput").and_then(Value::as_bool) == Some(true);
         let activity = ActiveActivity {
             context: context.clone(),
             tool: tool.to_owned(),
@@ -97,6 +102,8 @@ impl ActivityRegistry {
                 .get("sessionId")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
+            allow_user_input,
+            user_input_notify: allow_user_input.then(|| Arc::new(Notify::new())),
             stop_reason: Arc::new(Mutex::new(None)),
         };
         self.active
@@ -147,6 +154,45 @@ impl ActivityRegistry {
                 .values()
                 .any(|activity| activity.shell_session_id.as_deref() == Some(session_id))
         })
+    }
+
+    pub(crate) fn is_shell_input_allowed(&self, session_id: &str) -> bool {
+        let Ok(active) = self.active.lock() else {
+            return false;
+        };
+        let mut matching = active
+            .values()
+            .filter(|activity| activity.shell_session_id.as_deref() == Some(session_id))
+            .peekable();
+        if matching.peek().is_none() {
+            return true;
+        }
+        matching.all(|activity| activity.allow_user_input)
+    }
+
+    pub(crate) fn shell_user_input_notifier(&self, activity_id: &str) -> Option<Arc<Notify>> {
+        self.active
+            .lock()
+            .ok()?
+            .get(activity_id)?
+            .user_input_notify
+            .clone()
+    }
+
+    pub(crate) fn notify_shell_user_input(&self, session_id: &str) {
+        let notifiers = self.active.lock().map_or_else(
+            |_| Vec::new(),
+            |active| {
+                active
+                    .values()
+                    .filter(|activity| activity.shell_session_id.as_deref() == Some(session_id))
+                    .filter_map(|activity| activity.user_input_notify.clone())
+                    .collect::<Vec<_>>()
+            },
+        );
+        for notifier in notifiers {
+            notifier.notify_one();
+        }
     }
 
     pub(crate) fn has_active_turn(&self, task_id: &str, turn_id: &str) -> bool {
@@ -239,5 +285,46 @@ mod tests {
         );
         context.cancellation.cancel();
         assert!(context.cancellation.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn shell_input_requires_explicit_wait_handoff() {
+        let registry = ActivityRegistry::default();
+        let context = OperationContext::new("wait-1", "agent", "shell_wait");
+        assert!(registry.is_shell_input_allowed("shell-1"));
+
+        let wait_guard = registry
+            .register(
+                &context,
+                "shell_wait",
+                &json!({"sessionId":"shell-1","allowUserInput":true}),
+            )
+            .unwrap();
+        assert!(registry.is_shell_busy("shell-1"));
+        assert!(registry.is_shell_input_allowed("shell-1"));
+        let notifier = registry.shell_user_input_notifier("wait-1").unwrap();
+        registry.notify_shell_user_input("shell-1");
+        tokio::time::timeout(std::time::Duration::from_millis(50), notifier.notified())
+            .await
+            .unwrap();
+
+        let read_context = OperationContext::new("read-1", "agent", "shell_read");
+        let read_guard = registry
+            .register(&read_context, "shell_read", &json!({"sessionId":"shell-1"}))
+            .unwrap();
+        assert!(!registry.is_shell_input_allowed("shell-1"));
+
+        drop(read_guard);
+        assert!(registry.is_shell_input_allowed("shell-1"));
+        drop(wait_guard);
+        assert!(!registry.is_shell_busy("shell-1"));
+        assert!(registry.is_shell_input_allowed("shell-1"));
+
+        let normal_wait = registry
+            .register(&context, "shell_wait", &json!({"sessionId":"shell-1"}))
+            .unwrap();
+        assert!(!registry.is_shell_input_allowed("shell-1"));
+        assert!(registry.shell_user_input_notifier("wait-1").is_none());
+        drop(normal_wait);
     }
 }

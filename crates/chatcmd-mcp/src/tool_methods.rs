@@ -63,7 +63,7 @@ tool_methods!(
     (
         shell_wait,
         ShellWaitArgs,
-        "Wait without killing the PTY when timeout expires. Required field: sessionId; optional timeoutMs."
+        "Wait without killing the PTY when timeout expires. Required field: sessionId; optional timeoutMs. Set allowUserInput=true only when the terminal has reached a password, confirmation, or other manual-input prompt and the local user should type directly; while that wait is active, stdin is yielded to the user. When the user submits a line, the wait returns early with completed=false and waitTimedOut=false so the Agent can read the new terminal output and continue. Default false."
     ),
     (
         shell_read,

@@ -7,6 +7,7 @@ mod artifact_tools;
 mod command_tools;
 mod filesystem_tools;
 mod helpers;
+mod shell_handoff;
 mod tool_authorization;
 
 use chatcmd_core::{
@@ -158,11 +159,11 @@ impl RuntimeHost {
             "shell_wait" => {
                 let input: ShellWait = parse(arguments)?;
                 let (result, usage) = self
-                    .shell
-                    .wait_with_context(
+                    .wait_for_shell_handoff(
                         &context,
                         &input.session_id,
                         Duration::from_millis(input.timeout_ms.clamp(1, 300_000)),
+                        input.allow_user_input,
                     )
                     .await?;
                 if result.completed {

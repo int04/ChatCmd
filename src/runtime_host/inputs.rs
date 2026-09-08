@@ -222,6 +222,8 @@ pub(super) struct ShellWait {
     pub(super) session_id: String,
     #[serde(default = "default_timeout")]
     pub(super) timeout_ms: u64,
+    #[serde(default)]
+    pub(super) allow_user_input: bool,
 }
 
 const fn default_timeout() -> u64 {
