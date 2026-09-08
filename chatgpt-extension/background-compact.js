@@ -3,6 +3,8 @@
 const COMPACT_PREFIX = 'chatcmd-compact-job:';
 const COMPACT_ALARM = 'chatcmd-compact-recovery';
 const COMPACT_TICK_MS = 400;
+const COMPACT_FINISHED_RETENTION_MS = 24 * 60 * 60_000;
+const COMPACT_FINISHED_MAX = 64;
 const compactFlights = new Map();
 const compactJobs = new Map();
 let compactTimer;
@@ -10,6 +12,30 @@ let compactRecovery;
 const compactPath = (id) => `/api/local/chatgpt/compact/${encodeURIComponent(id)}`;
 async function compactRecord(id) { return (await chrome.storage.local.get(`${COMPACT_PREFIX}${id}`))[`${COMPACT_PREFIX}${id}`] || null; }
 async function saveCompactRecord(id, value) { await chrome.storage.local.set({ [`${COMPACT_PREFIX}${id}`]: value }); return value; }
+async function pruneFinishedCompactRecords(records) {
+  const now = Date.now();
+  const updates = {};
+  const finished = [];
+  for (const [key, original] of records) {
+    if (!original?.finished) continue;
+    const storedAt = Number(original.finishedAt);
+    const record = Number.isFinite(storedAt) && storedAt > 0 ? original : { ...original, finishedAt: now };
+    if (record !== original) updates[key] = record;
+    finished.push([key, record]);
+  }
+  if (Object.keys(updates).length) await chrome.storage.local.set(updates);
+  finished.sort((left, right) => Number(right[1].finishedAt) - Number(left[1].finishedAt));
+  const removals = finished.filter(([, record], index) => index >= COMPACT_FINISHED_MAX
+    || now - Number(record.finishedAt) >= COMPACT_FINISHED_RETENTION_MS).map(([key]) => key);
+  if (removals.length) await chrome.storage.local.remove(removals);
+  const removed = new Set(removals);
+  return records.map(([key, record]) => [key, updates[key] || record]).filter(([key]) => !removed.has(key));
+}
+async function syncCompactAlarm(active) {
+  const alarm = await chrome.alarms.get(COMPACT_ALARM);
+  if (active && !alarm) await chrome.alarms.create(COMPACT_ALARM, { periodInMinutes: 0.5 });
+  if (!active && alarm) await chrome.alarms.clear(COMPACT_ALARM);
+}
 async function compactCheckpoint(record, job, patch) {
   const next = await postJson(record.localBaseUrl, `${compactPath(job.id)}/checkpoint`, { expectedRevision: job.revision, ...patch });
   compactJobs.set(job.id, next);
@@ -50,6 +76,7 @@ async function startCompactJob(message, sender) {
       initialized: true, initialOpenAllowed: job.phase === 'preparing' });
   }
   compactJobs.set(job.id, job);
+  await syncCompactAlarm(true);
   void runCompactJob(job.id);
   return { jobId: job.id, accepted: true };
 }
@@ -131,7 +158,8 @@ async function recoverCompactJobs() {
   if (compactRecovery) return compactRecovery;
   compactRecovery = (async () => {
     const stored = await chrome.storage.local.get(null);
-    const records = Object.entries(stored).filter(([key]) => key.startsWith(COMPACT_PREFIX));
+    let records = Object.entries(stored).filter(([key]) => key.startsWith(COMPACT_PREFIX));
+    records = await pruneFinishedCompactRecords(records);
     const origins = new Set(records.map(([, record]) => record.localBaseUrl));
     origins.add(approvalBaseUrl);
     for (const origin of origins) {
@@ -152,8 +180,9 @@ async function recoverCompactJobs() {
       if (!record.finished) void runCompactJob(key.slice(COMPACT_PREFIX.length));
     }
     for (const job of compactJobs.values()) if (!ChatCmdCompactProtocol.terminal(job)) void runCompactJob(job.id);
-    const alarm = await chrome.alarms.get(COMPACT_ALARM);
-    if (!alarm) await chrome.alarms.create(COMPACT_ALARM, { periodInMinutes: 0.5 });
+    const active = records.some(([, record]) => !record.finished)
+      || [...compactJobs.values()].some((job) => !ChatCmdCompactProtocol.terminal(job));
+    await syncCompactAlarm(active);
   })().finally(() => { compactRecovery = null; });
   return compactRecovery;
 }

@@ -3,7 +3,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { job, BODY, clone } = require('./compact-test-fixtures.cjs');
-const { workerFixture, receiver, PREFIX } = require('./compact-test-worker.cjs');
+const { workerFixture, world, receiver, PREFIX } = require('./compact-test-worker.cjs');
 
 async function sourceWorker(t, value = job(), record = {}) {
   const env = await workerFixture(t);
@@ -211,4 +211,16 @@ test('offline recovery preserves disk state and does not open or dispatch as a f
   assert.deepEqual(env.record(), before);
   assert.equal(env.shared.creates.length, 0);
   assert.equal(env.sends().length, 0);
+});
+
+test('idle recovery clears its alarm and prunes expired finished browser records', async (t) => {
+  const shared = world();
+  shared.alarms.set('chatcmd-compact-recovery', { periodInMinutes: 0.5 });
+  shared.store[`${PREFIX}finished-old`] = {
+    localBaseUrl: 'http://127.0.0.1:8080', finished: true,
+    finishedAt: Date.now() - 25 * 60 * 60_000,
+  };
+  await workerFixture(t, shared);
+  assert.equal(shared.store[`${PREFIX}finished-old`], undefined);
+  assert.equal(shared.alarms.has('chatcmd-compact-recovery'), false);
 });

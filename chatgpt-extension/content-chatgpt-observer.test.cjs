@@ -170,3 +170,16 @@ test('a provisional WEB identity may become canonical only within the owned user
   assert.equal(env.sent.at(-1).conversationId, 'canonical-chat');
   assert.equal(env.sent.at(-1).messages.length, 1);
 });
+
+test('flush can publish an already scanned revision without rescanning the DOM', async (t) => {
+  const env = setup(t);
+  const capture = recorder(t, env);
+  const querySelectorAll = env.window.document.querySelectorAll.bind(env.window.document);
+  let queries = 0;
+  env.window.document.querySelectorAll = (...args) => { queries += 1; return querySelectorAll(...args); };
+  capture.scan();
+  assert.ok(queries > 0);
+  const afterScan = queries;
+  assert.equal(await capture.flush(false, false), false);
+  assert.equal(queries, afterScan);
+});

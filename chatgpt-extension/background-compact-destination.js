@@ -97,7 +97,7 @@ async function finishCompactBrowser(job, record) {
     if (job.continueAfterCompact === true) record = await resumeCompactWork(job, record);
     if (closeError) throw closeError; // Keep cleanup unfinished for durable recovery, not a new compact.
   }
-  await saveCompactRecord(job.id, { ...record, finished: true });
+  await saveCompactRecord(job.id, { ...record, finished: true, finishedAt: Date.now() });
   compactJobs.delete(job.id);
 }
 

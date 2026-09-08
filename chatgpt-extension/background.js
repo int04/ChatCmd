@@ -316,6 +316,7 @@ async function reportFailure(requestId, localBaseUrl, error) {
     });
   } catch { /* the local app may already be closed */ }
   await releaseRequest(requestId);
+  await forgetRecoveryRequest(requestId);
 }
 
 async function handleClosedTab(tabId) {
@@ -439,13 +440,14 @@ async function refreshConversationAliases(tabId, tabUrl) {
 
   const bindings = await conversationBindings();
   let metadata = {};
-  const provisionalKeys = [];
+  const staleKeys = [];
   for (const [key, binding] of Object.entries(bindings)) {
     if (!binding || binding.tabId !== tabId) continue;
     const boundId = key.slice(CONVERSATION_PREFIX.length);
+    if (boundId === liveId) continue;
+    staleKeys.push(key);
     if (!isProvisionalConversationId(boundId)) continue;
     metadata = { ...metadata, ...binding };
-    provisionalKeys.push(key);
     await chrome.storage.local.set({
       [`${CONVERSATION_ALIAS_PREFIX}${boundId}`]: {
         conversationId: liveId,
@@ -473,5 +475,5 @@ async function refreshConversationAliases(tabId, tabUrl) {
     }
   }
   await bindConversationTab(liveId, tabId, metadata);
-  if (provisionalKeys.length) await chrome.storage.session.remove(provisionalKeys);
+  if (staleKeys.length) await chrome.storage.session.remove([...new Set(staleKeys)]);
 }

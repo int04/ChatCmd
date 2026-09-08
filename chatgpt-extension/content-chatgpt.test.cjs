@@ -298,6 +298,19 @@ test('identity recovery binds by request id before falling back to prompt text',
   assert.match(recoverySource, /chrome\.storage\.local\.set/);
 });
 
+test('terminal bridge paths release durable recovery state', () => {
+  const terminalProgress = backgroundIoSource.slice(backgroundIoSource.indexOf("if (message.stage === 'browser-completed')"), backgroundIoSource.indexOf('async function requestContext'));
+  assert.match(terminalProgress, /releaseRequest\(message\.requestId\);\s*await forgetRecoveryRequest\(message\.requestId\);/);
+  const failure = backgroundSource.slice(backgroundSource.indexOf('async function reportFailure'), backgroundSource.indexOf('async function handleClosedTab'));
+  assert.match(failure, /releaseRequest\(requestId\);\s*await forgetRecoveryRequest\(requestId\);/);
+});
+
+test('reused ChatGPT tabs drop stale conversation bindings after identity refresh', () => {
+  const refresh = backgroundSource.slice(backgroundSource.indexOf('async function refreshConversationAliases'));
+  assert.match(refresh, /if \(boundId === liveId\) continue;\s*staleKeys\.push\(key\);/);
+  assert.match(refresh, /chrome\.storage\.session\.remove\(\[\.\.\.new Set\(staleKeys\)\]\)/);
+});
+
 test('local UI keeps failed dispatches for explicit user control', () => {
   const composer = readFileSync(join(extensionRoot, '..', 'web', 'src', 'chatgpt', 'ChatGptTaskComposer.tsx'), 'utf8');
   assert.doesNotMatch(localUiSource + composer, /RETRY_DELAY_SECONDS|retryTimer/);
