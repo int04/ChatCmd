@@ -73,6 +73,7 @@ async fn delete_task_data(
 ) -> Result<(), Problem> {
     for table in [
         "approvals",
+        "plan_questions",
         "artifact_registry",
         "task_execution_modes",
         "turn_bindings",
@@ -280,6 +281,7 @@ async fn delete_expired_task_data(
 
     for table in [
         "approvals",
+        "plan_questions",
         "artifact_registry",
         "task_execution_modes",
         "turn_bindings",
@@ -371,6 +373,7 @@ async fn cleanup_user_generated_data(state: &Arc<AppState>) -> Result<(), Proble
     for table in [
         "chatgpt_conversations",
         "approvals",
+        "plan_questions",
         "artifact_registry",
         "task_execution_modes",
         "turn_bindings",
