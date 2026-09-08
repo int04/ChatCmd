@@ -316,7 +316,7 @@ async fn chatgpt_bridge_reuses_existing_task_when_chatgpt_reformats_the_prompt()
     assert_eq!(row.get::<String, _>("source"), "chatgpt_web");
     assert_eq!(
         row.get::<String, _>("conversation_scope_hash"),
-        "openai:mcp-session-derived"
+        "openai:url-conversation-id"
     );
     let task_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks WHERE agent_id=?")
         .bind(&agent_id)
@@ -453,7 +453,7 @@ async fn chatgpt_bridge_claims_first_tool_call_before_user_message_sync() {
     assert_eq!(row.get::<String, _>("source"), "chatgpt_web");
     assert_eq!(
         row.get::<String, _>("conversation_scope_hash"),
-        "openai:host-session-scope"
+        "openai:WEB:temporary-browser-scope"
     );
     let task_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks WHERE agent_id=?")
         .bind(&agent_id)

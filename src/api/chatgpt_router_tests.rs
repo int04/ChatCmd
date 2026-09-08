@@ -144,6 +144,57 @@ async fn completed_requests_accept_identity_through_nested_router() {
 }
 
 #[tokio::test]
+async fn existing_task_rejects_rebinding_to_another_conversation() {
+    let (state, app, _directory) = fixture("running").await;
+    let first = extension_request(
+        &app,
+        "POST",
+        "/api/local/chatgpt/bridge/request-a/identity",
+        json!({
+            "conversationId": "conversation-a",
+            "conversationUrl": "https://chatgpt.com/c/conversation-a"
+        }),
+    )
+    .await;
+    expect_json(first, StatusCode::OK).await;
+
+    let rebound = extension_request(
+        &app,
+        "POST",
+        "/api/local/chatgpt/bridge/request-a/identity",
+        json!({
+            "conversationId": "conversation-b",
+            "conversationUrl": "https://chatgpt.com/c/conversation-b"
+        }),
+    )
+    .await;
+    let problem = expect_json(rebound, StatusCode::CONFLICT).await;
+    assert_eq!(problem["title"], "ChatGPT conversation binding mismatch");
+
+    let result = extension_request(
+        &app,
+        "POST",
+        "/api/local/chatgpt/bridge/request-a/result",
+        json!({
+            "status": "completed",
+            "assistantContent": "wrong conversation",
+            "conversationId": "conversation-b",
+            "conversationUrl": "https://chatgpt.com/c/conversation-b"
+        }),
+    )
+    .await;
+    expect_json(result, StatusCode::CONFLICT).await;
+
+    let conversation: String = sqlx::query_scalar(
+        "SELECT conversation_id FROM chatgpt_conversations WHERE task_id='task-a'",
+    )
+    .fetch_one(state.repository.pool())
+    .await
+    .expect("conversation binding");
+    assert_eq!(conversation, "conversation-a");
+}
+
+#[tokio::test]
 async fn started_and_result_callbacks_reach_handlers_through_nested_router() {
     let (state, app, _directory) = fixture("running").await;
     let identity = json!({ "conversationId": "conversation-started", "conversationUrl": "https://chatgpt.com/c/conversation-started" });

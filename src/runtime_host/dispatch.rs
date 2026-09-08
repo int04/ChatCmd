@@ -33,7 +33,8 @@ impl RuntimeHost {
         context: OperationContext,
         arguments: Value,
     ) -> RuntimeResult<Value> {
-        let project_folder = if tool.starts_with("fs_")
+        let filesystem_tool = is_filesystem_tool(tool);
+        let project_folder = if filesystem_tool
             || tool.starts_with("git_")
             || tool == "shell_create"
             || tool == "command_run"
@@ -47,7 +48,7 @@ impl RuntimeHost {
         } else {
             None
         };
-        let mut task_path_scopes = if tool.starts_with("fs_")
+        let mut task_path_scopes = if filesystem_tool
             || tool.starts_with("git_")
             || matches!(tool, "command_run" | "shell_create" | "workspace_roots")
         {
@@ -60,13 +61,13 @@ impl RuntimeHost {
         {
             task_path_scopes.push(project_folder.clone());
         }
-        let scoped_workspace = if tool.starts_with("fs_") || tool.starts_with("git_") {
+        let scoped_workspace = if filesystem_tool || tool.starts_with("git_") {
             Some(self.workspace.with_additional_scopes(&task_path_scopes)?)
         } else {
             None
         };
         let workspace = scoped_workspace.as_ref().unwrap_or(&self.workspace);
-        let arguments = if tool.starts_with("fs_") {
+        let arguments = if filesystem_tool {
             filesystem_dispatch::resolve_relative_paths(arguments, project_folder.as_deref())?
         } else {
             arguments

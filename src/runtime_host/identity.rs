@@ -16,7 +16,13 @@ impl RuntimeHost {
         first_user_message: Option<&str>,
     ) -> RuntimeResult<()> {
         let conversation_scope = context.conversation_scope_id.clone();
-        let bound_task = if conversation_scope.is_none() && context.task_id.is_none() {
+        let explicit_task = context
+            .task_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
+        let bound_task = if explicit_task.is_none() {
             self.bound_task_for_turn(context).await?
         } else {
             None
@@ -38,17 +44,21 @@ impl RuntimeHost {
         } else {
             None
         };
-        let mapped_scope_task = if delegated_task.is_none() && chatgpt_bridge_task.is_none() {
-            if let Some(scope) = conversation_scope.as_deref() {
-                self.bound_task_for_conversation_scope(&context.agent_id, scope)
-                    .await?
+        let mapped_scope_task =
+            if explicit_task.is_none() && delegated_task.is_none() && chatgpt_bridge_task.is_none()
+            {
+                if let Some(scope) = conversation_scope.as_deref() {
+                    self.bound_task_for_conversation_scope(&context.agent_id, scope)
+                        .await?
+                } else {
+                    None
+                }
             } else {
                 None
-            }
-        } else {
-            None
-        };
-        let pending_chatgpt_bridge_task = if delegated_task.is_none()
+            };
+        let pending_chatgpt_bridge_task = if explicit_task.is_none()
+            && bound_task.is_none()
+            && delegated_task.is_none()
             && chatgpt_bridge_task.is_none()
             && mapped_scope_task.is_none()
         {
@@ -72,23 +82,31 @@ impl RuntimeHost {
         } else {
             None
         };
-        let task = delegated_task.unwrap_or_else(|| {
-            chatgpt_bridge_task.unwrap_or_else(|| {
-                mapped_scope_task.unwrap_or_else(|| {
-                    pending_chatgpt_bridge_task.unwrap_or_else(|| {
-                        if let (Some(scope), Some(message)) =
-                            (conversation_scope.as_deref(), first_user_message)
-                        {
-                            task_identity_from_first_message(&context.agent_id, scope, message)
-                        } else {
-                            select_task_identity(
-                                &context.agent_id,
-                                conversation_scope.as_deref(),
-                                context.task_id.as_deref(),
-                                bound_task.as_deref(),
-                                &context.request_id,
-                            )
-                        }
+        let task = explicit_task.unwrap_or_else(|| {
+            delegated_task.unwrap_or_else(|| {
+                chatgpt_bridge_task.unwrap_or_else(|| {
+                    mapped_scope_task.unwrap_or_else(|| {
+                        bound_task.unwrap_or_else(|| {
+                            pending_chatgpt_bridge_task.unwrap_or_else(|| {
+                                if let (Some(scope), Some(message)) =
+                                    (conversation_scope.as_deref(), first_user_message)
+                                {
+                                    task_identity_from_first_message(
+                                        &context.agent_id,
+                                        scope,
+                                        message,
+                                    )
+                                } else {
+                                    select_task_identity(
+                                        &context.agent_id,
+                                        conversation_scope.as_deref(),
+                                        None,
+                                        None,
+                                        &context.request_id,
+                                    )
+                                }
+                            })
+                        })
                     })
                 })
             })
@@ -153,11 +171,10 @@ impl RuntimeHost {
                 id: task_id.clone(),
                 agent_id: AgentId::new(&context.agent_id).ok(),
                 device_id: self.device.id.clone(),
-                conversation_scope_hash: conversation_scope.or_else(|| {
-                    current
-                        .as_ref()
-                        .and_then(|task| task.conversation_scope_hash.clone())
-                }),
+                conversation_scope_hash: current
+                    .as_ref()
+                    .and_then(|task| task.conversation_scope_hash.clone())
+                    .or(conversation_scope),
                 title: current.as_ref().and_then(|task| task.title.clone()),
                 source: current
                     .as_ref()
@@ -430,14 +447,14 @@ fn select_task_identity(
     bound_task_id: Option<&str>,
     request_id: &str,
 ) -> String {
-    if let Some(scope) = conversation_scope.filter(|value| !value.trim().is_empty()) {
-        return safe_id("task-chat", agent_id, scope);
-    }
     if let Some(task_id) = explicit_task_id.filter(|value| !value.trim().is_empty()) {
         return task_id.trim().to_owned();
     }
     if let Some(task_id) = bound_task_id.filter(|value| !value.trim().is_empty()) {
         return task_id.trim().to_owned();
+    }
+    if let Some(scope) = conversation_scope.filter(|value| !value.trim().is_empty()) {
+        return safe_id("task-chat", agent_id, scope);
     }
     safe_id("task", agent_id, request_id)
 }
@@ -445,13 +462,9 @@ fn select_task_identity(
 fn task_identity_from_first_message(
     agent_id: &str,
     conversation_scope: &str,
-    message: &str,
+    _message: &str,
 ) -> String {
-    safe_id(
-        "task-chat",
-        agent_id,
-        &format!("{conversation_scope}\0first-user-message:{message}"),
-    )
+    safe_id("task-chat", agent_id, conversation_scope)
 }
 
 fn safe_id(prefix: &str, agent_id: &str, scope: &str) -> String {
@@ -463,78 +476,5 @@ fn safe_id(prefix: &str, agent_id: &str, scope: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        select_task_identity, task_identity_from_first_message, unique_bridge_task_for_message,
-    };
-
-    #[test]
-    fn conversation_scope_overrides_stale_explicit_task() {
-        let first =
-            select_task_identity("agent", Some("openai:chat-a"), Some("old-task"), None, "r1");
-        let second =
-            select_task_identity("agent", Some("openai:chat-b"), Some("old-task"), None, "r2");
-        assert_ne!(first, "old-task");
-        assert_ne!(second, "old-task");
-        assert_ne!(first, second);
-    }
-
-    #[test]
-    fn first_user_message_participates_in_new_chat_identity() {
-        let first = task_identity_from_first_message("agent", "openai:scope", "xin chào");
-        assert_eq!(
-            first,
-            task_identity_from_first_message("agent", "openai:scope", "xin chào")
-        );
-        assert_ne!(
-            first,
-            task_identity_from_first_message("agent", "openai:scope", "một tin nhắn khác")
-        );
-    }
-
-    #[test]
-    fn explicit_task_and_turn_binding_are_safe_fallbacks_without_private_scope() {
-        assert_eq!(
-            select_task_identity("agent", None, Some("task-known"), Some("task-bound"), "r1"),
-            "task-known"
-        );
-        assert_eq!(
-            select_task_identity("agent", None, None, Some("task-bound"), "r1"),
-            "task-bound"
-        );
-        assert_ne!(
-            select_task_identity("agent", None, None, None, "r1"),
-            select_task_identity("agent", None, None, None, "r2")
-        );
-    }
-
-    #[test]
-    fn unicode_space_bridge_match_requires_one_unambiguous_task() {
-        let rows = vec![("task-a".to_owned(), "Ví dụ abcd ".to_owned())];
-        assert_eq!(
-            unique_bridge_task_for_message(&rows, None, "Ví dụ abcd\u{00a0}"),
-            Some("task-a".to_owned())
-        );
-
-        let ambiguous = vec![
-            ("task-a".to_owned(), "Ví dụ abcd ".to_owned()),
-            ("task-b".to_owned(), "Ví dụ abcd\u{202f}".to_owned()),
-        ];
-        assert_eq!(
-            unique_bridge_task_for_message(&ambiguous, None, "Ví dụ abcd\u{00a0}"),
-            None
-        );
-        assert_eq!(
-            unique_bridge_task_for_message(&ambiguous, Some("task-b"), "Ví dụ abcd\u{00a0}"),
-            Some("task-b".to_owned())
-        );
-        assert_eq!(
-            unique_bridge_task_for_message(
-                &ambiguous,
-                Some("task-unrelated"),
-                "Ví dụ abcd\u{00a0}"
-            ),
-            None
-        );
-    }
-}
+#[path = "identity_tests.rs"]
+mod tests;

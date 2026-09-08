@@ -29,6 +29,8 @@ const SAFE_READ_MAX_BYTES: i64 = 1_073_741_824;
 #[serde(rename_all = "camelCase")]
 struct GrantPathScope {
     path: String,
+    #[serde(default)]
+    canonical_path: Option<String>,
     kind: GrantPathScopeKind,
     #[serde(default)]
     identity: Option<String>,

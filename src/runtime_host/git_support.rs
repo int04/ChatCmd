@@ -8,18 +8,19 @@ impl RuntimeHost {
         context: &OperationContext,
         explicit: Option<std::path::PathBuf>,
     ) -> RuntimeResult<std::path::PathBuf> {
-        if let Some(cwd) = explicit {
-            return Ok(cwd);
+        if explicit.as_ref().is_some_and(|cwd| cwd.is_absolute()) {
+            return Ok(explicit.expect("absolute cwd checked above"));
         }
-        if let Some(project_folder) =
+        let project_folder =
             <Self as chatcmd_mcp::RuntimeApi>::project_folder(self, context.task_id.as_deref())
                 .await?
-        {
-            return Ok(project_folder.into());
-        }
-        Err(RuntimeError::new(
-            "project_folder_required",
-            "git cwd was omitted; provide the project folder or an explicit absolute working path",
-        ))
+                .map(std::path::PathBuf::from)
+                .ok_or_else(|| {
+                    RuntimeError::new(
+                        "project_folder_required",
+                        "git cwd requires the task project folder unless an explicit absolute path is provided",
+                    )
+                })?;
+        Ok(explicit.map_or(project_folder.clone(), |cwd| project_folder.join(cwd)))
     }
 }

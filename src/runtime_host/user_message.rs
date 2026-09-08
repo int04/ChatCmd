@@ -70,11 +70,11 @@ impl RuntimeHost {
                 .unwrap_or_default();
             for path in extract_explicit_absolute_paths(&content) {
                 scopes.insert(path);
-                if scopes.len() >= 32 {
+                if scopes.len() >= 256 {
                     break;
                 }
             }
-            if scopes.len() >= 32 {
+            if scopes.len() >= 256 {
                 break;
             }
         }
@@ -404,7 +404,7 @@ fn extract_explicit_absolute_paths(content: &str) -> Vec<PathBuf> {
             continue;
         }
         unique.insert(canonical);
-        if unique.len() >= 16 {
+        if unique.len() >= 64 {
             break;
         }
     }
