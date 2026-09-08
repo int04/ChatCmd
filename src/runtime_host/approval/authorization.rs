@@ -316,6 +316,7 @@ impl RuntimeHost {
                 };
                 Ok(GrantPathScope {
                     path: normalized_path(&canonical),
+                    canonical_path: Some(canonical.to_string_lossy().into_owned()),
                     kind,
                     identity: path_identity(&canonical),
                 })

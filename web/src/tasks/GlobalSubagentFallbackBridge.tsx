@@ -3,7 +3,6 @@ import { api, type SubagentFallbackRequest } from '../api';
 import { closeSubagentFallbackTab, dispatchSubagentFallback } from '../chatgptBridge';
 import { useRealtime } from '../realtime';
 import type { TimelineEvent } from '../types';
-import { canonicalProjectPath } from './workspaceProjects';
 
 export function GlobalSubagentFallbackBridge() {
   const inFlight = useRef(new Set<string>());
@@ -14,17 +13,12 @@ export function GlobalSubagentFallbackBridge() {
     if (inFlight.current.has(key)) return;
     inFlight.current.add(key);
     try {
-      let newConversationUrl: string | undefined;
-      if (fallback.projectFolder) {
-        const projects = await api.workspaceProjects();
-        newConversationUrl = projects.find((project) => canonicalProjectPath(project.path) === canonicalProjectPath(fallback.projectFolder ?? ''))?.chatGptProjectUrl?.trim() || undefined;
-      }
       await dispatchSubagentFallback({
         subagentId: fallback.subagentId,
         childTaskId: fallback.childTaskId,
         submittedContent: fallback.submittedContent,
         attempt: fallback.attempt,
-        newConversationUrl,
+        conversationUrl: fallback.conversationUrl ?? undefined,
       });
     } catch (error) {
       try {

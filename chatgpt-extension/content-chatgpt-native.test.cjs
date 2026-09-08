@@ -63,3 +63,26 @@ test('late native enrollment never adopts a different conversation', async (t) =
   await pending;
   assert.deepEqual(adopted, []);
 });
+
+test('assistant streaming does not rescan native user enrollment', async (t) => {
+  const page = new JSDOM(`<body>${question('u')}<section data-turn="assistant"><div class="markdown">First</div></section></body>`, {
+    url: 'https://chatgpt.com/c/one', runScripts: 'outside-only',
+  });
+  t.after(() => { page.window.ChatCmdNativeCapture?.stop(); page.window.close(); });
+  const w = page.window;
+  w.ChatCmdRuntime = { sendMessage: async (payload) => payload.type === 'chatcmd-chatgpt-native-turn'
+    ? { ok: true, ignored: true } : { ok: true } };
+  w.ChatCmdController = { current: () => true, active: null, adopt: async () => {} };
+  w.eval(source('content-chatgpt-transcript.js'));
+  w.eval(source('content-chatgpt-native.js'));
+  await new Promise((resolve) => w.setTimeout(resolve, 0));
+  const querySelectorAll = w.document.querySelectorAll.bind(w.document);
+  let userScans = 0;
+  w.document.querySelectorAll = (selector) => {
+    if (String(selector).includes('[data-message-author-role="user"]')) userScans += 1;
+    return querySelectorAll(selector);
+  };
+  w.document.querySelector('.markdown').textContent = 'Streaming update';
+  await new Promise((resolve) => w.setTimeout(resolve, 0));
+  assert.equal(userScans, 0);
+});

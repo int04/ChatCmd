@@ -76,8 +76,8 @@
       messages = messages.filter((message) => message.content);
       if (changed) { dirty = true; revision = Math.max(revision + 1, Date.now()); checkpoint(); }
     }
-    async function flush(completed = false) {
-      scan();
+    async function flush(completed = false, scanFirst = true) {
+      if (scanFirst) scan();
       if (completed && !complete) {
         complete = true; dirty = true; revision = Math.max(revision + 1, Date.now()); checkpoint();
       }
@@ -118,7 +118,7 @@
         queued = false;
         if (stopped || !current()) return;
         scan();
-        if (bound && dirty && !inFlight && Date.now() - lastSend >= 500) void flush();
+        if (bound && dirty && !inFlight && Date.now() - lastSend >= 500) void flush(false, false);
         else scheduleSend();
       });
     }

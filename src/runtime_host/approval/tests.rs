@@ -35,6 +35,7 @@ mod tests {
         let root = std::fs::canonicalize(root).expect("canonical root");
         let scopes = vec![GrantPathScope {
             path: normalized_path(&root),
+            canonical_path: Some(root.to_string_lossy().into_owned()),
             kind: GrantPathScopeKind::Subtree,
             identity: path_identity(&root),
         }];

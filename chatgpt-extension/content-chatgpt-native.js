@@ -7,6 +7,8 @@
   const clock = globalThis.ChatCmdCaptureClock;
   const later = (fn, ms, options) => clock ? clock.later(fn, ms, options) : setTimeout(fn, ms);
   const cancel = (id) => clock ? clock.cancel(id) : clearTimeout(id);
+  const USER_SELECTOR = '[data-message-author-role="user"],[data-turn="user"]';
+  const NATIVE_FALLBACK_POLL_MS = 4_000;
   const seen = new Set();
   let stopped = false;
   let pending = false;
@@ -73,13 +75,24 @@
     queued = true;
     void Promise.resolve().then(() => { queued = false; if (!stopped) void tick(); });
   }
-  const observer = new MutationObserver(schedule);
+  function mutationAffectsUser(records) {
+    for (const record of records) {
+      const target = record.target?.nodeType === Node.TEXT_NODE ? record.target.parentElement : record.target;
+      if (target?.closest?.(USER_SELECTOR)) return true;
+      for (const added of record.addedNodes || []) {
+        if (!(added instanceof Element)) continue;
+        if (added.matches(USER_SELECTOR) || added.querySelector(USER_SELECTOR)) return true;
+      }
+    }
+    return false;
+  }
+  const observer = new MutationObserver((records) => { if (mutationAffectsUser(records)) schedule(); });
   observer.observe(document.body, { subtree: true, childList: true, characterData: true });
   function poll() {
     if (stopped) return;
     void tick();
-    // Idle polling is only a local fallback, never a perpetual service-worker keepalive.
-    pollTimer = later(poll, 750, { background: false });
+    // Idle polling is a low-frequency local fallback, never a perpetual service-worker keepalive.
+    pollTimer = later(poll, NATIVE_FALLBACK_POLL_MS, { background: false });
   }
   function stop() {
     if (stopped) return;
@@ -89,7 +102,7 @@
   }
   document.addEventListener('visibilitychange', schedule);
   window.addEventListener('pageshow', schedule);
-  pollTimer = later(poll, 750, { background: false });
+  pollTimer = later(poll, NATIVE_FALLBACK_POLL_MS, { background: false });
   globalThis.ChatCmdNativeCapture = Object.freeze({ stop, tick, schedule });
   Promise.resolve(globalThis.ChatCmdResumeReady).then(() => void tick());
 })();

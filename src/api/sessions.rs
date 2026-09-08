@@ -55,6 +55,7 @@ pub(super) async fn live_terminals(
             "cpuPercent": process.map(|value| value.cpu_usage()),
             "memoryBytes": process.map(|value| value.memory()),
             "busy": state.activities.is_shell_busy(&info.session_id),
+            "inputAllowed": state.activities.is_shell_input_allowed(&info.session_id),
             "lastSequence": info.last_sequence
         }));
     }
@@ -154,11 +155,11 @@ pub(super) async fn terminal_input(
             "terminal input cannot be empty",
         ));
     }
-    if state.activities.is_shell_busy(&id) {
+    if !state.activities.is_shell_input_allowed(&id) {
         return Err(Problem::new(
             StatusCode::CONFLICT,
-            "Terminal is busy",
-            "the Agent is currently using this terminal",
+            "Terminal input is locked",
+            "the Agent is currently using this terminal without yielding input",
         ));
     }
     let context = chatcmd_runtime::OperationContext::new(
@@ -166,13 +167,14 @@ pub(super) async fn terminal_input(
         "local-ui",
         "shell_write",
     );
+    let submitted = input.text.contains('\r') || input.text.contains('\n');
     let written = state
         .shell
         .write(
             &context,
             chatcmd_runtime::ShellWriteRequest {
                 request_id: context.request_id.clone(),
-                session_id: id,
+                session_id: id.clone(),
                 text: input.text,
                 append_new_line: false,
                 input_kind: chatcmd_runtime::ShellInputKind::Interactive,
@@ -181,6 +183,9 @@ pub(super) async fn terminal_input(
         )
         .await
         .map_err(runtime_problem)?;
+    if submitted {
+        state.activities.notify_shell_user_input(&id);
+    }
     Ok(Json(json!({ "accepted": true, "writtenBytes": written })))
 }
 

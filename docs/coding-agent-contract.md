@@ -35,10 +35,10 @@ Một user turn hợp lệ có thứ tự:
 5. Chờ mọi child bằng `agent_subagent_wait` và dọn pending activity.
 6. `agent_turn_complete` đúng một lần, là tool cuối.
 
-Child registration là idempotent theo parent turn/name/request/grant request. `extensionFallback`
-nghĩa là browser extension có quyền claim child đã đăng ký; parent không được làm trùng phần việc.
-Child không tự kế thừa authority. Grant cho child phải là intersection có budget của một grant cha
-đang active và bị ràng buộc với child attempt.
+Child registration là idempotent theo parent turn/name/request/grant request. Khi MCP sampling không khả dụng,
+`parentContinuation` yêu cầu parent tiếp tục phần việc ngay trong conversation hiện tại; browser fallback không được
+tự tạo ChatGPT conversation khác. Child không tự kế thừa authority. Grant cho child phải là intersection có budget
+của một grant cha đang active và bị ràng buộc với child attempt.
 
 ## 3. Clarification và execution consent
 

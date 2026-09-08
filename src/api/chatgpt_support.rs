@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::{Json, http::StatusCode};
 use serde_json::{Value, json};
-use sqlx::{Row, sqlite::SqliteRow};
+use sqlx::{Row, SqliteConnection, sqlite::SqliteRow};
 use uuid::Uuid;
 
 use crate::websocket::{AppEvent, AppState};
@@ -216,6 +216,39 @@ pub(super) fn publish(
     event.task_id = Some(task_id.to_owned());
     event.turn_id = Some(turn_id.to_owned());
     state.publish(event);
+}
+
+pub(super) async fn guard_conversation_binding(
+    conn: &mut SqliteConnection,
+    task_id: &str,
+    incoming_conversation_id: Option<&str>,
+) -> Result<(), Problem> {
+    let Some(incoming) = incoming_conversation_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    let existing = sqlx::query_scalar::<_, String>(
+        "SELECT conversation_id FROM chatgpt_conversations WHERE task_id=? LIMIT 1",
+    )
+    .bind(task_id)
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(db_problem)?;
+    let Some(existing) = existing else {
+        return Ok(());
+    };
+    if existing == incoming
+        || (is_provisional_conversation_id(&existing) && !is_provisional_conversation_id(incoming))
+    {
+        return Ok(());
+    }
+    Err(Problem::new(
+        StatusCode::CONFLICT,
+        "ChatGPT conversation binding mismatch",
+        "This task is already bound to another ChatGPT conversation. Reopen the original conversation; ChatCMD will not move the task to a different chat.",
+    ))
 }
 
 pub(super) fn validate_message(content: &str) -> Result<(), Problem> {

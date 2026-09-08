@@ -196,9 +196,12 @@ async function startSubagentRequestOnce(message) {
   if (!state.active || state.status !== 'pending') return;
   if (existing) await closeSubagentRequest(message.subagentId, existing.attempt);
 
-  const target = normalizeNewConversationUrl(message.newConversationUrl);
-  const tab = await chrome.tabs.create({ url: target, active: false });
-  if (!tab?.id) throw new Error('Không thể mở tab ChatGPT cho sub-agent.');
+  if (!message.conversationUrl) {
+    throw new Error('Browser sub-agent fallback không được phép tạo ChatGPT conversation mới.');
+  }
+  const target = await conversationTarget(message.conversationUrl);
+  const tab = await openConversationTab(target);
+  if (!tab?.id) throw new Error('Không thể mở lại ChatGPT conversation hiện tại cho sub-agent.');
   const requestId = `subagent:${message.subagentId}:${attempt}`;
   await chrome.storage.session.set({
     [requestKey(requestId)]: {
@@ -208,7 +211,7 @@ async function startSubagentRequestOnce(message) {
       subagentId: message.subagentId,
       childTaskId: message.childTaskId,
       attempt,
-      conversationUrl: null,
+      conversationUrl: target,
     },
     [subagentKey]: { requestId, tabId: tab.id, attempt },
   });
@@ -316,6 +319,7 @@ async function reportFailure(requestId, localBaseUrl, error) {
     });
   } catch { /* the local app may already be closed */ }
   await releaseRequest(requestId);
+  await forgetRecoveryRequest(requestId);
 }
 
 async function handleClosedTab(tabId) {
@@ -383,9 +387,11 @@ async function migrateTabBindings(removedTabId, addedTabId) {
 async function preferredConversationIdentity(tabId, conversationId, conversationUrl) {
   const tab = tabId ? await safeTab(tabId) : null;
   const liveId = conversationIdFromUrl(tab?.url || '');
-  if (liveId && !isProvisionalConversationId(liveId)) {
-    return { conversationId: liveId, conversationUrl: tab.url };
+  const boundId = conversationId || conversationIdFromUrl(conversationUrl || '');
+  if (boundId && !isProvisionalConversationId(boundId) && liveId && liveId !== boundId) {
+    return { conversationId, conversationUrl };
   }
+  if (liveId && !isProvisionalConversationId(liveId)) return { conversationId: liveId, conversationUrl: tab.url };
   return { conversationId, conversationUrl };
 }
 
@@ -408,6 +414,8 @@ async function syncRequestIdentityFromTab(tabId, tabUrl) {
   const stored = await chrome.storage.session.get(null);
   for (const [key, context] of Object.entries(stored)) {
     if (!key.startsWith(REQUEST_PREFIX) || !context || context.tabId !== tabId || !context.localBaseUrl) continue;
+    const boundId = conversationIdFromUrl(context.conversationUrl || '');
+    if (boundId && !isProvisionalConversationId(boundId) && boundId !== liveId) continue;
     const requestId = key.slice(REQUEST_PREFIX.length);
     try {
       if (context.mode === 'subagent' && context.subagentId && context.attempt) {
@@ -438,14 +446,17 @@ async function refreshConversationAliases(tabId, tabUrl) {
   }
 
   const bindings = await conversationBindings();
+  const hasRealConflict = Object.entries(bindings).some(([key, binding]) => binding?.tabId === tabId && !isProvisionalConversationId(key.slice(CONVERSATION_PREFIX.length)) && key.slice(CONVERSATION_PREFIX.length) !== liveId);
+  if (hasRealConflict) return;
   let metadata = {};
-  const provisionalKeys = [];
+  const staleKeys = [];
   for (const [key, binding] of Object.entries(bindings)) {
     if (!binding || binding.tabId !== tabId) continue;
     const boundId = key.slice(CONVERSATION_PREFIX.length);
+    if (boundId === liveId) continue;
+    staleKeys.push(key);
     if (!isProvisionalConversationId(boundId)) continue;
     metadata = { ...metadata, ...binding };
-    provisionalKeys.push(key);
     await chrome.storage.local.set({
       [`${CONVERSATION_ALIAS_PREFIX}${boundId}`]: {
         conversationId: liveId,
@@ -473,5 +484,5 @@ async function refreshConversationAliases(tabId, tabUrl) {
     }
   }
   await bindConversationTab(liveId, tabId, metadata);
-  if (provisionalKeys.length) await chrome.storage.session.remove(provisionalKeys);
+  if (staleKeys.length) await chrome.storage.session.remove([...new Set(staleKeys)]);
 }

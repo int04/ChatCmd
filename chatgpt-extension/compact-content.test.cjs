@@ -17,7 +17,7 @@ test('captures only the owned public generation after a complete, stable end fen
   env.answer('Earlier answer that must not appear', { id: 'older-answer' });
   generation(env, value);
   assert.equal(env.probe(value).handoffText, null);
-  env.advance(2499);
+  env.advance(1199);
   assert.equal(env.probe(value).handoffText, null);
   env.advance(1);
   assert.equal(env.probe(value).handoffText, BODY);
@@ -31,7 +31,7 @@ test('streaming and changed text reset stability; missing/wrong end fence never 
   env.generating(true);
   assert.equal(env.settled(value).handoffText, null);
   env.generating(false);
-  env.advance(2500);
+  env.advance(1200);
   assert.equal(env.probe(value).handoffText, BODY);
   answer.textContent = BODY + ' Still incomplete';
   assert.equal(env.settled(value).handoffText, null);
@@ -137,9 +137,11 @@ test('status card stays above input, announces all four steps, and updates witho
     assert.equal(panel.querySelector('p').textContent, '<script>not executable</script>');
     assert.equal(env.w.ChatCmdCompact.busy, true);
   }
+  assert.deepEqual(env.state.renderLeases.at(-1), ['compact', true]);
   await env.message('clear');
   assert.equal(env.w.document.querySelector('[data-chatcmd-ui="compact"]'), null);
   assert.equal(env.w.ChatCmdCompact.busy, false);
+  assert.deepEqual(env.state.renderLeases.at(-1), ['compact', false]);
 });
 
 test('prepare preserves an existing user draft verbatim without model change or send', async (t) => {

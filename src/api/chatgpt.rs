@@ -300,6 +300,7 @@ pub(super) async fn persist_bridge_started_binding(
             .await
             .map_err(db_problem)?;
     }
+    guard_conversation_binding(&mut transaction, &task_id, Some(binding.conversation_id)).await?;
     sqlx::query("INSERT INTO tasks(id,agent_id,device_id,conversation_scope_hash,title,source,project_folder,allow_execute,status,active_session_id,generation,stopped_at_ms,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,'chatgpt_web',?,1,'running',NULL,1,NULL,?,?) ON CONFLICT(id) DO UPDATE SET conversation_scope_hash=excluded.conversation_scope_hash,title=COALESCE(tasks.title,excluded.title),source='chatgpt_web',project_folder=CASE WHEN EXISTS(SELECT 1 FROM chatgpt_compact_jobs j WHERE j.task_id=tasks.id AND j.phase='completed') THEN tasks.project_folder ELSE COALESCE(excluded.project_folder,tasks.project_folder) END,allow_execute=CASE WHEN EXISTS(SELECT 1 FROM chatgpt_compact_jobs j WHERE j.task_id=tasks.id AND j.phase='completed') THEN tasks.allow_execute ELSE 1 END,status='running',stopped_at_ms=NULL,updated_at_ms=excluded.updated_at_ms")
         .bind(&task_id)
         .bind(binding.agent_id)
@@ -362,6 +363,12 @@ pub(super) async fn bridge_identity(
     )
     .await
     .map_err(super::storage_problem)?;
+    guard_conversation_binding(
+        &mut transaction,
+        &task_id,
+        Some(input.conversation_id.trim()),
+    )
+    .await?;
     let now = now_ms();
     sqlx::query("UPDATE chatgpt_bridge_requests SET conversation_id=?,conversation_url=?,updated_at_ms=? WHERE id=?")
         .bind(input.conversation_id.trim())

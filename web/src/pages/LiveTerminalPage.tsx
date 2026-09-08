@@ -122,7 +122,7 @@ export function LiveTerminalPage() {
   }, [refreshMetadata]);
 
   useEffect(() => {
-    if (terminalRef.current) terminalRef.current.options.disableStdin = !metadata.data || Boolean(metadata.data.busy);
+    if (terminalRef.current) terminalRef.current.options.disableStdin = !metadata.data || (Boolean(metadata.data.busy) && metadata.data.inputAllowed !== true);
   }, [metadata.data]);
 
   const close = async () => {
@@ -145,7 +145,7 @@ export function LiveTerminalPage() {
     <section className="mac-terminal-window">
       <header className="mac-terminal-titlebar"><div className="mac-traffic-lights"><i /><i /><i /></div><strong>{terminal?.workingDirectory ?? tr('Terminal')}</strong><div className="mac-terminal-metrics"><span>PID {terminal?.processId ?? '—'}</span><span><Cpu />{terminal?.cpuPercent == null ? '—' : `${terminal.cpuPercent.toFixed(1)}%`}</span><span><HardDrive />{formatBytes(terminal?.memoryBytes)}</span></div></header>
       <div className="xterm-host" ref={hostRef} />
-      <footer className="mac-terminal-footer"><span>{!terminal ? tr('This terminal is no longer active.') : terminal.busy ? tr('The Agent is currently using this terminal. Input is temporarily locked.') : tr('Interactive input is enabled for this live terminal.')}</span>{terminal?.taskId && <Link to={`/tasks/${encodeURIComponent(terminal.taskId)}`}>{tr('Open task')}</Link>}</footer>
+      <footer className="mac-terminal-footer"><span>{!terminal ? tr('This terminal is no longer active.') : terminal.busy && terminal.inputAllowed !== true ? tr('The Agent is currently using this terminal. Input is temporarily locked.') : tr('Interactive input is enabled for this live terminal.')}</span>{terminal?.taskId && <Link to={`/tasks/${encodeURIComponent(terminal.taskId)}`}>{tr('Open task')}</Link>}</footer>
     </section>
   </div>;
 }

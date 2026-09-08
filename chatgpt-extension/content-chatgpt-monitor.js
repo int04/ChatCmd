@@ -21,7 +21,7 @@ globalThis.ChatCmdMonitor = Object.freeze({ create(api) {
     if (recorder) {
       recorder.scan();
       if (!recorder.active) return recorder.answer;
-      void recorder.flush();
+      void recorder.flush(false, false);
     }
     const text = recorder ? recorder.answer : (latest?.innerText?.trim() || latest?.textContent?.trim() || '');
     const stopButton = findStopButton();

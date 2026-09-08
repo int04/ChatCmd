@@ -275,11 +275,63 @@ export function activityCommand(activity: ToolActivity) {
   const command = stringValue(input.command);
   if (command) return command;
   const path = stringValue(input.path);
+  const query = stringValue(input.query);
+  const pattern = stringValue(input.pattern);
+  if (activity.tool === 'fs_search' && query) return `${activity.tool}: ${JSON.stringify(query)}${path ? ` in ${path}` : ''}`;
+  if (activity.tool === 'fs_find' && pattern) return `${activity.tool}: ${JSON.stringify(pattern)}${path ? ` in ${path}` : ''}`;
   if (path) return `${activity.tool}: ${path}`;
   const legacy = legacyTerminalParts(activity.output);
   if (legacy.command) return legacy.command;
-  return activity.input === undefined ? activity.tool : `${activity.tool} ${formatValue(activity.input)}`;
+  const summary = activityInputDetails(activity).slice(0, 2).map((item) => `${item.label}: ${item.value.replace(/\n/g, ', ')}`).join(' · ');
+  return summary ? `${activity.tool} — ${summary}` : activity.tool;
 }
+
+export interface ActivityInputDetail { label: string; value: string; code?: boolean }
+export function activityInputDetails(activity: ToolActivity): ActivityInputDetail[] {
+  const input = asObject(activity.input);
+  if (!Object.keys(input).length) return [];
+  const details: ActivityInputDetail[] = [];
+  const labels: Record<string, string> = {
+    query: tr('Search query'), pattern: tr('Pattern'), path: tr('Path'), patternMode: tr('Pattern mode'), mode: tr('Mode'),
+    include: tr('Include'), exclude: tr('Exclude'), extensions: tr('Extensions'), caseSensitive: tr('Case sensitive'), wordBoundary: tr('Whole word'),
+    contextBefore: tr('Context before'), contextAfter: tr('Context after'), limit: tr('Limit'), maxResults: tr('Max results'), maxDepth: tr('Max depth'),
+    executable: tr('Executable'), arguments: tr('Arguments'), cwd: tr('Working directory'), workingDirectory: tr('Working directory'), timeoutMs: tr('Timeout'),
+    startLine: tr('Start line'), lineCount: tr('Line count'), maxCharacters: tr('Max characters'), range: tr('Range'), revision: tr('Revision'), staged: tr('Staged'), stat: tr('Stats'),
+    source: tr('Source'), destination: tr('Destination'), recursive: tr('Recursive'), dryRun: tr('Dry run'), overwrite: tr('Overwrite'), conflictPolicy: tr('Conflict policy'),
+  };
+  const hidden = new Set(['content', 'oldText', 'newText', 'patch', 'dataBase64', 'contentRef', 'expectedPreview', 'environment']);
+  const preferred = ['query', 'pattern', 'path', 'patternMode', 'mode', 'include', 'exclude', 'extensions', 'caseSensitive', 'wordBoundary', 'contextBefore', 'contextAfter', 'limit', 'maxResults', 'maxDepth', 'executable', 'arguments', 'cwd', 'workingDirectory', 'timeoutMs', 'startLine', 'lineCount', 'maxCharacters', 'range', 'revision', 'staged', 'stat', 'source', 'destination', 'recursive', 'dryRun', 'overwrite', 'conflictPolicy'];
+  const keys = preferred.filter((key) => key in input && !hidden.has(key));
+  const technical = new Set(['path', 'source', 'destination', 'cwd', 'workingDirectory', 'executable', 'pattern', 'query']);
+  for (const key of keys) {
+    const value = input[key];
+    if (value === undefined || value === null || value === '') continue;
+    const text = formatInputDetail(value, key);
+    if (text) details.push({ label: labels[key] || humanToolName(key), value: text, code: technical.has(key) });
+  }
+  return details.slice(0, 16);
+}
+
+function formatInputDetail(value: unknown, key = ''): string {
+  if (typeof value === 'boolean') return value ? tr('Yes') : tr('No');
+  if (typeof value === 'number') return key === 'timeoutMs' ? friendlyDuration(value) : /bytes/i.test(key) ? friendlyBytes(value) : /context|line|maxDepth/i.test(key) ? `${formatAppNumber(value)} ${appLocale().startsWith('vi') ? 'dòng' : 'lines'}` : formatFriendlyNumber(value);
+  if (typeof value === 'string') return truncate(value, 1200);
+  if (Array.isArray(value)) return truncate(value.map((item) => formatInputDetail(item)).filter(Boolean).join(', '), 1600);
+  const entries = Object.entries(asObject(value)).filter(([, item]) => item !== undefined && item !== null && item !== '');
+  return truncate(entries.slice(0, 8).map(([childKey, item]) => `${friendlyInputLabel(childKey)}: ${formatInputDetail(item, childKey)}`).join(' · '), 1800);
+}
+
+function friendlyInputLabel(key: string) {
+  const labels: Record<string, string> = {
+    timeoutMs: tr('Timeout'), maxBytesRead: tr('Max bytes read'), maxBytesWritten: tr('Max bytes written'), maxFiles: tr('Max files'), maxOpenFiles: tr('Max open files'),
+    start: tr('Start'), limit: tr('Limit'), unit: tr('Unit'), enabled: tr('Enabled'), min: tr('Minimum'), max: tr('Maximum'),
+  };
+  return labels[key] || humanToolName(key).replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function formatFriendlyNumber(value: number) { return value >= 1000 && value % 1000 === 0 ? formatAppNumber(value) : String(value); }
+function friendlyDuration(ms: number) { return ms >= 1000 && ms % 1000 === 0 ? `${formatAppNumber(ms / 1000)} ${appLocale().startsWith('vi') ? 'giây' : 'seconds'}` : `${formatAppNumber(ms)} ms`; }
+function friendlyBytes(bytes: number) { return bytes >= 1_048_576 ? `${(bytes / 1_048_576).toFixed(bytes % 1_048_576 ? 1 : 0)} MB` : bytes >= 1024 ? `${(bytes / 1024).toFixed(bytes % 1024 ? 1 : 0)} KB` : `${formatAppNumber(bytes)} B`; }
 
 export function activityOutput(activity: ToolActivity) {
   if (activity.output === undefined) return activity.error ? activity.error : '';

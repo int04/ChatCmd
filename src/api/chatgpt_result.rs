@@ -104,6 +104,7 @@ pub(super) async fn bridge_result(
     )
     .await
     .map_err(super::storage_problem)?;
+    guard_conversation_binding(&mut transaction, &task_id, result_conversation_id).await?;
     let mcp_authoritative = crate::chatgpt_transcript::mcp_turn(
         &mut transaction,
         &task_id,

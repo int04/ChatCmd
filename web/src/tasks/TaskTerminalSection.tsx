@@ -37,6 +37,7 @@ export function TaskTerminalSection({ taskId, turnId }: { taskId: string; turnId
         workingDirectory: typeof payload?.workingDirectory === 'string' ? payload.workingDirectory : undefined,
         createdAtUtc: typeof payload?.createdAtUtc === 'string' ? payload.createdAtUtc : event.occurredAt,
         busy: false,
+        inputAllowed: true,
         lastSequence: typeof payload?.lastSequence === 'number' ? payload.lastSequence : 0,
       };
       setTerminals((current) => [next, ...current.filter((item) => item.id !== id)]);
@@ -56,7 +57,8 @@ export function TaskTerminalSection({ taskId, turnId }: { taskId: string; turnId
     const id = typeof input?.sessionId === 'string' ? input.sessionId : typeof output?.sessionId === 'string' ? output.sessionId : undefined;
     if (!id) return;
     const busy = event.type === 'tool_call';
-    setTerminals((current) => current.map((item) => item.id === id ? { ...item, busy } : item));
+    const inputAllowed = !busy || (tool === 'shell_wait' && input?.allowUserInput === true);
+    setTerminals((current) => current.map((item) => item.id === id ? { ...item, busy, inputAllowed } : item));
   }, [taskId, turnId]);
   useRealtime(handleRealtime);
 
@@ -138,14 +140,14 @@ function TaskTerminalModal({ terminal, onClose }: { terminal: Session; onClose: 
     return () => { cancelled = true; };
   }, [ready, sessionId]);
 
-  useEffect(() => { if (terminalRef.current) terminalRef.current.options.disableStdin = Boolean(terminal.busy); }, [terminal.busy]);
+  useEffect(() => { if (terminalRef.current) terminalRef.current.options.disableStdin = Boolean(terminal.busy) && terminal.inputAllowed !== true; }, [terminal.busy, terminal.inputAllowed]);
   useEffect(() => { const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); }; window.addEventListener('keydown', onKey); return () => window.removeEventListener('keydown', onKey); }, [onClose]);
 
   return <div className="modal-backdrop task-terminal-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <div className="task-terminal-modal" role="dialog" aria-modal="true" aria-label={tr('Terminal')}>
       <header className="task-terminal-modal-toolbar"><div><TerminalSquare /><span><strong>{terminal.shell ?? tr('Terminal')}</strong><code>{sessionId}</code></span></div><div><StatusBadge state={terminal.status ?? 'offline'} /><button className="plain-icon" type="button" onClick={onClose} aria-label={tr('Close')}><X /></button></div></header>
       <ProblemBanner message={problem} clear={() => setProblem('')} />
-      <section className="mac-terminal-window task-terminal-window"><header className="mac-terminal-titlebar"><div className="mac-traffic-lights"><i /><i /><i /></div><strong>{terminal.workingDirectory ?? tr('Terminal')}</strong><div className="mac-terminal-metrics"><span>PID {terminal.processId ?? '—'}</span><span><Cpu />{terminal.cpuPercent == null ? '—' : `${terminal.cpuPercent.toFixed(1)}%`}</span><span><HardDrive />{formatBytes(terminal.memoryBytes)}</span></div></header><div className="xterm-host task-terminal-xterm" ref={hostRef} /><footer className="mac-terminal-footer"><span>{terminal.busy ? tr('The Agent is currently using this terminal. Input is temporarily locked.') : tr('Interactive input is enabled for this live terminal.')}</span></footer></section>
+      <section className="mac-terminal-window task-terminal-window"><header className="mac-terminal-titlebar"><div className="mac-traffic-lights"><i /><i /><i /></div><strong>{terminal.workingDirectory ?? tr('Terminal')}</strong><div className="mac-terminal-metrics"><span>PID {terminal.processId ?? '—'}</span><span><Cpu />{terminal.cpuPercent == null ? '—' : `${terminal.cpuPercent.toFixed(1)}%`}</span><span><HardDrive />{formatBytes(terminal.memoryBytes)}</span></div></header><div className="xterm-host task-terminal-xterm" ref={hostRef} /><footer className="mac-terminal-footer"><span>{terminal.busy && terminal.inputAllowed !== true ? tr('The Agent is currently using this terminal. Input is temporarily locked.') : tr('Interactive input is enabled for this live terminal.')}</span></footer></section>
     </div>
   </div>;
 }

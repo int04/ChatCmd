@@ -157,6 +157,12 @@ pub(super) async fn persist_browser_completion(
             "The browser request must be bound to a task before completion.",
         )
     })?;
+    super::chatgpt_support::guard_conversation_binding(
+        &mut transaction,
+        &task_id,
+        completion.conversation_id,
+    )
+    .await?;
     let turn_id = row.get::<String, _>("turn_id");
     let user_content = row.get::<String, _>("user_content");
     let submitted = row.get::<String, _>("submitted_content");

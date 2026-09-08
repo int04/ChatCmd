@@ -8,6 +8,7 @@
   let bootstrapUntil = 0;
   let bootstrapPath = '';
   let probeJob = null;
+  const leases = new Set();
   let version = 0;
   let fallbackFrames = 0;
   const current = () => !stopped && globalThis.ChatCmdRuntime.current(owner);
@@ -18,13 +19,13 @@
     const owned = Boolean(request && !request.resultReported && (!request.observer || request.observer.active));
     const bootstrap = Date.now() < bootstrapUntil && (location.pathname === bootstrapPath
       || ((bootstrapPath === '/' || /\/project$/.test(bootstrapPath)) && /\/c\//.test(location.pathname)));
-    const active = !forceIdle && (owned || bootstrap);
+    const active = !forceIdle && (owned || bootstrap || leases.size > 0);
     document.dispatchEvent(new CustomEvent('chatcmd:render-pulse', {
       detail: JSON.stringify({ version: 1, path: location.pathname, active }),
     }));
-    // Before the first user bubble mounts, the native observer has no request to poll.
-    // A short user-gesture lease closes that gap without waking all idle chat tabs.
-    if (bootstrap && document.visibilityState === 'hidden' && probeJob === null) {
+    // Hidden tabs need periodic pulses while a request/bootstrap/explicit workflow lease is active.
+    // ChatCmdCaptureClock delegates the deadline to the MV3 worker when page timers are throttled.
+    if (active && document.visibilityState === 'hidden' && probeJob === null) {
       probeJob = clock.later(() => { probeJob = null; pulse(); }, 250);
     }
   }
@@ -49,11 +50,17 @@
     bootstrapPath = location.pathname;
     pulse();
   }
+  function setLease(name, enabled) {
+    if (!current() || typeof name !== 'string' || !name) return;
+    if (enabled) leases.add(name); else leases.delete(name);
+    pulse();
+  }
   function visibility() { pulse(); }
   function pageHide() { pulse(true); bootstrapUntil = 0; }
   function stop() {
     if (stopped) return;
     pulse(true); stopped = true;
+    leases.clear();
     if (probeJob !== null) clock.cancel(probeJob);
     document.removeEventListener('chatcmd:render-status', status);
     document.removeEventListener('visibilitychange', visibility);
@@ -64,7 +71,7 @@
   document.addEventListener('visibilitychange', visibility);
   for (const name of ['keydown', 'click', 'submit']) document.addEventListener(name, submitted, true);
   window.addEventListener('pagehide', pageHide);
-  globalThis.ChatCmdRenderBridge = Object.freeze({ pulse, stop, get version() { return version; },
+  globalThis.ChatCmdRenderBridge = Object.freeze({ pulse, setLease, stop, get version() { return version; },
     get fallbackFrames() { return fallbackFrames; } });
   pulse();
 })();

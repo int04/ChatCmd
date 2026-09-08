@@ -49,16 +49,14 @@ async function integrated(t) {
     assert.equal(source.state.clicks, 1);
     source.answer(BODY + '\n' + source.protocol.marker('HANDOFF-END', value.id));
     source.probe(worker.serverJob());
-    source.advance(2501);
-    await worker.tick();
-    assert.equal(worker.serverJob().phase, 'saving_handoff');
-    assert.equal(worker.serverJob().handoffText, BODY);
+    source.advance(1201);
     await worker.tick();
     assert.equal(worker.serverJob().phase, 'opening_new_chat');
+    assert.equal(worker.serverJob().handoffText, BODY);
+    assert.ok(destination, 'destination opens in the same worker flight after the durable handoff checkpoints');
   }
   async function openDestination() {
     await saveHandoff();
-    await worker.tick();
     assert.ok(destination);
     assert.equal(destination.state.clicks, 0);
     assert.ok(worker.shared.tabs.some((tab) => tab.id === 7), 'source stays until destination is attached');
@@ -76,10 +74,8 @@ test('real content-worker round trip saves exact handoff, preserves task/model, 
   assert.equal(dest.state.clicks, 1);
   assert.deepEqual(dest.state.models, [env.value.oldModel]);
   assert.equal(env.worker.serverJob().newConversationId, null);
-  await env.worker.tick(); // Discover canonical URL via real RESUME marker.
+  await env.worker.tick(); // Persist canonical identity, re-probe it, then complete in the same worker flight.
   assert.equal(env.worker.serverJob().newConversationId, 'destination-canonical');
-  assert.equal(env.worker.serverJob().phase, 'opening_new_chat');
-  await env.worker.tick(); // Complete only after identity was durable.
   const completed = env.worker.serverJob();
   assert.equal(completed.phase, 'completed');
   assert.equal(completed.taskId, env.value.taskId);
@@ -142,8 +138,7 @@ test('actual destination click with lost response recovers via exact user marker
 test('lost final checkpoint response finishes browser cleanup after restart without duplicate dispatch', async (t) => {
   const env = await integrated(t);
   const dest = await env.openDestination();
-  await env.worker.tick();
-  await env.worker.tick();
+  await env.worker.tick(); // Dispatch resume; the next tick can commit completion.
   env.worker.shared.afterCheckpoint = async (patch) => {
     if (patch.phase === 'completed') {
       env.worker.shared.afterCheckpoint = null;
@@ -184,7 +179,7 @@ test('parallel tasks retain independent prompts, capture ownership and persisten
     assert.equal(page.state.clicks, 1);
     page.answer(BODY + '\n' + value.taskId + '\n' + page.protocol.marker('HANDOFF-END', value.id));
     page.probe(worker.serverJob(value.id));
-    page.advance(2501);
+    page.advance(1201);
   }
   await Promise.all(jobs.map((value) => worker.run(value.id)));
   await worker.restart();

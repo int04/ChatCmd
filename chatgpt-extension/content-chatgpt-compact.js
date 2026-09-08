@@ -6,6 +6,7 @@
   const dom = globalThis.ChatCmdConversationDom;
   const transcript = globalThis.ChatCmdTranscript;
   const documentToken = crypto.randomUUID();
+  const HANDOFF_STABLE_MS = 1200;
   let currentJob = null;
   let ownedConversationId = null;
   let disposed = false;
@@ -16,6 +17,7 @@
   let panel;
   let pageUrl = location.href;
   const isCurrent = () => !disposed && controller?.current();
+  const setRenderLease = (active) => globalThis.ChatCmdRenderBridge?.setLease?.('compact', active);
   // ProseMirror represents newlines as <p>/<div>/<br>, so textContent alone
   // joins paragraphs and incorrectly rejects the prompt we just inserted.
   function composerText(node) {
@@ -62,9 +64,13 @@
   }
   function show(job) {
     if (!isCurrent()) return;
-    if (!job || protocol.terminal(job)) { currentJob = null; panel?.remove(); panel = null; return; }
+    if (!job || protocol.terminal(job)) {
+      currentJob = null; ownedConversationId = null; setRenderLease(false);
+      panel?.remove(); panel = null; return;
+    }
     currentJob = job;
     ownedConversationId = transcript.conversationId();
+    setRenderLease(true);
     const composer = controller.findComposer();
     const anchor = composer?.closest('form') || composer?.parentElement;
     if (!anchor?.parentElement) return;
@@ -107,7 +113,7 @@
       text = parts.map((part) => part.content).join('\n\n');
     }
     if (text !== stableText || dom.findStopButton()) { stableText = text; stableSince = Date.now(); }
-    const handoff = text && Date.now() - stableSince >= 2500 ? protocol.handoffText(text, job.id) : null;
+    const handoff = text && Date.now() - stableSince >= HANDOFF_STABLE_MS ? protocol.handoffText(text, job.id) : null;
     const canonicalUrl = new URL(location.href);
     canonicalUrl.hash = ''; canonicalUrl.search = '';
     return { documentToken, conversationId: transcript.conversationId(), conversationUrl: canonicalUrl.href,
@@ -132,7 +138,10 @@
     if (!isCurrent() || !ownsPage(job, kind)) return { ready: false };
     composer = controller.findComposer();
     if (!composer || composerText(composer) !== text) throw new Error('Bản nháp đã thay đổi trong khi chuẩn bị. Nội dung mới của bạn được giữ nguyên.');
-    if (!promptMatches(composer, prompt)) controller.setComposerText(composer, prompt);
+    if (!promptMatches(composer, prompt)) {
+      controller.setComposerText(composer, prompt);
+      globalThis.ChatCmdRenderBridge?.pulse();
+    }
     // Let the worker poll while React enables/replaces Send. Rewriting on each poll
     // would restart that update and a page timer may be suspended in a hidden tab.
     return { ready: promptMatches(controller.findComposer(), prompt) && Boolean(readySendButton()), documentToken };
@@ -155,6 +164,7 @@
       // No await between the last identity/draft check and the irreversible click.
       dispatched.add(key); // Never click twice in this document, even before the marker appears.
       button.click();
+      globalThis.ChatCmdRenderBridge?.pulse();
       composer.blur();
       return { sent: true };
     } finally { dispatching = false; }
@@ -200,6 +210,7 @@
   }
   chrome.runtime.onMessage.addListener(listener);
   function dispose() {
+    currentJob = null; ownedConversationId = null; setRenderLease(false);
     disposed = true; panel?.remove(); chrome.runtime.onMessage.removeListener(listener);
     window.removeEventListener('pageshow', wake); window.removeEventListener('popstate', wake);
   }
@@ -211,7 +222,10 @@
   // Reconcile with the durable worker after reload, BFCache restore and SPA navigation.
   function wake() {
     if (!isCurrent()) return;
-    if (pageUrl !== location.href) { pageUrl = location.href; currentJob = null; panel?.remove(); panel = null; }
+    if (pageUrl !== location.href) {
+      pageUrl = location.href; currentJob = null; ownedConversationId = null; setRenderLease(false);
+      panel?.remove(); panel = null;
+    }
     void globalThis.ChatCmdRuntime.sendMessage({ type: 'chatcmd-compact-wake' }).catch(() => {});
   }
   window.addEventListener('pageshow', wake);

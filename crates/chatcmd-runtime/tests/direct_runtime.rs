@@ -610,7 +610,7 @@ async fn cancellation_and_session_backpressure_are_explicit() {
 }
 
 #[tokio::test]
-async fn shell_absolute_external_working_directory_is_auto_allowed() {
+async fn shell_absolute_external_working_directory_requires_grant() {
     let workspace = tempfile::tempdir().expect("workspace directory");
     let external = tempfile::tempdir().expect("external directory");
     let runtime = runtime(workspace.path().to_path_buf(), 2);
@@ -619,13 +619,23 @@ async fn shell_absolute_external_working_directory_is_auto_allowed() {
         .canonicalize()
         .expect("canonical external directory");
 
-    let created = runtime
+    let denied = runtime
         .create(
-            &OperationContext::new("external-absolute", "agent", "shell_create"),
-            create_request(external.path().to_path_buf(), "external-absolute"),
+            &OperationContext::new("external-absolute-denied", "agent", "shell_create"),
+            create_request(external.path().to_path_buf(), "external-absolute-denied"),
         )
         .await
-        .expect("absolute external cwd must be auto-allowed");
+        .expect_err("absolute external cwd without a task path grant must be rejected");
+    assert_eq!(denied.code, "path_outside_allowed_scope");
+
+    let created = runtime
+        .create_with_additional_scopes(
+            &OperationContext::new("external-absolute-granted", "agent", "shell_create"),
+            create_request(external.path().to_path_buf(), "external-absolute-granted"),
+            &[external.path().to_path_buf()],
+        )
+        .await
+        .expect("explicit task path grant must allow the external cwd");
     assert_eq!(created.initial_working_directory, expected);
 
     runtime

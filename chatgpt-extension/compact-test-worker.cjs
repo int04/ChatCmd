@@ -49,6 +49,7 @@ async function workerFixture(t, shared = world()) {
     alarms: {
       onAlarm: event(), get: async (name) => clone(shared.alarms.get(name)),
       create: async (name, info) => { shared.alarms.set(name, clone(info)); },
+      clear: async (name) => shared.alarms.delete(name),
     },
     tabs: {
       onUpdated: event(), onReplaced: event(), onRemoved: event(),

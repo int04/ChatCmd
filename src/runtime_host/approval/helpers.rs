@@ -233,7 +233,7 @@ fn normalized_path(path: &Path) -> String {
 fn path_allowed(path: &Path, scopes: &[GrantPathScope]) -> bool {
     let path = normalized_path(path);
     scopes.iter().any(|scope| {
-        let scope_path = Path::new(&scope.path);
+        let scope_path = scope.canonical_path.as_deref().unwrap_or(&scope.path);
         let scope_still_bound = std::fs::canonicalize(scope_path).is_ok_and(|canonical| {
             normalized_path(&canonical) == scope.path && scope.identity == path_identity(&canonical)
         });

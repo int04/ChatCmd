@@ -243,6 +243,7 @@ async function handleProgress(message, tabId) {
       assistantContent: message.assistantContent,
     });
     await releaseRequest(message.requestId);
+    await forgetRecoveryRequest(message.requestId);
     return { stage: 'browser-completed', browserCompleted: result?.status === 'completed', hasFinalResponse: result?.hasFinalResponse === true };
   }
   if (message.stage === 'result') {
@@ -252,6 +253,7 @@ async function handleProgress(message, tabId) {
       errorMessage: message.errorMessage,
     });
     await releaseRequest(message.requestId);
+    await forgetRecoveryRequest(message.requestId);
     return { stage: 'result' };
   }
   throw new Error(`ChatGPT progress stage không được hỗ trợ: ${message.stage || 'missing'}.`);

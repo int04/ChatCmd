@@ -313,15 +313,28 @@ async fn persist_conversation_identity(
     else {
         return Ok(());
     };
+    let mut transaction = state
+        .repository
+        .pool()
+        .begin_with("BEGIN IMMEDIATE")
+        .await
+        .map_err(db_problem)?;
+    super::chatgpt_support::guard_conversation_binding(
+        &mut transaction,
+        child_task_id,
+        Some(conversation_id),
+    )
+    .await?;
     sqlx::query("INSERT INTO chatgpt_conversations(task_id,conversation_id,conversation_url,model,active_request_id,created_at_ms,updated_at_ms) VALUES(?,?,?,'Auto',NULL,?,?) ON CONFLICT(task_id) DO UPDATE SET conversation_id=excluded.conversation_id,conversation_url=excluded.conversation_url,model=excluded.model,updated_at_ms=excluded.updated_at_ms")
         .bind(child_task_id)
         .bind(conversation_id)
         .bind(conversation_url)
         .bind(now)
         .bind(now)
-        .execute(state.repository.pool())
+        .execute(&mut *transaction)
         .await
         .map_err(db_problem)?;
+    transaction.commit().await.map_err(db_problem)?;
     Ok(())
 }
 

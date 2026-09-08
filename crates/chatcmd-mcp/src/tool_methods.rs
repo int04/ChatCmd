@@ -17,7 +17,7 @@ macro_rules! tool_methods {
                 }
             )+
 
-            #[tool(description = "Create or reuse one child agent. Required: name, request. Optional delegation constraints: allowedFiles, allowedEffects, dependencies, acceptance, projectContextRef, instructionsVersion, and an optional read-only approvalGrant; these can only narrow server policy. approvalGrant is not a tool allowlist: use only distinct names from subagentPolicy.approvalGrant.allowedTools and an existing approved parent grant; never include Git/process or agent_* lifecycle tools. Omit it when no approved parent grant exists; normal per-operation policy still applies. The child returns a bounded report with files, symbols, changes, evidenceRefs, blockers, and workOutcome. Inspect dispatchMode: samplingTools/samplingText started sampling; extensionFallback remains pending, so wait without duplicating; existing reuses the child. Startup failure is structured status=failed with startupError.")]
+            #[tool(description = "Create or reuse one child agent. Required: name, request. Optional delegation constraints: allowedFiles, allowedEffects, dependencies, acceptance, projectContextRef, instructionsVersion, and an optional read-only approvalGrant; these can only narrow server policy. approvalGrant is not a tool allowlist: use only distinct names from subagentPolicy.approvalGrant.allowedTools and an existing approved parent grant; never include Git/process or agent_* lifecycle tools. Omit it when no approved parent grant exists; normal per-operation policy still applies. The child returns a bounded report with files, symbols, changes, evidenceRefs, blockers, and workOutcome. Inspect dispatchMode: samplingTools/samplingText started sampling; parentContinuation means browser fallback is disabled, so continue the delegated work in this parent conversation without opening another ChatGPT chat; existing reuses the child. Startup failure is structured status=failed with startupError.")]
             async fn agent_subagent_start(
                 &self,
                 Parameters(arguments): Parameters<SubagentStartArgs>,
@@ -63,7 +63,7 @@ tool_methods!(
     (
         shell_wait,
         ShellWaitArgs,
-        "Wait without killing the PTY when timeout expires. Required field: sessionId; optional timeoutMs."
+        "Wait without killing the PTY when timeout expires. Required field: sessionId; optional timeoutMs. Set allowUserInput=true only when the terminal has reached a password, confirmation, or other manual-input prompt and the local user should type directly; while that wait is active, stdin is yielded to the user. When the user submits a line, the wait returns early with completed=false and waitTimedOut=false so the Agent can read the new terminal output and continue. Default false."
     ),
     (
         shell_read,

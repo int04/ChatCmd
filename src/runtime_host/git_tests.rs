@@ -129,6 +129,6 @@ async fn git_status_uses_task_project_folder_when_cwd_is_omitted() {
     assert_eq!(error.code, "project_folder_required");
     assert_eq!(
         error.message,
-        "git cwd was omitted; provide the project folder or an explicit absolute working path"
+        "git cwd requires the task project folder unless an explicit absolute path is provided"
     );
 }

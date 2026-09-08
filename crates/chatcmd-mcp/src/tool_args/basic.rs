@@ -268,7 +268,10 @@ tool_args!(ShellWriteArgs {
 tool_args!(ShellWaitArgs {
     session_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    timeout_ms: Option<u64>
+    timeout_ms: Option<u64>,
+    /// Yield PTY stdin to the local user while this wait is active.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    allow_user_input: Option<bool>
 });
 tool_args!(ShellReadArgs {
     session_id: String,
