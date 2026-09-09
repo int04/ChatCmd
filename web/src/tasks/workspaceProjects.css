@@ -35,6 +35,10 @@
 .workspace-project-form label small{color:var(--subtle);font-size:9px;font-weight:500;line-height:1.5;overflow-wrap:anywhere}
 .workspace-project-form input{width:100%;min-height:45px;border:1px solid var(--border);border-radius:11px;background:var(--surface-2);padding:0 12px;color:var(--text);outline:0}
 .workspace-project-form input:focus{border-color:color-mix(in srgb,var(--accent) 58%,var(--border));box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 10%,transparent)}
+.workspace-project-link-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;align-items:center}
+.workspace-project-open-link{min-height:45px;display:inline-flex;align-items:center;justify-content:center;gap:7px;border:1px solid var(--border);border-radius:11px;background:var(--surface-2);padding:0 12px;color:var(--text);text-decoration:none;white-space:nowrap}
+.workspace-project-open-link:hover{border-color:color-mix(in srgb,var(--accent) 40%,var(--border));background:var(--surface-3)}
+.workspace-project-open-link svg{width:16px;height:16px;color:var(--accent)}
 .workspace-project-folder{width:100%;min-height:48px;display:flex;align-items:center;gap:10px;border:1px solid var(--border);border-radius:11px;background:var(--surface-2);padding:9px 12px;text-align:left;color:var(--text)}
 .workspace-project-folder:hover{border-color:color-mix(in srgb,var(--accent) 40%,var(--border));background:var(--surface-3)}
 .workspace-project-folder.empty{color:var(--muted)}

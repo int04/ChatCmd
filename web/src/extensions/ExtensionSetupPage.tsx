@@ -1,12 +1,11 @@
-import { CheckCircle2, ExternalLink, FolderOpen, Puzzle, RefreshCw, Settings2 } from 'lucide-react';
+import { CheckCircle2, Puzzle, RefreshCw, Settings2 } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
-import { api } from '../api';
 import {
   chatGptExtensionStatus,
   REQUIRED_CHATGPT_EXTENSION_VERSION,
   type ChatGptExtensionStatus,
 } from '../chatgptBridge';
-import { PageHeading, ProblemBanner } from '../components';
+import { PageHeading } from '../components';
 import { useAppLanguage } from '../i18n';
 import { extensionCopy } from './copy';
 
@@ -30,8 +29,6 @@ export function ExtensionSetupPage() {
   const { name: browserName, target: browserTarget } = browserDetails[browser];
   const [status, setStatus] = useState<ChatGptExtensionStatus>();
   const [checking, setChecking] = useState(false);
-  const [busyAction, setBusyAction] = useState<'browser' | 'folder'>();
-  const [error, setError] = useState('');
 
   useEffect(() => {
     let active = true;
@@ -52,19 +49,6 @@ export function ExtensionSetupPage() {
   const statusLabel = compatible ? copy.connected : status?.ready ? copy.outdated : copy.missing;
   const statusClass = compatible ? 'good' : 'warn';
 
-  const runAction = async (action: 'browser' | 'folder') => {
-    setBusyAction(action);
-    setError('');
-    try {
-      if (action === 'browser') await api.openBrowserExtensions(browser);
-      else await api.openChatGptExtensionFolder();
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setBusyAction(undefined);
-    }
-  };
-
   return <div className="extension-setup-page">
     <PageHeading
       eyebrow={copy.pageEyebrow}
@@ -72,8 +56,6 @@ export function ExtensionSetupPage() {
       body={copy.pageBody}
       actions={<span className={`status-badge ${statusClass}`}><i />{statusLabel}</span>}
     />
-    <ProblemBanner message={error} clear={() => setError('')} />
-
     <section className="extension-setup-grid">
       <article className="panel extension-setup-card">
         <header><span className="extension-setup-icon"><Puzzle /></span><div><small>{copy.currentVersion}</small><strong>{status?.extensionVersion || copy.notDetected}</strong></div></header>
@@ -85,11 +67,9 @@ export function ExtensionSetupPage() {
         <header><span className="extension-setup-icon"><Settings2 /></span><div><small>{copy.quickActions}</small><strong>{browserName}</strong></div></header>
         <div className="extension-quick-action">
           <div><code>{browserTarget}</code><span>{copy.openBrowserHint}</span></div>
-          <button type="button" className="button primary" disabled={busyAction === 'browser'} onClick={() => void runAction('browser')}><ExternalLink />{copy.openBrowser}</button>
         </div>
         <div className="extension-quick-action">
           <div><code>chatgpt-extension</code><span>{copy.openFolderHint}</span></div>
-          <button type="button" className="button secondary" disabled={busyAction === 'folder'} onClick={() => void runAction('folder')}><FolderOpen />{copy.openFolder}</button>
         </div>
       </article>
     </section>

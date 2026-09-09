@@ -133,6 +133,79 @@ async fn failing_commit_hook_preserves_the_preexisting_index() {
     assert_failure_preserves_index(&directory, "hook failure").await;
 }
 
+#[tokio::test]
+async fn all_scope_auto_stages_tracked_and_untracked_changes() {
+    let directory = staged_repository();
+    git(
+        directory.path(),
+        &["commit", "--quiet", "--message", "staged base"],
+    );
+    std::fs::write(directory.path().join("tracked.txt"), "updated\n").expect("update tracked");
+    std::fs::write(directory.path().join("new.txt"), "new\n").expect("write untracked");
+
+    let output = service(directory.path())
+        .commit_with_options(
+            directory.path(),
+            "auto stage all",
+            true,
+            &[],
+            &GitRunOptions::default(),
+            CancellationToken::new(),
+        )
+        .await
+        .expect("commit all");
+
+    assert_eq!(output.exit_code, Some(0), "output={output:?}");
+    assert_eq!(
+        git(directory.path(), &["show", "HEAD:tracked.txt"]),
+        "updated\n"
+    );
+    assert_eq!(git(directory.path(), &["show", "HEAD:new.txt"]), "new\n");
+    assert!(git(directory.path(), &["status", "--porcelain=v1"]).is_empty());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn all_scope_failed_hook_restores_index_after_auto_staging() {
+    let directory = staged_repository();
+    let index_before = git(directory.path(), &["diff", "--cached", "--binary"]);
+    std::fs::write(
+        directory.path().join("tracked.txt"),
+        "staged plus unstaged\n",
+    )
+    .expect("write unstaged tracked change");
+    std::fs::write(directory.path().join("new.txt"), "untracked\n").expect("write untracked");
+    let hook = directory.path().join(".git/hooks/pre-commit");
+    std::fs::write(&hook, "#!/bin/sh\nexit 1\n").expect("write hook");
+    use std::os::unix::fs::PermissionsExt as _;
+    let mut permissions = std::fs::metadata(&hook)
+        .expect("hook metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&hook, permissions).expect("make hook executable");
+
+    let output = service(directory.path())
+        .commit_with_options(
+            directory.path(),
+            "auto stage hook failure",
+            true,
+            &[],
+            &GitRunOptions::default(),
+            CancellationToken::new(),
+        )
+        .await
+        .expect("structured git failure");
+
+    assert_ne!(output.exit_code, Some(0));
+    assert_eq!(
+        git(directory.path(), &["diff", "--cached", "--binary"]),
+        index_before
+    );
+    let status = git(directory.path(), &["status", "--porcelain=v1"]);
+    assert!(status.contains("MM tracked.txt"));
+    assert!(status.contains("?? new.txt"));
+}
+
 #[cfg(any(unix, windows))]
 #[tokio::test]
 async fn symlinked_parent_is_rejected_without_reading_or_committing_outside_content() {

@@ -29,7 +29,7 @@ export const compactSteps = [
   { phase: 'opening_new_chat', label: 'Opening the new chat' },
 ] as const;
 
-export const compactConfirmation = 'Bạn có muốn tóm tắt context để mang sang cuộc trò chuyện mới không? (Sử dụng khi đoạn trò chuyện này bị chặn, hoặc muốn mở cuộc trò chuyện mà không mất nội dung đang trò chuyện)?';
+export const compactConfirmation = 'Do you want to summarize the context and carry it into a new conversation? Use this when the conversation is blocked or when you want to open a new conversation without losing the current context.';
 export const isCompactTerminal = (job: CompactJob) => job.phase === 'completed' || job.phase === 'cancelled';
 export const newestCompactFirst = (a: CompactJob, b: CompactJob) => b.createdAtMs - a.createdAtMs || b.updatedAtMs - a.updatedAtMs || a.id.localeCompare(b.id);
 
