@@ -7,6 +7,7 @@ mod artifact_tools;
 mod command_tools;
 mod filesystem_tools;
 mod helpers;
+mod path_scopes;
 mod shell_handoff;
 mod tool_authorization;
 
@@ -61,17 +62,22 @@ impl RuntimeHost {
         {
             task_path_scopes.push(project_folder.clone());
         }
+        let arguments = if filesystem_tool {
+            filesystem_dispatch::resolve_relative_paths(arguments, project_folder.as_deref())?
+        } else {
+            arguments
+        };
+        if filesystem_tool || tool.starts_with("git_") {
+            task_path_scopes.extend(path_scopes::argument_path_scopes(&arguments));
+            task_path_scopes.sort();
+            task_path_scopes.dedup();
+        }
         let scoped_workspace = if filesystem_tool || tool.starts_with("git_") {
             Some(self.workspace.with_additional_scopes(&task_path_scopes)?)
         } else {
             None
         };
         let workspace = scoped_workspace.as_ref().unwrap_or(&self.workspace);
-        let arguments = if filesystem_tool {
-            filesystem_dispatch::resolve_relative_paths(arguments, project_folder.as_deref())?
-        } else {
-            arguments
-        };
         let scoped_git = scoped_workspace
             .clone()
             .map(|workspace| self.git.with_workspace(workspace));
@@ -108,6 +114,12 @@ impl RuntimeHost {
                         .clone()
                         .ok_or_else(project_folder_required_for_shell)?,
                 };
+                let mut shell_scopes = task_path_scopes.clone();
+                if let Some(scope) = path_scopes::scope_for_path(&working_directory) {
+                    shell_scopes.push(scope);
+                    shell_scopes.sort();
+                    shell_scopes.dedup();
+                }
                 self.enable_shell_file_watcher(&context);
                 let info = self
                     .shell
@@ -122,7 +134,7 @@ impl RuntimeHost {
                             columns: input.columns,
                             rows: input.rows,
                         },
-                        &task_path_scopes,
+                        &shell_scopes,
                     )
                     .await?;
                 self.persist_shell_session(&context, &info).await?;

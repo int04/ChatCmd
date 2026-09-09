@@ -4,6 +4,7 @@ use chatcmd_runtime::{CommandRunRequest, OperationContext, RuntimeError, Runtime
 use serde_json::Value;
 
 use super::super::{RuntimeHost, parse, value};
+use super::path_scopes;
 
 impl RuntimeHost {
     pub(super) async fn dispatch_command_run(
@@ -19,7 +20,13 @@ impl RuntimeHost {
                 .map(|folder| folder.join(&input.cwd))
                 .ok_or_else(project_folder_required)?;
         }
-        let workspace = self.workspace.with_additional_scopes(task_path_scopes)?;
+        let mut scopes = task_path_scopes.to_vec();
+        if let Some(scope) = path_scopes::scope_for_path(&input.cwd) {
+            scopes.push(scope);
+            scopes.sort();
+            scopes.dedup();
+        }
+        let workspace = self.workspace.with_additional_scopes(&scopes)?;
         let command = self.command.with_workspace(workspace);
         value(command.run(context, input).await?)
     }

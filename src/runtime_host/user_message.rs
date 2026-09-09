@@ -11,7 +11,10 @@ use super::{RuntimeHost, invalid, now_ms, storage_error};
 
 #[path = "user_message_intent.rs"]
 mod intent;
+#[path = "user_message_paths.rs"]
+mod paths;
 use intent::{intent_hint, is_plan_mode_request};
+use paths::extract_explicit_absolute_paths;
 
 impl RuntimeHost {
     pub(super) async fn ensure_user_message_synced(
@@ -363,52 +366,6 @@ fn safe_id(prefix: &str, agent_id: &str, scope: &str) -> String {
         "{prefix}-{}",
         Uuid::new_v5(&Uuid::NAMESPACE_OID, material.as_bytes())
     )
-}
-
-fn extract_explicit_absolute_paths(content: &str) -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
-    let mut quoted = None::<(char, usize)>;
-    for (index, ch) in content.char_indices() {
-        if matches!(ch, '`' | '"' | '\'') {
-            if let Some((delimiter, start)) = quoted {
-                if delimiter == ch {
-                    candidates.push(&content[start..index]);
-                    quoted = None;
-                }
-            } else {
-                quoted = Some((ch, index + ch.len_utf8()));
-            }
-        }
-    }
-    candidates.extend(content.split_whitespace());
-
-    let mut unique = BTreeSet::new();
-    for candidate in candidates {
-        let cleaned = candidate.trim_matches(|ch: char| {
-            matches!(
-                ch,
-                '`' | '"' | '\'' | ',' | ';' | ':' | '(' | ')' | '[' | ']' | '{' | '}'
-            )
-        });
-        if cleaned.is_empty() {
-            continue;
-        }
-        let path = PathBuf::from(cleaned);
-        if !path.is_absolute() || !path.exists() {
-            continue;
-        }
-        let Ok(canonical) = path.canonicalize() else {
-            continue;
-        };
-        if canonical.parent().is_none() {
-            continue;
-        }
-        unique.insert(canonical);
-        if unique.len() >= 64 {
-            break;
-        }
-    }
-    unique.into_iter().collect()
 }
 
 fn same_user_message(payload_json: &str, content: &str) -> bool {
