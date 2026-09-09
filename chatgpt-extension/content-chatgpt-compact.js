@@ -59,8 +59,14 @@
     if (matches.length !== 1) return { duplicate: matches.length > 1, user: null };
     const node = matches[0];
     if (!promptsFor(job, kind).some((text) => comparable(read(node)) === comparable(text))) return { duplicate: false, user: null };
-    const id = node.getAttribute('data-message-id') || node.querySelector('[data-message-id]')?.getAttribute('data-message-id');
-    return { duplicate: false, user: id ? { node, id } : null, last: roots.at(-1) === node };
+    // ChatGPT does not consistently expose data-message-id on rendered user turns.
+    // The unique exact operation prompt already proves ownership; the id is only an
+    // opaque same-document token used by read/close recovery, so synthesize one when
+    // the public DOM omits a native message id instead of leaving compact stuck forever.
+    const nativeId = node.getAttribute('data-message-id') || node.querySelector('[data-message-id]')?.getAttribute('data-message-id');
+    const index = roots.indexOf(node);
+    const id = nativeId || `dom-compact:${job.id}:${index}`;
+    return { duplicate: false, user: { node, id }, last: roots.at(-1) === node };
   }
   function show(job) {
     if (!isCurrent()) return;

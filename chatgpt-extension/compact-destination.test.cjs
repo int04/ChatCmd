@@ -34,6 +34,36 @@ test('destination recovery uses the durable resume marker, not a recycled tab id
   assert.deepEqual(env.shared.calls.map((call) => call.tabId), [41, 50]);
 });
 
+test('known destination identity falls back to the exact RESUME marker when Chrome URL is stale', async (t) => {
+  const env = await destinationWorker(t, {
+    newConversationId: 'destination-owned', newConversationUrl: 'https://chatgpt.com/c/destination-owned',
+  }, { destinationTabId: 9, destinationOpened: true, destinationSend: 'dispatched-unresolved' });
+  const tabs = [{ id: 9, url: 'https://chatgpt.com/' }];
+  env.shared.route = async (id, message) => {
+    assert.equal(message.type, 'chatcmd-compact-locate');
+    assert.equal(message.kind, 'RESUME');
+    return { ok: true, markerFound: id === 9 };
+  };
+  const found = await env.api.locateCompactDestination(env.serverJob(), env.record(), tabs);
+  assert.equal(found.id, 9);
+});
+
+test('opening_new_chat completes when Chrome still reports home for the already attached destination', async (t) => {
+  const env = await destinationWorker(t, {
+    newConversationId: 'destination-owned', newConversationUrl: 'https://chatgpt.com/c/destination-owned',
+  }, { destinationTabId: 9, destinationOpened: true, destinationSend: 'dispatched-unresolved' });
+  env.shared.tabs = [{ id: 9, url: 'https://chatgpt.com/' }];
+  const probe = receiver({ markerFound: true, generating: false, conversationId: 'destination-owned',
+    conversationUrl: 'https://chatgpt.com/c/destination-owned' });
+  env.shared.route = (id, message) => message.type === 'chatcmd-compact-locate'
+    ? { ok: true, markerFound: id === 9 } : probe(id, message);
+  await env.tick();
+  assert.equal(env.serverJob().phase, 'completed');
+  assert.equal(env.serverJob().taskId, job().taskId);
+  assert.equal(env.shared.creates.length, 0);
+  assert.equal(env.sends().length, 0);
+});
+
 test('unrelated blank tabs are never adopted when persisted destination binding is absent', async (t) => {
   const env = await destinationWorker(t);
   const tabs = [{ id: 70, url: 'https://chatgpt.com/' }, { id: 71, url: 'https://chatgpt.com/g/g-p-p/project' }];
@@ -256,18 +286,25 @@ test('completed job with closed destination waits to resume work until that exac
   assert.equal(env.shared.creates.length, 0);
 });
 
-test('provisional conversation id and superseded resume cannot complete task rebinding', async (t) => {
-  for (const observation of [
-    { markerFound: true, conversationId: 'WEB:provisional', conversationUrl: 'https://chatgpt.com/c/WEB:provisional' },
-    { markerFound: true, superseded: true, conversationId: 'destination-owned', conversationUrl: 'https://chatgpt.com/c/destination-owned' },
-  ]) {
-    const env = await destinationWorker(t);
-    env.shared.route = receiver(observation);
-    await assert.rejects(env.tick());
-    assert.equal(env.serverJob().phase, 'opening_new_chat');
-    assert.equal(env.shared.effects.filter((entry) => entry.type === 'bind').length, 0);
-    assert.equal(env.sends().length, 0);
-  }
+test('provisional conversation id cannot complete task rebinding', async (t) => {
+  const env = await destinationWorker(t);
+  env.shared.route = receiver({ markerFound: true, conversationId: 'WEB:provisional',
+    conversationUrl: 'https://chatgpt.com/c/WEB:provisional' });
+  await assert.rejects(env.tick());
+  assert.equal(env.serverJob().phase, 'opening_new_chat');
+  assert.equal(env.shared.effects.filter((entry) => entry.type === 'bind').length, 0);
+  assert.equal(env.sends().length, 0);
+});
+
+test('a user turn after the exact RESUME marker does not deadlock destination attachment', async (t) => {
+  const env = await destinationWorker(t);
+  env.shared.route = receiver({ markerFound: true, superseded: true, generating: false,
+    conversationId: 'destination-owned', conversationUrl: 'https://chatgpt.com/c/destination-owned' });
+  await env.tick();
+  assert.equal(env.serverJob().phase, 'completed');
+  assert.equal(env.serverJob().newConversationId, 'destination-owned');
+  assert.equal(env.serverJob().taskId, job().taskId);
+  assert.equal(env.sends().length, 0);
 });
 
 for (const choice of [false, undefined]) {

@@ -5,14 +5,22 @@ async function locateCompactDestination(job, record, tabs) {
   });
   if (tagged.length > 1) throw new Error('Có nhiều tab nhận cùng handoff. Không tự chọn để tránh gắn nhầm cuộc trò chuyện.');
   if (tagged[0]) return tagged[0];
-  if (job.newConversationId) return tabs.find((tab) => conversationIdFromUrl(tab.url || '') === job.newConversationId) || null;
+  if (job.newConversationId) {
+    const canonical = tabs.find((tab) => conversationIdFromUrl(tab.url || '') === job.newConversationId);
+    if (canonical) return canonical;
+  }
   const bound = tabs.find((tab) => tab.id === record.destinationTabId);
-  if (bound && !conversationIdFromUrl(bound.url || '') && isChatGptUrl(bound.url)) return bound;
-  // A browser restart changes tab ids and ChatGPT may remove the hash. The user marker
-  // is durable evidence; a title, latest answer or coincidentally blank tab is not.
+  if (bound && !job.newConversationId && !conversationIdFromUrl(bound.url || '') && isChatGptUrl(bound.url)) return bound;
+  // Chrome's tab URL can lag behind ChatGPT's SPA navigation, and a browser restart can
+  // also change tab ids after the operation hash is removed. The exact RESUME user marker
+  // is durable ownership evidence, so use it even when the browser still reports a home/
+  // project URL or when a known canonical id is temporarily absent from chrome.tabs.query.
   const matches = [];
   for (const tab of tabs) {
-    if (!tab.id || !conversationIdFromUrl(tab.url || '') || sameConversationUrl(tab.url, job.oldConversationUrl)) continue;
+    const conversationId = conversationIdFromUrl(tab.url || '');
+    const mayBeStaleDestination = Boolean(job.newConversationId || tab.id === record.destinationTabId);
+    if (!tab.id || !isChatGptUrl(tab.url) || sameConversationUrl(tab.url, job.oldConversationUrl)
+      || (!conversationId && !mayBeStaleDestination)) continue;
     try {
       const found = await chrome.tabs.sendMessage(tab.id, { type: 'chatcmd-compact-locate', job, kind: 'RESUME' });
       if (found?.ok && found.markerFound) matches.push(tab);
@@ -44,7 +52,10 @@ async function compactDestination(job, record, tabs) {
   record = await saveCompactRecord(job.id, { ...record, destinationTabId: destination.id, destinationOpened: true });
   const probe = await compactSend(destination.id, 'probe', job, 'RESUME');
   if (probe.markerFound && probe.conversationId && !isProvisionalConversationId(probe.conversationId)) {
-    if (probe.superseded) throw new Error('Chat mới đã nhận thêm nội dung trước khi chuyển task. Hãy kiểm tra tab trước khi tiếp tục.');
+    // A later user turn does not invalidate the destination. It is the normal race when the
+    // user continues immediately after ChatGPT acknowledges RESUME but before the worker's
+    // final checkpoint. The exact operation marker still proves this conversation owns the
+    // handoff; RuntimeHost separately prevents local tools from running until attachment.
     // Publish the recoverable destination identity first, then immediately re-probe the
     // same tab instead of sleeping for another scheduler tick before the final commit.
     let confirmed = probe;
@@ -53,7 +64,6 @@ async function compactDestination(job, record, tabs) {
         newConversationUrl: probe.conversationUrl, detail: null });
       confirmed = await compactSend(destination.id, 'probe', job, 'RESUME');
     }
-    if (confirmed.superseded) throw new Error('Chat mới đã nhận thêm nội dung trước khi chuyển task. Hãy kiểm tra tab trước khi tiếp tục.');
     if (!confirmed.markerFound || confirmed.conversationId !== job.newConversationId
       || isProvisionalConversationId(confirmed.conversationId) || confirmed.generating) return;
     job = await compactCheckpoint(record, job, { phase: 'completed', newConversationId: confirmed.conversationId,
