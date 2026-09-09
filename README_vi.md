@@ -30,7 +30,7 @@ ChatCMD là một cầu nối tự host giữa các AI client tương thích MCP
   <a href="https://github.com/int04/ChatCmd/releases/latest/download/ChatCMD-macos-intel.zip"><img alt="Tải ChatCMD cho macOS Intel" src="https://img.shields.io/badge/Download-macOS%20Intel-000000?style=for-the-badge&amp;logo=apple&amp;logoColor=white"></a>
 </p>
 
-[Xem release notes và mã SHA-256](https://github.com/int04/ChatCmd/releases/latest).
+[Xem ghi chú phát hành và mã SHA-256](https://github.com/int04/ChatCmd/releases/latest).
 
 Các gói macOS được build tự động hiện dùng ad-hoc signing và chưa được Apple notarize.
 
@@ -91,20 +91,20 @@ Sub-Agent đặc biệt hữu ích khi cần chia code inspection chạy song so
 
 Trong khi ChatGPT vẫn đang xử lý, ChatCMD cho phép bạn chuẩn bị instruction tiếp theo mà không cần đợi response hiện tại hoàn tất. Task composer có hai chế độ gửi khác nhau:
 
-- **Gửi thêm tin nhắn (`Queue another message`):** đưa message vào hàng đợi ChatGPT bền vững của task. ChatCMD giữ message ở trạng thái chờ cho đến khi conversation hiện tại idle, browser bridge đã kết nối, đúng tab ChatGPT đang mở và UI sẵn sàng nhận prompt mới; sau đó message đầu tiên trong queue sẽ được gửi tự động.
-- **Gửi ngay tin nhắn (`Send immediate message`):** đánh dấu message là `immediate`, cho phép AI nhận nó ở MCP call kế tiếp trong cùng conversation thay vì phải đợi cửa sổ gửi qua browser bình thường. Nếu active turn kết thúc trước thời điểm đó, message vẫn được giữ lại như một queued follow-up thông thường thay vì bị mất.
+- **Gửi thêm tin nhắn:** đưa message vào hàng đợi ChatGPT bền vững của task. ChatCMD giữ message ở trạng thái chờ cho đến khi conversation hiện tại idle, browser bridge đã kết nối, đúng tab ChatGPT đang mở và UI sẵn sàng nhận prompt mới; sau đó message đầu tiên trong queue sẽ được gửi tự động.
+- **Gửi ngay tin nhắn:** đánh dấu message là `immediate`, cho phép AI nhận nó ở MCP call kế tiếp trong cùng conversation thay vì phải đợi cửa sổ gửi qua browser bình thường. Nếu active turn kết thúc trước thời điểm đó, message vẫn được giữ lại như một queued follow-up thông thường thay vì bị mất.
 
 Các follow-up đang xếp hàng có thể quản lý trực tiếp trên task UI: đổi thứ tự, sửa, xóa, nâng từ queued lên immediate hoặc hạ từ immediate về queue bình thường. Realtime queue event giữ panel luôn đồng bộ khi message được consume, và auto-send sẽ tạm dừng trong lúc compact/resume, bridge synchronization, một send khác hoặc một edit đang diễn ra.
 
 Tính năng này hữu ích khi bạn đã biết bước tiếp theo cần làm: có thể xếp sẵn nhiều instruction để thực hiện tuần tự hoặc chèn một instruction ưu tiên cao vào MCP workflow hiện tại mà không cần ngồi chờ từng ChatGPT turn sẵn sàng.
 
-### Compact & resume now
+### Thu gọn và tiếp tục ngay
 
-Các hội thoại ChatGPT dài dần sẽ khó tiếp tục ổn định khi usable context gần đầy. **Compact & resume now** tạo một handoff bền vững từ conversation hiện tại sang một conversation mới, đồng thời vẫn giữ nguyên ChatCMD task, project, permission, timeline, queued message và local task identity.
+Các hội thoại ChatGPT dài dần sẽ khó tiếp tục ổn định khi usable context gần đầy. **Thu gọn và tiếp tục ngay** tạo một handoff bền vững từ conversation hiện tại sang một conversation mới, đồng thời vẫn giữ nguyên ChatCMD task, project, permission, timeline, queued message và local task identity.
 
 Cơ chế hoạt động:
 
-1. **Luôn xác nhận trước khi gửi bất cứ thứ gì.** Chọn **Compact & resume now** sẽ mở confirmation dialog. Checkbox tùy chọn **Tiếp tục công việc sau khi compact xong** luôn mặc định chưa chọn mỗi lần mở; để trống nếu chỉ muốn chuyển context, hoặc bật lên nếu muốn tự động tiếp tục công việc sau khi replacement chat được attach.
+1. **Luôn xác nhận trước khi gửi bất cứ thứ gì.** Chọn **Thu gọn và tiếp tục ngay** sẽ mở confirmation dialog. Checkbox tùy chọn **Tiếp tục công việc sau khi compact xong** luôn mặc định chưa chọn mỗi lần mở; để trống nếu chỉ muốn chuyển context, hoặc bật lên nếu muốn tự động tiếp tục công việc sau khi replacement chat được attach.
 2. **Đóng băng task tại một ranh giới an toàn.** ChatCMD chặn local MCP operation mới trên task đang compact, đợi các operation đã được admit chạy xong và dừng generation ChatGPT hiện tại trước khi yêu cầu source conversation tạo handoff. Draft hiện có và queued follow-up message vẫn được giữ nguyên, không bị ghi đè.
 3. **Viết và persist handoff trước.** Source ChatGPT conversation nhận một structured handoff request bao gồm requirement, correction, trạng thái completed so với planned, chuỗi bug/fix/evidence, delegated work, environment detail, blocker và task còn lại. Public answer tạo ra được lưu bền vững trong SQLite trước khi ChatCMD được phép mở hoặc commit replacement conversation.
 4. **Bootstrap một ChatGPT conversation mới.** ChatCMD mở conversation mới và gửi no-tools resume/bootstrap message chứa handoff đã lưu. Hệ thống đợi đến khi quan sát được canonical ChatGPT conversation identity thực tế cùng resume marker của destination trước khi thay đổi active conversation binding của task.
@@ -114,11 +114,11 @@ Cơ chế hoạt động:
 
 UI hiển thị trực tiếp các phase: chuẩn bị, viết handoff, lưu handoff và mở chat mới. Compact state được persist độc lập với browser worker, vì vậy extension reload, tab đóng/mở lại, Send enable chậm hoặc response thất lạc đều có thể reconcile từ SQLite kết hợp browser dispatch metadata thay vì gửi lại prompt một cách mù quáng. Các lần compact hoàn tất vẫn xuất hiện trong **Lịch sử thu gọn ngữ cảnh**, kèm reference tới source conversation đã archive và replacement conversation.
 
-Compact & resume được thiết kế theo nguyên tắc fail-closed: nếu ChatCMD không thể chứng minh prompt nào đã được gửi, conversation nào đã tạo handoff hoặc destination nào đang sở hữu resume marker, hệ thống sẽ dừng ở trạng thái có thể recovery thay vì âm thầm làm mất context hoặc bind task vào sai chat. Xem [docs/COMPACT_RESUME.md](docs/COMPACT_RESUME.md) để biết đầy đủ persistence, identity, recovery và dispatch model.
+Tính năng thu gọn và tiếp tục được thiết kế theo nguyên tắc fail-closed: nếu ChatCMD không thể chứng minh prompt nào đã được gửi, conversation nào đã tạo handoff hoặc destination nào đang sở hữu resume marker, hệ thống sẽ dừng ở trạng thái có thể recovery thay vì âm thầm làm mất context hoặc bind task vào sai chat. Xem [docs/COMPACT_RESUME.md](docs/COMPACT_RESUME.md) để biết đầy đủ persistence, identity, recovery và dispatch model.
 
 ### Giao diện quản trị
 
-- Runtime dashboard cho app, database, MCP listener, task, terminal, approval và client health.
+- Bảng điều khiển hệ thống cho ứng dụng, cơ sở dữ liệu, MCP listener, tác vụ, terminal, phê duyệt và trạng thái client.
 - Task rail hiểu project, có search, pagination, rename, delete, unread counter và nhóm theo workspace.
 - Task timeline giàu thông tin với Markdown, tool output, syntax highlighting, file-change summary, side-by-side diff, trạng thái sub-agent và stop control.
 - Hàng đợi approval cho conversation, activity và plan question.
@@ -132,11 +132,11 @@ Compact & resume được thiết kế theo nguyên tắc fail-closed: nếu Cha
 
 Package `chatgpt-extension/` tùy chọn có thể sử dụng tab `chatgpt.com` đã đăng nhập sẵn để:
 
-- bắt đầu hoặc tiếp tục browser conversation từ ChatCMD;
+- bắt đầu hoặc tiếp tục hội thoại trên trình duyệt từ ChatCMD;
 - chọn model label đang hiển thị trên ChatGPT;
 - queue, reorder, edit, gửi ngay hoặc xóa follow-up message;
 - dừng generation đang chạy;
-- relay final response và conversation identity về local task;
+- chuyển tiếp phản hồi cuối và danh tính hội thoại về tác vụ cục bộ;
 - hiển thị approval cho local conversation, tool và plan question ngay trong ChatGPT;
 - cung cấp browser fallback cho công việc Sub-Agent.
 
@@ -201,10 +201,10 @@ Sau đó mở <http://127.0.0.1:5173>. Vite proxy `/api` và `/ws` sang Rust ser
 
 ## Kết nối một MCP client
 
-1. Mở **Plugin list** trong ChatCMD và chọn **Create new Plugin connection**.
+1. Mở **Danh sách plugin** trong ChatCMD và chọn **Tạo kết nối plugin mới**.
 2. Đặt cho profile một tên dễ nhận biết.
 3. Chỉ chọn các nhóm tool mà client đó thực sự cần, sau đó lưu profile.
-4. Với MCP client cục bộ, chọn **Create new access code** từ menu của profile và lưu endpoint dùng một lần ngay lập tức.
+4. Với MCP client cục bộ, chọn **Tạo mã truy cập mới** từ menu của profile và lưu endpoint dùng một lần ngay lập tức.
 5. Thêm URL đó vào client dưới dạng Streamable HTTP MCP server. Không cần header `Authorization`; secret chính là segment cuối của URL path.
 
 Để kết nối một AI chạy trên web qua public endpoint của riêng bạn, làm theo [docs/PLUGIN_SETUP.md](docs/PLUGIN_SETUP.md). Tài liệu này bao gồm cấu hình tunnel/reverse proxy, flow ChatGPT developer mode và cài đặt browser extension tùy chọn.
@@ -283,8 +283,8 @@ Xem [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) để biết contributor workflow
 <table>
   <tr>
     <td width="50%" valign="top">
-      <strong>Task workspace và phản hồi cuối</strong><br>
-      <a href="docs/images/screenshots/task-workspace.png"><img src="docs/images/screenshots/task-workspace.png" alt="ChatCMD task workspace hiển thị phản hồi ChatGPT đã hoàn tất và chi tiết task"></a>
+      <strong>Không gian làm việc của tác vụ và phản hồi cuối</strong><br>
+      <a href="docs/images/screenshots/task-workspace.png"><img src="docs/images/screenshots/task-workspace.png" alt="Không gian làm việc tác vụ ChatCMD hiển thị phản hồi ChatGPT đã hoàn tất và chi tiết tác vụ"></a>
     </td>
     <td width="50%" valign="top">
       <strong>Timeline hoạt động của agent</strong><br>
@@ -307,14 +307,14 @@ Xem [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) để biết contributor workflow
       <a href="docs/images/screenshots/subagent-orchestration-complete.png"><img src="docs/images/screenshots/subagent-orchestration-complete.png" alt="Timeline ChatCMD hiển thị hai Sub-Agent task đã hoàn tất"></a>
     </td>
     <td width="50%" valign="top">
-      <strong>Dialog câu hỏi trong Plan mode</strong><br>
-      <a href="docs/images/screenshots/plan-question-dialog.png"><img src="docs/images/screenshots/plan-question-dialog.png" alt="Dialog câu hỏi Plan mode của ChatCMD với hai lựa chọn và tùy chọn câu trả lời tùy chỉnh"></a>
+      <strong>Hộp thoại câu hỏi trong chế độ lập kế hoạch</strong><br>
+      <a href="docs/images/screenshots/plan-question-dialog.png"><img src="docs/images/screenshots/plan-question-dialog.png" alt="Hộp thoại câu hỏi ở chế độ lập kế hoạch của ChatCMD với hai lựa chọn và tùy chọn câu trả lời tùy chỉnh"></a>
     </td>
   </tr>
   <tr>
     <td width="50%" valign="top">
-      <strong>Task Plan mode và approval control</strong><br>
-      <a href="docs/images/screenshots/plan-mode-task.png"><img src="docs/images/screenshots/plan-mode-task.png" alt="ChatCMD task trong Plan mode với reasoning history và execution approval control"></a>
+      <strong>Tác vụ ở chế độ lập kế hoạch và điều khiển phê duyệt</strong><br>
+      <a href="docs/images/screenshots/plan-mode-task.png"><img src="docs/images/screenshots/plan-mode-task.png" alt="Tác vụ ChatCMD ở chế độ lập kế hoạch với lịch sử suy luận và điều khiển phê duyệt thực thi"></a>
     </td>
     <td width="50%" valign="top">
       <strong>Phản hồi plan đã hoàn tất</strong><br>
