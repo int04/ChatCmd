@@ -27,28 +27,28 @@ export function DataSettings() {
 
 type DataRetention = '1h' | '5h' | '10h' | '1d' | '3d' | '5d' | '10d' | 'off';
 const DATA_RETENTION_OPTIONS: Array<{ value: DataRetention; label: string }> = [
-  { value: '1h', label: '1 giờ' }, { value: '5h', label: '5 giờ' }, { value: '10h', label: '10 giờ' },
-  { value: '1d', label: '1 ngày' }, { value: '3d', label: '3 ngày' }, { value: '5d', label: '5 ngày' },
-  { value: '10d', label: '10 ngày' }, { value: 'off', label: 'Tắt' },
+  { value: '1h', label: '1 hour' }, { value: '5h', label: '5 hours' }, { value: '10h', label: '10 hours' },
+  { value: '1d', label: '1 day' }, { value: '3d', label: '3 days' }, { value: '5d', label: '5 days' },
+  { value: '10d', label: '10 days' }, { value: 'off', label: 'Off' },
 ];
 
 function DatabasePanel() {
   const [value, setValue] = useState<DatabaseDiagnostics>(); const [loading, setLoading] = useState(true); const [deleting, setDeleting] = useState(false); const [retention, setRetention] = useState<DataRetention>('1d'); const [savingRetention, setSavingRetention] = useState(false); const [error, setError] = useState('');
   const refresh = useCallback(async () => { setLoading(true); setError(''); try { const [diagnostics, settings] = await Promise.all([api.databaseDiagnostics(), api.settings()]); setValue(diagnostics); setRetention(settings.dataRetention ?? '1d'); } catch (reason) { setError(reason instanceof Error ? reason.message : tr('Could not load database information.')); } finally { setLoading(false); } }, []);
   const deleteAll = useCallback(async () => {
-    if (!window.confirm('Bạn có chắc chắn muốn xóa toàn bộ dữ liệu phát sinh trong quá trình sử dụng không?')) return;
+    if (!window.confirm(tr('Are you sure you want to delete all data generated while using the app?'))) return;
     setDeleting(true); setError('');
     try {
       await api.deleteAllUserData();
       await refresh();
       window.dispatchEvent(new Event('chatcmd:conversations-cleared'));
-    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Không thể xóa toàn bộ dữ liệu.'); }
+    } catch (reason) { setError(reason instanceof Error ? reason.message : tr('Could not delete all data.')); }
     finally { setDeleting(false); }
   }, [refresh]);
   const changeRetention = useCallback(async (next: DataRetention) => {
     const previous = retention; setRetention(next); setSavingRetention(true); setError('');
     try { const settings = await api.settings(); await api.saveSettings({ ...settings, dataRetention: next }); }
-    catch (reason) { setRetention(previous); setError(reason instanceof Error ? reason.message : 'Không thể lưu thời hạn tự động xóa dữ liệu.'); }
+    catch (reason) { setRetention(previous); setError(reason instanceof Error ? reason.message : tr('Could not save the automatic data retention period.')); }
     finally { setSavingRetention(false); }
   }, [retention]);
   useEffect(() => { void refresh(); }, [refresh]);
@@ -59,8 +59,8 @@ function DatabasePanel() {
     <PanelHeader title="SQLite" subtitle={value.path} loading={loading} refresh={refresh} />
     <div className="data-metrics"><Metric label={tr('Tables')} value={formatNumber(value.tableCount)} /><Metric label={tr('Rows')} value={formatNumber(value.totalRows)} /><Metric label={tr('Database size')} value={formatBytes(value.fileSizeBytes)} /><Metric label={tr('Used pages')} value={`${formatBytes(value.usedSizeBytes)} / ${formatNumber(value.pageCount)} pages`} /></div>
     {error && <div className="data-panel-error"><AlertTriangle />{error}</div>}
-    <div className="data-danger-zone"><div><strong>Xóa toàn bộ dữ liệu ngay</strong><span>Xóa toàn bộ dữ liệu phát sinh trong quá trình sử dụng, giữ nguyên agent, thư mục dự án và cấu hình hệ thống.</span></div><button className="button danger" type="button" disabled={deleting} onClick={() => void deleteAll()}>{deleting ? <LoaderCircle className="spin" /> : <Trash2 />}{deleting ? tr('Deleting…') : 'Xóa toàn bộ dữ liệu ngay'}</button></div>
-    <div className="data-retention-setting"><div><strong>Tự động xóa dữ liệu sau</strong><span>Xóa dữ liệu thường xuyên giúp ứng dụng hoạt động mượt mà hơn.</span></div><select value={retention} disabled={savingRetention} onChange={(event) => void changeRetention(event.target.value as DataRetention)}>{DATA_RETENTION_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></div>
+    <div className="data-danger-zone"><div><strong>{tr('Delete all data now')}</strong><span>{tr('Delete all data generated while using the app while keeping agents, project folders, and system configuration.')}</span></div><button className="button danger" type="button" disabled={deleting} onClick={() => void deleteAll()}>{deleting ? <LoaderCircle className="spin" /> : <Trash2 />}{deleting ? tr('Deleting…') : tr('Delete all data now')}</button></div>
+    <div className="data-retention-setting"><div><strong>{tr('Automatically delete data after')}</strong><span>{tr('Deleting data regularly helps the app run more smoothly.')}</span></div><select value={retention} disabled={savingRetention} onChange={(event) => void changeRetention(event.target.value as DataRetention)}>{DATA_RETENTION_OPTIONS.map((option) => <option key={option.value} value={option.value}>{tr(option.label)}</option>)}</select></div>
     <div className="data-table-wrap"><table className="data-table"><thead><tr><th>{tr('Table')}</th><th>{tr('Rows')}</th></tr></thead><tbody>{value.tables.map((table) => <tr key={table.name}><td><code>{table.name}</code></td><td>{formatNumber(table.rowCount)}</td></tr>)}</tbody></table></div>
     <div className="data-storage-note">{tr('Page size')}: {formatBytes(value.pageSizeBytes)} · {tr('Free pages')}: {formatNumber(value.freePageCount)}</div>
   </div>;

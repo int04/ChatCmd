@@ -15,10 +15,10 @@ export function CompactAction({ disabled = false }: { disabled?: boolean }) {
   const unavailable = disabled || compact.blocked;
   return <>
     <button type="button" className="compact-action" disabled={unavailable} onClick={() => { setContinueAfterCompact(false); setConfirming(true); }}>
-      <Layers3 aria-hidden="true" />Compact &amp; resume now
+      <Layers3 aria-hidden="true" />{tr('Compact & resume now')}
     </button>
     {/* Keep the confirmation outside the footer's clipping/stacking context and composer form. */}
-    {confirming && createPortal(<Modal title="Compact & resume now" description={compactConfirmation} className="compact-confirmation" close={() => setConfirming(false)}>
+    {confirming && createPortal(<Modal title={tr('Compact & resume now')} description={tr(compactConfirmation)} className="compact-confirmation" close={() => setConfirming(false)}>
       <label className="compact-continue-option">
         <input type="checkbox" checked={continueAfterCompact} disabled={unavailable} aria-describedby="compact-continue-hint" onChange={(event) => setContinueAfterCompact(event.target.checked)} />
         <span>{compactText('continueAfterCompact')}</span>
@@ -41,7 +41,7 @@ export function CompactStatusCard() {
   if (!compact) return null;
   const job = compact.active;
   // Completed/cancelled jobs belong in history, not in an always-visible progress panel.
-  if (!job) return compact.error ? <section aria-label="Compact & resume error">
+  if (!job) return compact.error ? <section aria-label={tr('Compact & resume error')}>
     <p className="compact-error" role="alert"><CircleAlert aria-hidden="true" />{compact.error}</p>
     <button type="button" className="button secondary" onClick={() => void compact.refresh(true)}>{tr('Retry')}</button>
   </section> : null;
@@ -50,18 +50,18 @@ export function CompactStatusCard() {
   const terminal = phase === 'completed' || phase === 'cancelled';
   const currentLabel = phaseLabel(phase);
   const detail = !job ? compactText('checking') : job.detail || compactText(phase === 'completed' ? 'completedDetail' : phase === 'cancelled' ? 'cancelledDetail' : phase);
-  return <section className={`compact-status-card ${phase}`} aria-label="Compact & resume progress">
+  return <section className={`compact-status-card ${phase}`} aria-label={tr('Compact & resume progress')}>
     <header className="compact-status-heading">
       <span className="compact-status-icon" aria-hidden="true">{phase === 'completed' ? <Check /> : terminal ? <Layers3 /> : <LoaderCircle className="compact-spinner" />}</span>
-      <div><h3>ChatGPT is writing the handoff</h3><span>{terminal ? currentLabel : compactText('preserved')}</span></div>
+      <div><h3>{tr('ChatGPT is writing the handoff')}</h3><span>{terminal ? currentLabel : compactText('preserved')}</span></div>
     </header>
-    <ol className="compact-steps" aria-label="Compact & resume steps">
+    <ol className="compact-steps" aria-label={tr('Compact & resume steps')}>
       {compactSteps.map((step, index) => {
         const done = phase === 'completed' || (!terminal && index < activeIndex);
         const current = !terminal && index === activeIndex;
         return <li key={step.phase} data-state={done ? 'done' : current ? 'current' : 'pending'} aria-current={current ? 'step' : undefined}>
           <span className="compact-step-marker" aria-hidden="true">{done ? <Check /> : index + 1}</span>
-          <span>{step.label}{done && <span className="sr-only"> — {compactText('completed')}</span>}</span>
+          <span>{tr(step.label)}{done && <span className="sr-only"> — {compactText('completed')}</span>}</span>
         </li>;
       })}
     </ol>
@@ -72,8 +72,8 @@ export function CompactStatusCard() {
     {compact.error && <p className="compact-error" role="alert"><CircleAlert aria-hidden="true" />{compact.error}</p>}
     <div className="compact-status-actions">
       {compact.active && <>
-        {compactReferenceUrl(compact.active.oldConversationUrl) && <a className="button secondary" href={compactReferenceUrl(compact.active.oldConversationUrl)!} target="_blank" rel="noopener noreferrer">Mở lại chat ChatGPT cũ</a>}
-        {compactReferenceUrl(compact.active.newConversationUrl ?? '') && <a className="button secondary" href={compactReferenceUrl(compact.active.newConversationUrl ?? '')!} target="_blank" rel="noopener noreferrer">Mở lại chat ChatGPT mới</a>}
+        {compactReferenceUrl(compact.active.oldConversationUrl) && <a className="button secondary" href={compactReferenceUrl(compact.active.oldConversationUrl)!} target="_blank" rel="noopener noreferrer">{tr('Reopen old ChatGPT conversation')}</a>}
+        {compactReferenceUrl(compact.active.newConversationUrl ?? '') && <a className="button secondary" href={compactReferenceUrl(compact.active.newConversationUrl ?? '')!} target="_blank" rel="noopener noreferrer">{tr('Reopen new ChatGPT conversation')}</a>}
         <button type="button" className="button secondary" disabled={compact.busy || compact.waking} onClick={() => void compact.resume()}>
           <RefreshCw aria-hidden="true" />{compactText('resume')}
         </button>
@@ -86,5 +86,6 @@ export function CompactStatusCard() {
 
 export function phaseLabel(phase: CompactPhase): string {
   if (phase === 'completed' || phase === 'cancelled') return compactText(phase);
-  return compactSteps.find((step) => step.phase === phase)?.label ?? phase;
+  const label = compactSteps.find((step) => step.phase === phase)?.label;
+  return label ? tr(label) : phase;
 }

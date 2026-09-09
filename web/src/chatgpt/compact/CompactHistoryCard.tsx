@@ -9,8 +9,8 @@ import { compactReferenceUrl } from './types';
 export function CompactHistoryCard() {
   const compact = useCompact();
   if (!compact) return null;
-  return <section className="compact-history-card" aria-label="Lịch sử thu gọn ngữ cảnh">
-    <header><History aria-hidden="true" /><h2>Lịch sử thu gọn ngữ cảnh</h2><span className="compact-history-count">{compact.history.length}</span></header>
+  return <section className="compact-history-card" aria-label={tr('Context compact history')}>
+    <header><History aria-hidden="true" /><h2>{tr('Context compact history')}</h2><span className="compact-history-count">{compact.history.length}</span></header>
     {!compact.ready && !compact.error && <p className="compact-history-empty">{compactText('checking')}</p>}
     {compact.ready && compact.history.length === 0 && <div className="compact-history-empty"><Layers3 aria-hidden="true" /><p>{compactText('empty')}</p></div>}
     {compact.error && <div className="compact-history-error"><p>{compact.error}</p><button type="button" onClick={() => void compact.refresh()}>{tr('Retry')}</button></div>}
