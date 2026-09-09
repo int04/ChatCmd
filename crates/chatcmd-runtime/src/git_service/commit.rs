@@ -5,7 +5,11 @@ use crate::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
-use std::{collections::BTreeSet, path::Path};
+use std::{
+    collections::BTreeSet,
+    io::ErrorKind,
+    path::{Path, PathBuf},
+};
 use tokio_util::sync::CancellationToken;
 
 mod inspection;
@@ -27,6 +31,71 @@ pub struct GitCommitPreview {
     pub unmerged_paths: Vec<String>,
     pub scope_paths: Vec<String>,
     pub all: bool,
+}
+
+struct IndexSnapshot {
+    path: PathBuf,
+    bytes: Option<Vec<u8>>,
+}
+
+impl IndexSnapshot {
+    async fn capture(
+        service: &GitService,
+        cwd: &Path,
+        options: &GitRunOptions,
+        cancellation: CancellationToken,
+    ) -> RuntimeResult<Self> {
+        let output = inspect_output(
+            service,
+            cwd,
+            &["rev-parse", "--git-path", "index"],
+            options,
+            cancellation,
+        )
+        .await?;
+        let raw_path = output.stdout.trim();
+        if raw_path.is_empty() {
+            return Err(RuntimeError::new(
+                "git_index_snapshot_failed",
+                "git returned an empty index path",
+            ));
+        }
+        let path = {
+            let candidate = PathBuf::from(raw_path);
+            if candidate.is_absolute() {
+                candidate
+            } else {
+                cwd.join(candidate)
+            }
+        };
+        let bytes = match tokio::fs::read(&path).await {
+            Ok(bytes) => Some(bytes),
+            Err(error) if error.kind() == ErrorKind::NotFound => None,
+            Err(error) => {
+                return Err(RuntimeError::new(
+                    "git_index_snapshot_failed",
+                    error.to_string(),
+                ));
+            }
+        };
+        Ok(Self { path, bytes })
+    }
+
+    async fn restore(&self) -> RuntimeResult<()> {
+        match self.bytes.as_ref() {
+            Some(bytes) => tokio::fs::write(&self.path, bytes)
+                .await
+                .map_err(|error| RuntimeError::new("git_index_restore_failed", error.to_string())),
+            None => match tokio::fs::remove_file(&self.path).await {
+                Ok(()) => Ok(()),
+                Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(RuntimeError::new(
+                    "git_index_restore_failed",
+                    error.to_string(),
+                )),
+            },
+        }
+    }
 }
 
 pub(super) async fn preview(
@@ -97,6 +166,29 @@ pub(super) async fn execute(
     }
     validate_preview(&current)?;
 
+    let index_snapshot = if all {
+        let snapshot = IndexSnapshot::capture(service, cwd, options, cancellation.clone()).await?;
+        let stage_args = vec!["add".to_owned(), "--all".to_owned(), "--".to_owned()];
+        let mut staged = match service
+            .run_owned(cwd, &stage_args, options, cancellation.clone())
+            .await
+        {
+            Ok(output) => output,
+            Err(error) => {
+                snapshot.restore().await?;
+                return Err(error);
+            }
+        };
+        if !succeeded(&staged) {
+            snapshot.restore().await?;
+            set_commit_phase(&mut staged, "staging", false, None);
+            return Ok(staged);
+        }
+        Some(snapshot)
+    } else {
+        None
+    };
+
     let mut args = vec![
         "commit".to_owned(),
         "--message".to_owned(),
@@ -107,12 +199,28 @@ pub(super) async fn execute(
         args.push("--".to_owned());
         args.extend(current.scope_paths.iter().cloned());
     }
-    let mut committed = service
+    let mut committed = match service
         .run_owned(cwd, &args, options, cancellation.clone())
-        .await?;
+        .await
+    {
+        Ok(output) => output,
+        Err(error) => {
+            if let Some(snapshot) = index_snapshot.as_ref() {
+                let observed_head =
+                    commit_hash(service, cwd, options, CancellationToken::new()).await?;
+                if observed_head == current.head {
+                    snapshot.restore().await?;
+                }
+            }
+            return Err(error);
+        }
+    };
     if !succeeded(&committed) {
         let observed_head = commit_hash(service, cwd, options, CancellationToken::new()).await?;
         let changed = observed_head != current.head;
+        if !changed && let Some(snapshot) = index_snapshot.as_ref() {
+            snapshot.restore().await?;
+        }
         set_commit_phase(
             &mut committed,
             if changed {
@@ -158,11 +266,6 @@ fn validate_preview(preview: &GitCommitPreview) -> RuntimeResult<()> {
         )));
     }
     if preview.all {
-        if !preview.unstaged_paths.is_empty() || !preview.untracked_paths.is_empty() {
-            return Err(scope_conflict(
-                "all=true requires every intended change to be staged before preview; automatic staging is disabled to preserve the index on commit failure",
-            ));
-        }
         return Ok(());
     }
     let selected = |path: &str| {

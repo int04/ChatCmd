@@ -263,7 +263,7 @@ tool_methods!(
     (
         git_commit,
         GitCommitArgs,
-        "Create or preview a Git commit without shell interpolation. Required field: message and exactly one explicit scope: non-empty normalized paths or all=true. all defaults to false, is mutually exclusive with paths, commits only already-staged changes, and fails closed while unstaged or untracked changes exist. Set previewOnly=true for a side-effect-free GitCommitPreview; pass it back as expectedPreview to bind execution to the previewed HEAD/index/worktree bytes. The runtime refuses stale previews, staged paths outside scope, ambiguous path spellings, and selected paths with mixed staged/unstaged changes."
+        "Create or preview a Git commit without shell interpolation. Required field: message and exactly one explicit scope: non-empty normalized paths or all=true. all defaults to false and is mutually exclusive with paths. With all=true, the runtime previews the full worktree, snapshots the existing Git index, stages all tracked/untracked changes with git add --all, and restores the previous index if staging or commit fails before HEAD changes. Set previewOnly=true for a side-effect-free GitCommitPreview; pass it back as expectedPreview to bind execution to the previewed HEAD/index/worktree bytes. For path-scoped commits, the runtime refuses stale previews, staged paths outside scope, ambiguous path spellings, and selected paths with mixed staged/unstaged changes."
     ),
     (
         process_list,

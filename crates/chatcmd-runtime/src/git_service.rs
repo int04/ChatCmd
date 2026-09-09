@@ -291,7 +291,15 @@ impl GitService {
         options: &GitRunOptions,
         cancellation: CancellationToken,
     ) -> RuntimeResult<GitCommitPreview> {
-        commit::preview(self, cwd, all, paths, options, cancellation).await
+        let service = self.clone();
+        let cwd = cwd.to_path_buf();
+        let paths = paths.to_vec();
+        let options = options.clone();
+        tokio::spawn(async move {
+            commit::preview(&service, &cwd, all, &paths, &options, cancellation).await
+        })
+        .await
+        .map_err(commit_worker_error)?
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -305,17 +313,27 @@ impl GitService {
         options: &GitRunOptions,
         cancellation: CancellationToken,
     ) -> RuntimeResult<CommandOutput> {
-        commit::execute(
-            self,
-            cwd,
-            message,
-            all,
-            paths,
-            preview,
-            options,
-            cancellation,
-        )
+        let service = self.clone();
+        let cwd = cwd.to_path_buf();
+        let message = message.to_owned();
+        let paths = paths.to_vec();
+        let preview = preview.clone();
+        let options = options.clone();
+        tokio::spawn(async move {
+            commit::execute(
+                &service,
+                &cwd,
+                &message,
+                all,
+                &paths,
+                &preview,
+                &options,
+                cancellation,
+            )
+            .await
+        })
         .await
+        .map_err(commit_worker_error)?
     }
 
     async fn run(
@@ -402,6 +420,10 @@ fn validate_options(options: &GitRunOptions) -> RuntimeResult<()> {
 
 fn join_error(error: tokio::task::JoinError) -> RuntimeError {
     RuntimeError::new("git_parse_failed", error.to_string())
+}
+
+fn commit_worker_error(error: tokio::task::JoinError) -> RuntimeError {
+    RuntimeError::new("git_commit_worker_failed", error.to_string())
 }
 
 #[cfg(test)]
