@@ -1,4 +1,4 @@
-import { AlertTriangle, Bot, ChevronDown, ChevronUp, ExternalLink, FolderOpen, LayoutDashboard, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Power, Search, Settings, TerminalSquare, Trash2, Wrench } from 'lucide-react';
+import { AlertTriangle, Bot, ChevronDown, ChevronUp, ExternalLink, FolderOpen, LayoutDashboard, LoaderCircle, PanelLeftClose, PanelLeftOpen, Pencil, Plus, Power, Search, Settings, ShieldAlert, TerminalSquare, Trash2, Wrench } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent, type MouseEventHandler } from 'react';
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 
@@ -28,16 +28,33 @@ export function FunctionRail({ taskRailCollapsed, onTaskRailToggle }: { taskRail
   const [confirmExit, setConfirmExit] = useState(false);
   const [exiting, setExiting] = useState(false);
   const [exitError, setExitError] = useState('');
+  const [showAdminAction, setShowAdminAction] = useState(false);
+  const [confirmAdmin, setConfirmAdmin] = useState(false);
+  const [elevating, setElevating] = useState(false);
+  const [elevationError, setElevationError] = useState('');
   useEffect(() => {
     const openLogs = () => navigate('/settings?tab=data&section=extension');
     window.addEventListener('chatcmd:open-extension-logs', openLogs);
     return () => window.removeEventListener('chatcmd:open-extension-logs', openLogs);
   }, [navigate]);
+  useEffect(() => {
+    let active = true;
+    void api.elevationStatus()
+      .then((status) => { if (active) setShowAdminAction(status.supported && !status.elevated); })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, []);
   const exitApplication = async () => {
     if (exiting) return;
     setExiting(true); setExitError('');
     try { await api.exitApplication(); }
     catch (reason) { setExitError(reason instanceof Error ? reason.message : tr('Could not stop the application.')); setExiting(false); }
+  };
+  const restartElevated = async () => {
+    if (elevating) return;
+    setElevating(true); setElevationError('');
+    try { await api.restartElevated(); }
+    catch (reason) { setElevationError(reason instanceof Error ? reason.message : tr('Unable to restart ChatCMD as administrator.')); setElevating(false); }
   };
   return <>
     <nav className="function-rail" aria-label={tr('Application navigation')}>
@@ -46,9 +63,11 @@ export function FunctionRail({ taskRailCollapsed, onTaskRailToggle }: { taskRail
       <div className="function-rail-items">
         {menuItems.map(({ to, end, label, icon: Icon }) => <NavLink to={to} end={end} key={to} aria-label={tr(label)} title={tr(label)}><Icon /><span className="sr-only">{tr(label)}</span></NavLink>)}
         <button className="function-rail-action function-rail-exit" type="button" aria-label={tr('Stop application')} title={tr('Stop application')} onClick={() => { setExitError(''); setConfirmExit(true); }}><Power /><span className="sr-only">{tr('Stop application')}</span></button>
+        {showAdminAction && <button className="function-rail-action function-rail-admin" type="button" aria-label={tr('Run ChatCMD as administrator')} title={tr('Run ChatCMD as administrator')} onClick={() => { setElevationError(''); setConfirmAdmin(true); }}><ShieldAlert /><span className="sr-only">{tr('Run ChatCMD as administrator')}</span></button>}
       </div>
     </nav>
     {confirmExit && <Modal title={tr('Are you sure you want to stop the application?')} close={() => !exiting && setConfirmExit(false)} dangerous><div className="task-delete-warning"><AlertTriangle /><div><strong>{tr('Stop ChatCMD')}</strong><p>{tr('The local application will close immediately after you confirm.')}</p></div></div>{exitError && <p className="task-delete-error" role="alert">{exitError}</p>}<div className="modal-actions"><button className="button secondary" type="button" disabled={exiting} onClick={() => setConfirmExit(false)}>{tr('Cancel')}</button><button className="button danger" type="button" disabled={exiting} onClick={() => void exitApplication()}>{exiting ? tr('Stopping…') : tr('Stop application')}</button></div></Modal>}
+    {confirmAdmin && <Modal title={tr('Run ChatCMD as administrator?')} close={() => !elevating && setConfirmAdmin(false)}><div className="task-delete-warning"><ShieldAlert /><div><strong>{tr('Run ChatCMD as administrator')}</strong><p>{tr('ChatCMD will restart with administrator privileges after you confirm.')}</p></div></div>{elevationError && <p className="task-delete-error" role="alert">{elevationError}</p>}<div className="modal-actions"><button className="button secondary" type="button" disabled={elevating} onClick={() => setConfirmAdmin(false)}>{tr('Cancel')}</button><button className="button primary" type="button" disabled={elevating} onClick={() => void restartElevated()}>{elevating ? tr('Restarting…') : tr('Run as administrator')}</button></div></Modal>}
   </>;
 }
 
