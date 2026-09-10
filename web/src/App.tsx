@@ -5,7 +5,7 @@ import { api } from './api';
 import { AuthGate } from './auth/AuthGate';
 import { ExtensionSetupPage } from './extensions/ExtensionSetupPage';
 import { GlobalChatGptExtensionPrompt } from './extensions/GlobalChatGptExtensionPrompt';
-import { applyAppFont, applyTaskFontScale, DEFAULT_APP_FONT, DEFAULT_TASK_FONT_SCALE } from './fontPreferences';
+import { applyAppFont, applyTaskFontScale, applyUploadedFont, DEFAULT_APP_FONT, DEFAULT_TASK_FONT_SCALE } from './fontPreferences';
 import { useAppLanguage, tr } from './i18n';
 import { AgentsPage } from './pages/AgentsPage';
 import { DashboardPage } from './pages/DashboardPage';
@@ -105,7 +105,19 @@ function Shell() {
     previousPath.current = location.pathname;
     requestAnimationFrame(() => document.getElementById('main-content')?.focus({ preventScroll: true }));
   }, [location.pathname]);
-  useEffect(() => { try { const saved = JSON.parse(localStorage.getItem('chatcmd.preferences') ?? '{}') as { theme?: string; fontFamily?: string; taskFontScale?: number }; document.documentElement.dataset.theme = saved.theme ?? 'dark'; applyAppFont(saved.fontFamily ?? DEFAULT_APP_FONT); applyTaskFontScale(saved.taskFontScale ?? DEFAULT_TASK_FONT_SCALE); } catch { document.documentElement.dataset.theme = 'dark'; applyAppFont(DEFAULT_APP_FONT); applyTaskFontScale(DEFAULT_TASK_FONT_SCALE); } }, []);
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('chatcmd.preferences') ?? '{}') as { theme?: string; fontFamily?: string; fontSource?: string; taskFontScale?: number };
+      document.documentElement.dataset.theme = saved.theme ?? 'dark';
+      if (saved.fontSource === 'uploaded') void applyUploadedFont(saved.fontFamily ?? DEFAULT_APP_FONT).catch(() => applyAppFont(saved.fontFamily ?? DEFAULT_APP_FONT));
+      else applyAppFont(saved.fontFamily ?? DEFAULT_APP_FONT);
+      applyTaskFontScale(saved.taskFontScale ?? DEFAULT_TASK_FONT_SCALE);
+    } catch {
+      document.documentElement.dataset.theme = 'dark';
+      applyAppFont(DEFAULT_APP_FONT);
+      applyTaskFontScale(DEFAULT_TASK_FONT_SCALE);
+    }
+  }, []);
   return <div className={`shell${taskRailCollapsed ? ' task-rail-collapsed' : ''}`}><a className="skip-link" href="#main-content">{tr('Skip to content')}</a><FunctionRail taskRailCollapsed={taskRailCollapsed} onTaskRailToggle={toggleTaskRail} /><TaskRail open={open} onClose={closeRail} onDesktopCollapse={toggleTaskRail} />{open && <button className="scrim" aria-label={tr('Close navigation')} onClick={closeRail} />}<div className="content-shell"><header className="mobile-topbar"><button className="icon-button" aria-label={tr('Open navigation')} onClick={() => setOpen(true)}><Menu /></button><strong>ChatCMD</strong><span>{tr('Local')}</span></header><main id="main-content" className={location.pathname.startsWith('/tasks') ? 'tasks-main' : undefined} tabIndex={-1}><Outlet /></main></div></div>;
 }
 
