@@ -7,6 +7,9 @@ const labels = {
   capacity: ['The limit is shared by the entire Agent tree. A nested Agent works locally when all slots are occupied.', 'Giới hạn áp dụng cho toàn bộ cây Agent. Khi hết chỗ, Agent con xử lý tại chỗ thay vì gọi thêm Agent.'],
   header: ['Conversation header', 'Tiêu đề cuộc trò chuyện'],
   parent: ['Delegated by', 'Được giao bởi'],
+  preview: ['Preview conversation', 'Xem trước cuộc trò chuyện'],
+  previewError: ['Could not load conversation preview.', 'Không thể tải nội dung cuộc trò chuyện.'],
+  goToConversation: ['Go to conversation', 'Tới đoạn trò chuyện'],
 } as const;
 export function subagentLabel(key: keyof typeof labels) {
   return labels[key][getAppLanguage() === 'vi' ? 1 : 0];

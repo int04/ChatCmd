@@ -2,12 +2,13 @@ import { subagentLabel, subagentTreeRows } from './subagentPresentation';
 import { TurnThinkingSources } from './TurnThinkingSources';
 import { browserThinking, isBrowserEvent } from './chatGptThinking';
 import { BookOpen, Bot, CheckCircle2, ChevronDown, CircleAlert, CircleStop, Clock3, ExternalLink, FileCode2, FilePenLine, GitBranch, LoaderCircle, MessageSquareText, Search, TerminalSquare, Wrench } from 'lucide-react';
-import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ChatRichText } from './rich-text/ChatRichText';
 import { api } from '../api';
 import { Modal } from '../components';
 import { appLocale, formatAppNumber, tr } from '../i18n';
-import type { SubagentRun, TaskActivityDetail, TaskTurn, TimelineEvent } from '../types';
+import { useRealtime } from '../realtime';
+import type { SubagentRun, TaskActivityDetail, TaskDetail, TaskTurn, TimelineEvent } from '../types';
 import { ApprovalDecisionActions } from './ApprovalDecisionActions';
 import { CompletionQualityCard } from './CompletionQualityCard';
 import { StopActivityDialog } from './StopActivityDialog';
@@ -21,7 +22,9 @@ import {
   activityOutput,
   activityInputDetails,
   buildProcessBlocks,
+  buildTaskTurns,
   duration,
+  mergeLiveDetail,
   eventText,
   findCompletionSignal,
   findFinalResponse,
@@ -197,6 +200,7 @@ function SubagentList({ agents }: { agents: SubagentRun[] }) {
 }
 
 function SubagentItem({ agent }: { agent: SubagentRun }) {
+  const [previewOpen, setPreviewOpen] = useState(false);
   const pending = agent.status === 'pending';
   const running = agent.status === 'running';
   const failed = agent.status === 'failed';
@@ -207,11 +211,75 @@ function SubagentItem({ agent }: { agent: SubagentRun }) {
   const content = <>
     <span className={`turn-subagent-state ${agent.status}`} aria-hidden="true">{pending ? <Clock3 /> : running ? <LoaderCircle className="spin" /> : stopped ? <CircleStop /> : failed || timedOut || agent.status === 'interrupted' ? <CircleAlert /> : <CheckCircle2 />}</span>
     <span className="turn-subagent-copy"><strong>{agent.name}</strong><small title={agent.terminalReason}>{statusDetail}</small></span>
-    {agent.taskId && <ExternalLink className="turn-subagent-open" aria-hidden="true" />}
+    {agent.taskId && <MessageSquareText className="turn-subagent-open" aria-hidden="true" />}
   </>;
-  return agent.taskId
-    ? <a className={`turn-subagent ${agent.status}`} href={`/tasks/${encodeURIComponent(agent.taskId)}`} target="_blank" rel="noreferrer noopener" aria-label={`${agent.name} - ${statusLabel} - ${tr('Open in new tab')}`}>{content}</a>
-    : <div className={`turn-subagent ${agent.status}`} aria-label={`${agent.name} - ${statusLabel}`}>{content}</div>;
+  if (!agent.taskId) return <div className={`turn-subagent ${agent.status}`} aria-label={`${agent.name} - ${statusLabel}`}>{content}</div>;
+  return <>
+    <button type="button" className={`turn-subagent ${agent.status}`} onClick={() => setPreviewOpen(true)} aria-haspopup="dialog" aria-label={`${agent.name} - ${statusLabel} - ${subagentLabel('preview')}`}>{content}</button>
+    {previewOpen && <SubagentPreviewModal agent={agent} statusDetail={statusDetail} close={() => setPreviewOpen(false)} />}
+  </>;
+}
+
+function SubagentPreviewModal({ agent, statusDetail, close }: { agent: SubagentRun; statusDetail: string; close: () => void }) {
+  const taskId = agent.taskId!;
+  const taskHref = `/tasks/${encodeURIComponent(taskId)}`;
+  const [preview, setPreview] = useState<TaskDetail | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(true);
+  const [previewError, setPreviewError] = useState('');
+  const loadPreview = useCallback((showLoading = false) => {
+    if (showLoading) setPreviewLoading(true);
+    setPreviewError('');
+    return api.task(taskId)
+      .then((next) => setPreview((current) => current ? mergeSubagentPreviewSnapshot(next, current) : next))
+      .catch((reason) => setPreviewError(reason instanceof Error ? reason.message : subagentLabel('previewError')))
+      .finally(() => setPreviewLoading(false));
+  }, [taskId]);
+
+  useEffect(() => { void loadPreview(true); }, [loadPreview]);
+  useRealtime((event) => {
+    if (event.type === 'system.resync_required' || event.type === 'system.connected') { void loadPreview(); return; }
+    if (event.taskId === taskId) {
+      if (event.type.startsWith('subagent.')) { void loadPreview(); return; }
+      setPreview((current) => current ? mergeLiveDetail({ ...current, events: subagentPreviewEvents(current) }, [event]) : current);
+      return;
+    }
+    if (!event.taskId || !preview?.subagents?.some((child) => child.taskId === event.taskId)) return;
+    if (event.type.startsWith('subagent.') || event.type === 'status') void loadPreview();
+  });
+
+  return <Modal className="subagent-preview-modal" title={agent.name} description={statusDetail} close={close}>
+    <div className="subagent-preview-body">
+      {previewLoading && !preview
+        ? <div className="subagent-preview-state" role="status"><LoaderCircle className="spin" aria-hidden="true" /><span>{tr('Loading…')}</span></div>
+        : previewError && !preview
+          ? <div className="subagent-preview-state error" role="alert"><CircleAlert aria-hidden="true" /><span>{previewError}</span><button type="button" className="button secondary compact" onClick={() => void loadPreview(true)}>{tr('Reload')}</button></div>
+          : preview
+            ? <SubagentPreviewBody detail={preview} />
+            : null}
+    </div>
+    <div className="subagent-preview-actions">
+      {previewError && preview && <span className="subagent-preview-live-error" role="status">{previewError}</span>}
+      <a className="button secondary subagent-preview-open" href={taskHref} target="_blank" rel="noreferrer noopener"><span aria-hidden="true">→</span>{subagentLabel('goToConversation')}<ExternalLink aria-hidden="true" /></a>
+    </div>
+  </Modal>;
+}
+
+function subagentPreviewEvents(detail: TaskDetail) {
+  return detail.events?.length ? detail.events : (detail.turns ?? []).flatMap((turn) => turn.events ?? []);
+}
+
+function mergeSubagentPreviewSnapshot(next: TaskDetail, current: TaskDetail) {
+  return mergeLiveDetail({ ...next, events: subagentPreviewEvents(next) }, subagentPreviewEvents(current));
+}
+
+function SubagentPreviewBody({ detail }: { detail: TaskDetail }) {
+  const events = detail.events ?? [];
+  const turns = detail.turns?.length ? detail.turns : buildTaskTurns(events, detail.task);
+  const chatGpt = detail.task.source === 'chatgpt_web';
+  if (!turns.length) return <div className="subagent-preview-state" role="status"><MessageSquareText aria-hidden="true" /><span>{tr('Agent processing, tools, and conclusions will appear here.')}</span></div>;
+  return <section className="task-bubble-timeline turn-timeline subagent-preview-timeline" aria-label={tr('Conversation activity')}>
+    {turns.map((turn) => <TaskTurnBubble turn={turn} taskId={detail.task.id} agentLabel={chatGpt ? 'ChatGPT' : tr('Codex Agent')} subagents={(detail.subagents ?? []).filter((child) => (child.rootTurnId ?? child.parentTurnId) === turn.id)} key={turn.id} />)}
+  </section>;
 }
 
 export function subagentStatusText(agent: Pick<SubagentRun, 'attempt' | 'terminalReason'>, statusLabel: string) {
