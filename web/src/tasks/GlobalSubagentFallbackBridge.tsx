@@ -47,7 +47,8 @@ export function GlobalSubagentFallbackBridge() {
   const recoverPending = useCallback(async () => {
     try {
       const pending = await api.pendingSubagentFallbacks();
-      await Promise.all(pending.map(dispatchFallback));
+      const resumable = pending.filter((fallback) => Boolean(fallback.conversationUrl?.trim()));
+      await Promise.all(resumable.map(dispatchFallback));
     } catch {
       // A later realtime reconnect will try recovery again.
     }

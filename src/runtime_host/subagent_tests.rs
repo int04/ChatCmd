@@ -1,5 +1,5 @@
 use chatcmd_mcp::catalog_hash;
-use chatcmd_runtime::OperationContext;
+use chatcmd_runtime::{OperationContext, ShellCreateRequest};
 use serde_json::{Value, json};
 use sqlx::Row as _;
 use tempfile::TempDir;
@@ -26,6 +26,18 @@ async fn parent_fixture() -> (RuntimeHost, OperationContext, TempDir) {
         .execute(host.repository.pool())
         .await
         .expect("insert parent task");
+    sqlx::query(
+        "INSERT INTO timeline_events(event_id,task_id,turn_id,session_id,actor,kind,idempotency_key,payload_json,metadata_json,created_at_ms) VALUES(?,?,?,NULL,'user','message',?,?,NULL,?)",
+    )
+    .bind("event-subagent-parent-user")
+    .bind(PARENT_TASK_ID)
+    .bind(PARENT_TURN_ID)
+    .bind("subagent-parent-user-message")
+    .bind(json!({"role":"user","content":"Chia agent để chạy delegated test fixture"}).to_string())
+    .bind(now)
+    .execute(host.repository.pool())
+    .await
+    .expect("insert explicit parent user message");
 
     let mut context =
         OperationContext::new("subagent-parent-request", &agent_id, "agent_subagent_start");

@@ -219,6 +219,58 @@ async fn first_message_seeds_task_id_and_only_first_final_can_name_chat() {
 }
 
 #[tokio::test]
+async fn ordinary_user_turn_cannot_start_subagent_or_create_child() {
+    let (host, agent_id, _directory) = test_host().await;
+    sqlx::query(
+        "INSERT INTO settings(key,value_json,updated_at_ms) VALUES('ui_subagentConcurrency','1',0)",
+    )
+    .execute(host.repository.pool())
+    .await
+    .expect("enable one child slot");
+    let scope = "conversation-subagent-explicit-intent";
+    let turn = "turn-subagent-explicit-intent";
+    let parent = host
+        .call_persisted(
+            "agent_user_message",
+            turn_context(
+                "parent-user-no-delegation",
+                &agent_id,
+                "agent_user_message",
+                turn,
+                scope,
+            ),
+            json!({"content":"Rà soát toàn bộ source code và sub agent để tìm lỗi"}),
+        )
+        .await
+        .expect("sync ordinary parent turn");
+    assert_eq!(parent["subagentPolicy"]["explicitUserIntent"], false);
+    let parent_task = parent["taskId"].as_str().expect("parent task");
+    let mut start = OperationContext::new(
+        "unexpected-subagent-start",
+        &agent_id,
+        "agent_subagent_start",
+    );
+    start.task_id = Some(parent_task.to_owned());
+    start.turn_id = Some(turn.to_owned());
+    let error = host
+        .call_persisted(
+            "agent_subagent_start",
+            start,
+            json!({"name":"Unexpected child","request":"Read one file"}),
+        )
+        .await
+        .expect_err("ordinary user turns must not create child conversations");
+    assert_eq!(error.code, "subagent_explicit_user_intent_required");
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM subagent_runs WHERE parent_task_id=?")
+            .bind(parent_task)
+            .fetch_one(host.repository.pool())
+            .await
+            .expect("count unexpected children");
+    assert_eq!(count, 0);
+}
+
+#[tokio::test]
 async fn repeated_subagent_registration_is_idempotent_with_new_request_id() {
     let (host, agent_id, _directory) = test_host().await;
     sqlx::query(
@@ -239,7 +291,7 @@ async fn repeated_subagent_registration_is_idempotent_with_new_request_id() {
                 turn,
                 scope,
             ),
-            json!({"content":"Create delegated reviewer"}),
+            json!({"content":"Chia agent: create delegated reviewer"}),
         )
         .await
         .expect("sync parent");
@@ -259,6 +311,14 @@ async fn repeated_subagent_registration_is_idempotent_with_new_request_id() {
         )
         .await
         .expect("first registration");
+    assert_eq!(parent["subagentPolicy"]["explicitUserIntent"], true);
+    let child_task = first["childTaskId"].as_str().expect("child task");
+    let child_allow_execute: i64 = sqlx::query_scalar("SELECT allow_execute FROM tasks WHERE id=?")
+        .bind(child_task)
+        .fetch_one(host.repository.pool())
+        .await
+        .expect("read delegated child approval");
+    assert_eq!(child_allow_execute, 1);
     let retry = host
         .call_persisted(
             "agent_subagent_start",
