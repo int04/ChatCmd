@@ -13,7 +13,7 @@ use super::{RuntimeHost, invalid, now_ms, storage_error};
 mod intent;
 #[path = "user_message_paths.rs"]
 mod paths;
-use intent::{intent_hint, is_plan_mode_request};
+use intent::{intent_hint, is_explicit_multi_agent_request, is_plan_mode_request};
 use paths::extract_explicit_absolute_paths;
 
 impl RuntimeHost {
@@ -39,6 +39,48 @@ impl RuntimeHost {
                 "call agent_user_message first with the exact current user message and the same turnId before using any other ChatCMD tool",
             ))
         }
+    }
+
+    pub(super) async fn subagent_delegation_explicitly_requested(
+        &self,
+        context: &OperationContext,
+    ) -> RuntimeResult<bool> {
+        let task_id = required_task_id(context)?;
+        let turn_id = required_turn_id(context)?;
+        let root = sqlx::query_as::<_, (String, String)>(
+            r#"WITH RECURSIVE ancestors(parent_task_id,parent_turn_id,child_task_id,depth) AS (
+                SELECT parent_task_id,parent_turn_id,child_task_id,1 FROM subagent_runs WHERE child_task_id=?
+                UNION ALL
+                SELECT r.parent_task_id,r.parent_turn_id,r.child_task_id,ancestors.depth+1
+                FROM subagent_runs r JOIN ancestors ON r.child_task_id=ancestors.parent_task_id
+                WHERE ancestors.depth<32
+            )
+            SELECT parent_task_id,parent_turn_id FROM ancestors ORDER BY depth DESC LIMIT 1"#,
+        )
+        .bind(task_id.as_str())
+        .fetch_optional(self.repository.pool())
+        .await
+        .map_err(|_| RuntimeError::new("storage_error", "sub-agent root intent lookup failed"))?;
+        let (root_task_id, root_turn_id) =
+            root.unwrap_or_else(|| (task_id.as_str().to_owned(), turn_id.as_str().to_owned()));
+        let payload = sqlx::query_scalar::<_, String>(
+            "SELECT payload_json FROM timeline_events WHERE task_id=? AND turn_id=? AND actor='user' AND kind='message' ORDER BY created_at_ms,event_id LIMIT 1",
+        )
+        .bind(&root_task_id)
+        .bind(&root_turn_id)
+        .fetch_optional(self.repository.pool())
+        .await
+        .map_err(|_| RuntimeError::new("storage_error", "sub-agent root user message unavailable"))?;
+        let content = payload
+            .and_then(|payload| serde_json::from_str::<Value>(&payload).ok())
+            .and_then(|payload| {
+                payload
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+            .unwrap_or_default();
+        Ok(is_explicit_multi_agent_request(&content))
     }
 
     pub(super) async fn task_user_path_scopes(
@@ -263,6 +305,7 @@ impl RuntimeHost {
             Value::Null
         };
         let subagent_limit = self.subagent_concurrency_limit().await?;
+        let explicit_subagent_intent = is_explicit_multi_agent_request(content);
         let intent_hint = intent_hint(content);
         Ok(json!({
             "accepted": true,
@@ -277,7 +320,14 @@ impl RuntimeHost {
                 },
                 "enabled": subagent_limit > 0,
                 "maxConcurrent": subagent_limit,
-                "instruction": if subagent_limit == 0 { "Sub-agents are disabled by the user. Do not call agent_subagent_start or delegate to any child; perform the work in this conversation." } else { "Use registered children within the global limit. All descendants remain attached to the root turn. If a nested child cannot acquire a slot, continue locally rather than waiting for another child." }
+                "explicitUserIntent": explicit_subagent_intent,
+                "instruction": if subagent_limit == 0 {
+                    "Sub-agents are disabled by the user. Do not call agent_subagent_start or delegate to any child; perform the work in this conversation."
+                } else if explicit_subagent_intent {
+                    "The current root user turn explicitly requested multi-agent work. Use registered children only for that requested delegation scope; all descendants remain attached to the root turn."
+                } else {
+                    "The current root user turn did not explicitly request multi-agent delegation. Do not call agent_subagent_start or open a child conversation; continue in this conversation."
+                }
             },
             "planMode": is_plan_mode_request(content),
             "intentHint": intent_hint,

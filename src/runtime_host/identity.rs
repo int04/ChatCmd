@@ -82,6 +82,22 @@ impl RuntimeHost {
         } else {
             None
         };
+        let unresolved_openai_tool_call = first_user_message.is_none()
+            && explicit_task.is_none()
+            && bound_task.is_none()
+            && delegated_task.is_none()
+            && chatgpt_bridge_task.is_none()
+            && mapped_scope_task.is_none()
+            && pending_chatgpt_bridge_task.is_none()
+            && conversation_scope
+                .as_deref()
+                .is_some_and(|scope| scope.starts_with("openai:"));
+        if unresolved_openai_tool_call {
+            return Err(RuntimeError::new(
+                "conversation_identity_unbound",
+                "this ChatGPT tool call is not bound to an existing local conversation. Call agent_user_message first and reuse its taskId/turnId instead of creating a new conversation",
+            ));
+        }
         let task = explicit_task.unwrap_or_else(|| {
             delegated_task.unwrap_or_else(|| {
                 chatgpt_bridge_task.unwrap_or_else(|| {
@@ -304,7 +320,18 @@ impl RuntimeHost {
         conversation_scope: &str,
     ) -> RuntimeResult<Option<String>> {
         sqlx::query_scalar::<_, String>(
-            "SELECT id FROM tasks WHERE agent_id=? AND conversation_scope_hash=? ORDER BY created_at_ms,id LIMIT 1",
+            r#"SELECT t.id
+               FROM tasks t
+               WHERE t.agent_id=? AND t.conversation_scope_hash=?
+                 AND (
+                   t.source='chatgpt_web'
+                   OR EXISTS(
+                     SELECT 1 FROM timeline_events e
+                     WHERE e.task_id=t.id AND e.actor='user' AND e.kind='message'
+                   )
+                 )
+               ORDER BY t.created_at_ms,t.id
+               LIMIT 1"#,
         )
         .bind(agent_id)
         .bind(conversation_scope)
@@ -354,12 +381,14 @@ impl RuntimeHost {
             r#"SELECT r.task_id
                FROM chatgpt_bridge_requests r
                JOIN tasks t ON t.id=r.task_id
+               LEFT JOIN chatgpt_conversations c ON c.task_id=r.task_id
                WHERE r.task_id IS NOT NULL
-                 AND t.agent_id=? AND t.source='chatgpt_web'
+                 AND t.agent_id=? AND t.source='chatgpt_web' AND t.status='running'
                  AND r.status IN ('queued','running','stop_requested')
-                 AND r.updated_at_ms>=?
+                 AND (c.active_request_id=r.id OR r.updated_at_ms>=?)
                GROUP BY r.task_id
-               ORDER BY MAX(r.updated_at_ms) DESC
+               ORDER BY MAX(CASE WHEN c.active_request_id=r.id THEN 1 ELSE 0 END) DESC,
+                        MAX(r.updated_at_ms) DESC
                LIMIT 2"#,
         )
         .bind(agent_id)
@@ -367,7 +396,7 @@ impl RuntimeHost {
         .fetch_all(self.repository.pool())
         .await
         .map_err(|_| {
-            RuntimeError::new("storage_error", "pending ChatGPT bridge task lookup failed")
+            RuntimeError::new("storage_error", "active ChatGPT bridge task lookup failed")
         })?;
         Ok((rows.len() == 1).then(|| rows[0].clone()))
     }

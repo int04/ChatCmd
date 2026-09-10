@@ -25,6 +25,71 @@ pub(super) fn is_plan_mode_request(content: &str) -> bool {
             || normalized.split_whitespace().any(|word| word == "#plan"))
 }
 
+pub(super) fn is_explicit_multi_agent_request(content: &str) -> bool {
+    let normalized = intent_prose(content)
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let negated = [
+        "không chia agent",
+        "không cần chia agent",
+        "đừng chia agent",
+        "không thử chia agent",
+        "không cần thử chia agent",
+        "đừng thử chia agent",
+        "không muốn chia agent",
+        "không dùng nhiều agent",
+        "không sử dụng nhiều agent",
+        "do not split into agents",
+        "do not try to split into agents",
+        "don't try to split into agents",
+        "don't split into agents",
+        "do not use multiple agents",
+        "don't use multiple agents",
+        "without subagents",
+        "no subagents",
+    ]
+    .iter()
+    .any(|phrase| normalized.contains(phrase));
+    if negated {
+        return false;
+    }
+
+    let starts_with_command = |command: &str| {
+        normalized.strip_prefix(command).is_some_and(|rest| {
+            rest.is_empty()
+                || rest.starts_with(' ')
+                || rest.starts_with(':')
+                || rest.starts_with('-')
+        })
+    };
+
+    starts_with_command("chia agent")
+        || ((starts_with_command("chia ra") || starts_with_command("tách ra"))
+            && normalized.contains(" agent"))
+        || starts_with_command("dùng nhiều agent")
+        || starts_with_command("sử dụng nhiều agent")
+        || starts_with_command("use multiple agents")
+        || starts_with_command("use several agents")
+        || starts_with_command("split into agents")
+        || starts_with_command("split across agents")
+        || [
+            "hãy chia agent",
+            "vui lòng chia agent",
+            "thử chia agent",
+            "giúp tôi chia agent",
+            "giúp t chia agent",
+            "hãy dùng nhiều agent",
+            "vui lòng dùng nhiều agent",
+            "hãy sử dụng nhiều agent",
+            "please use multiple agents",
+            "please split into agents",
+        ]
+        .iter()
+        .any(|phrase| normalized.contains(phrase))
+}
+
 pub(super) fn intent_hint(content: &str) -> Value {
     let normalized = intent_prose(content).to_lowercase();
     let workflow_kind = if is_plan_mode_request(content) {
@@ -109,6 +174,46 @@ mod tests {
             "Ví dụ:\n```text\nlập kế hoạch\n```\nSửa code"
         ));
         assert!(!is_plan_mode_request("Review chuỗi \"lên kế hoạch\""));
+    }
+
+    #[test]
+    fn multi_agent_intent_requires_an_explicit_user_request() {
+        assert!(is_explicit_multi_agent_request(
+            "Chia agent đọc file giúp tôi"
+        ));
+        assert!(is_explicit_multi_agent_request(
+            "Chia agent: create delegated reviewer"
+        ));
+        assert!(is_explicit_multi_agent_request(
+            "Thử chia agent đọc các file chưa commit"
+        ));
+        assert!(is_explicit_multi_agent_request(
+            "Chia ra 3 agent để audit song song"
+        ));
+        assert!(is_explicit_multi_agent_request(
+            "Use multiple agents to review this repo"
+        ));
+        assert!(!is_explicit_multi_agent_request(
+            "Rà soát toàn bộ source code, sub agent, để tìm lỗi"
+        ));
+        assert!(!is_explicit_multi_agent_request(
+            "Kiểm tra logic chia agent hiện tại"
+        ));
+        assert!(!is_explicit_multi_agent_request(
+            "Kiểm tra logic dùng nhiều agent hiện tại"
+        ));
+        assert!(!is_explicit_multi_agent_request(
+            "Không chia agent, làm trong cuộc trò chuyện hiện tại"
+        ));
+        assert!(!is_explicit_multi_agent_request(
+            "Review chuỗi `chia agent` trong source"
+        ));
+        assert!(!is_explicit_multi_agent_request(
+            "Đừng thử chia agent; làm trong cuộc trò chuyện hiện tại"
+        ));
+        assert!(!is_explicit_multi_agent_request(
+            "Review nhãn \"thử chia agent\" trong UI"
+        ));
     }
 
     #[test]

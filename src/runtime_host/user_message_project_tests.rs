@@ -172,7 +172,7 @@ async fn delegated_child_inherits_project_folder_and_keeps_internal_user_message
                 parent_turn,
                 parent_scope,
             ),
-            json!({"content":format!("Create one delegated child for `{}`", project.display())}),
+            json!({"content":format!("Chia agent: create one delegated child for `{}`", project.display())}),
         )
         .await
         .expect("sync parent user message");
