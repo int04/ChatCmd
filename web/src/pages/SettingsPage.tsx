@@ -43,7 +43,7 @@ export function SettingsPage() {
 
   useEffect(() => {
     if (!result.data) return;
-    setValue({ ...result.data, language: getAppLanguage() });
+    setValue({ ...result.data, fontFamily: storedFontFamily(result.data.fontFamily), language: getAppLanguage() });
   }, [result.data]);
 
   const submit = (event: FormEvent) => {
@@ -78,7 +78,7 @@ export function SettingsPage() {
 
   const update = <K extends keyof LocalSettings>(key: K, next: LocalSettings[K]) => setValue({ ...value, [key]: next });
   const updateLanguage = (language: LocalSettings['language']) => { update('language', language); setAppLanguage(language, true); };
-  const updateFont = (fontFamily: string) => { const next = normalizeFontFamily(fontFamily); update('fontFamily', next); applyAppFont(next); };
+  const updateFont = (fontFamily: string) => { const next = normalizeFontFamily(fontFamily); update('fontFamily', next); persistFontFamily(next); applyAppFont(next); };
   const updateTaskFontScale = (fontScale: number) => { const next = normalizeTaskFontScale(fontScale); update('taskFontScale', next); applyTaskFontScale(next); };
   const activeMeta = SETTINGS_TABS.find((tab) => tab.id === activeTab) ?? SETTINGS_TABS[0];
   const ActiveIcon = activeMeta.icon;
@@ -189,4 +189,23 @@ function sectionDescription(tab: SettingsTab) {
 
 function isSettingsTab(value: string | null): value is SettingsTab {
   return SETTINGS_TABS.some((tab) => tab.id === value);
+}
+
+function storedFontFamily(fallback: string) {
+  try {
+    const preferences = JSON.parse(localStorage.getItem('chatcmd.preferences') ?? '{}') as { fontFamily?: unknown };
+    return typeof preferences.fontFamily === 'string' ? normalizeFontFamily(preferences.fontFamily) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function persistFontFamily(fontFamily: string) {
+  let preferences: Record<string, unknown> = {};
+  try {
+    preferences = JSON.parse(localStorage.getItem('chatcmd.preferences') ?? '{}') as Record<string, unknown>;
+  } catch {
+    // Replace malformed browser preferences with a valid object containing the selected font.
+  }
+  localStorage.setItem('chatcmd.preferences', JSON.stringify({ ...preferences, fontFamily }));
 }

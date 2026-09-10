@@ -75,4 +75,13 @@ describe('subagent tree and chat layout', () => {
     fireEvent.submit(select.closest('form')!);
     await waitFor(() => expect(save).toHaveBeenCalledWith(expect.objectContaining({ subagentConcurrency: 0 })));
   });
+  it('persists the selected interface font immediately and restores the browser preference', async () => {
+    scene.data = { bindAddress: '127.0.0.1', port: 8080, mcpEndpoint: '', databasePath: '', executionMode: 'approval', approveNewConversations: false, terminalExecutable: 'pwsh', taskConcurrency: 2, sessionConcurrency: 2, subagentConcurrency: 0, theme: 'dark', fontFamily: 'Inter', taskFontScale: 100, language: 'en', newAgentSound: false, finishedTaskSound: false, dataRetention: 'off' };
+    localStorage.setItem('chatcmd.preferences', JSON.stringify({ theme: 'dark', fontFamily: 'Roboto' }));
+    render(<MemoryRouter initialEntries={['/settings?tab=display']}><SettingsPage /></MemoryRouter>);
+    const font = await screen.findByDisplayValue('Roboto');
+    expect(font).toHaveAttribute('list', 'chatcmd-google-fonts');
+    fireEvent.change(font, { target: { value: 'Manrope' } });
+    expect(JSON.parse(localStorage.getItem('chatcmd.preferences') ?? '{}')).toMatchObject({ theme: 'dark', fontFamily: 'Manrope' });
+  });
 });
