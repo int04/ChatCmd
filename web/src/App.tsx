@@ -1,11 +1,10 @@
-import { Menu, ShieldAlert, Sparkles } from 'lucide-react';
+import { Menu, Sparkles } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { NavLink, Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom';
-import { api } from './api';
 import { AuthGate } from './auth/AuthGate';
 import { ExtensionSetupPage } from './extensions/ExtensionSetupPage';
 import { GlobalChatGptExtensionPrompt } from './extensions/GlobalChatGptExtensionPrompt';
-import { applyAppFont, applyTaskFontScale, DEFAULT_APP_FONT, DEFAULT_TASK_FONT_SCALE } from './fontPreferences';
+import { applyAppFont, applyTaskFontScale, applyUploadedFont, DEFAULT_APP_FONT, DEFAULT_TASK_FONT_SCALE } from './fontPreferences';
 import { useAppLanguage, tr } from './i18n';
 import { AgentsPage } from './pages/AgentsPage';
 import { DashboardPage } from './pages/DashboardPage';
@@ -28,35 +27,7 @@ const legacyPaths = ['/login', '/register', '/plans', '/account', '/payment', '/
 
 export default function App() {
   useAppLanguage();
-  return <AuthGate><AdminElevationPrompt /><RealtimeProvider><GlobalDocumentTitleBridge /><SoundNotificationsBridge /><GlobalSubagentFallbackBridge /><GlobalConversationApprovalQueue /><GlobalPlanQuestionQueue /><GlobalChatGptExtensionPrompt /><GlobalUpdatePrompt /><Routes><Route element={<Shell />}><Route index element={<DashboardPage />} /><Route path="tasks/:taskId?" element={<TasksPage />} /><Route path="sessions" element={<SessionsPage />} /><Route path="sessions/terminal/:sessionId" element={<LiveTerminalPage />} /><Route path="sessions/:sessionId" element={<SessionDetailPage />} /><Route path="agents" element={<AgentsPage />} /><Route path="skills" element={<SkillsPage />} /><Route path="settings" element={<SettingsPage />} /><Route path="extension/setup" element={<ExtensionSetupPage />} />{legacyPaths.map((path) => <Route key={path} path={path} element={<Navigate replace to="/" />} />)}<Route path="*" element={<NotFound />} /></Route></Routes></RealtimeProvider></AuthGate>;
-}
-
-function AdminElevationPrompt() {
-  const [visible, setVisible] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    let active = true;
-    void api.elevationStatus()
-      .then((status) => { if (active) setVisible(status.supported && !status.elevated); })
-      .catch(() => undefined);
-    return () => { active = false; };
-  }, []);
-
-  if (!visible) return null;
-  const restart = async () => {
-    setBusy(true);
-    setError('');
-    try {
-      await api.restartElevated();
-    } catch (reason) {
-      setBusy(false);
-      setError(reason instanceof Error ? reason.message : tr('Unable to restart ChatCMD as administrator.'));
-    }
-  };
-
-  return <div className="admin-elevation-banner" role="status"><ShieldAlert /><div><strong>{tr('Run ChatCMD as administrator')}</strong><span>{tr('Administrator access is recommended so local tools can run with full system permissions.')}</span>{error && <span className="admin-elevation-error">{error}</span>}</div><div className="admin-elevation-actions"><button className="button secondary" type="button" disabled={busy} onClick={() => setVisible(false)}>{tr('Close')}</button><button className="button primary" type="button" disabled={busy} onClick={() => void restart()}>{busy ? tr('Restarting…') : tr('Run as administrator')}</button></div></div>;
+  return <AuthGate><RealtimeProvider><GlobalDocumentTitleBridge /><SoundNotificationsBridge /><GlobalSubagentFallbackBridge /><GlobalConversationApprovalQueue /><GlobalPlanQuestionQueue /><GlobalChatGptExtensionPrompt /><GlobalUpdatePrompt /><Routes><Route element={<Shell />}><Route index element={<DashboardPage />} /><Route path="tasks/:taskId?" element={<TasksPage />} /><Route path="sessions" element={<SessionsPage />} /><Route path="sessions/terminal/:sessionId" element={<LiveTerminalPage />} /><Route path="sessions/:sessionId" element={<SessionDetailPage />} /><Route path="agents" element={<AgentsPage />} /><Route path="skills" element={<SkillsPage />} /><Route path="settings" element={<SettingsPage />} /><Route path="extension/setup" element={<ExtensionSetupPage />} />{legacyPaths.map((path) => <Route key={path} path={path} element={<Navigate replace to="/" />} />)}<Route path="*" element={<NotFound />} /></Route></Routes></RealtimeProvider></AuthGate>;
 }
 
 function GlobalDocumentTitleBridge() {
@@ -105,7 +76,19 @@ function Shell() {
     previousPath.current = location.pathname;
     requestAnimationFrame(() => document.getElementById('main-content')?.focus({ preventScroll: true }));
   }, [location.pathname]);
-  useEffect(() => { try { const saved = JSON.parse(localStorage.getItem('chatcmd.preferences') ?? '{}') as { theme?: string; fontFamily?: string; taskFontScale?: number }; document.documentElement.dataset.theme = saved.theme ?? 'dark'; applyAppFont(saved.fontFamily ?? DEFAULT_APP_FONT); applyTaskFontScale(saved.taskFontScale ?? DEFAULT_TASK_FONT_SCALE); } catch { document.documentElement.dataset.theme = 'dark'; applyAppFont(DEFAULT_APP_FONT); applyTaskFontScale(DEFAULT_TASK_FONT_SCALE); } }, []);
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('chatcmd.preferences') ?? '{}') as { theme?: string; fontFamily?: string; fontSource?: string; taskFontScale?: number };
+      document.documentElement.dataset.theme = saved.theme ?? 'dark';
+      if (saved.fontSource === 'uploaded') void applyUploadedFont(saved.fontFamily ?? DEFAULT_APP_FONT).catch(() => applyAppFont(saved.fontFamily ?? DEFAULT_APP_FONT));
+      else applyAppFont(saved.fontFamily ?? DEFAULT_APP_FONT);
+      applyTaskFontScale(saved.taskFontScale ?? DEFAULT_TASK_FONT_SCALE);
+    } catch {
+      document.documentElement.dataset.theme = 'dark';
+      applyAppFont(DEFAULT_APP_FONT);
+      applyTaskFontScale(DEFAULT_TASK_FONT_SCALE);
+    }
+  }, []);
   return <div className={`shell${taskRailCollapsed ? ' task-rail-collapsed' : ''}`}><a className="skip-link" href="#main-content">{tr('Skip to content')}</a><FunctionRail taskRailCollapsed={taskRailCollapsed} onTaskRailToggle={toggleTaskRail} /><TaskRail open={open} onClose={closeRail} onDesktopCollapse={toggleTaskRail} />{open && <button className="scrim" aria-label={tr('Close navigation')} onClick={closeRail} />}<div className="content-shell"><header className="mobile-topbar"><button className="icon-button" aria-label={tr('Open navigation')} onClick={() => setOpen(true)}><Menu /></button><strong>ChatCMD</strong><span>{tr('Local')}</span></header><main id="main-content" className={location.pathname.startsWith('/tasks') ? 'tasks-main' : undefined} tabIndex={-1}><Outlet /></main></div></div>;
 }
 

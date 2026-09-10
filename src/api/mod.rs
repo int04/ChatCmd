@@ -30,6 +30,7 @@ mod chatgpt_support;
 #[cfg(test)]
 mod chatgpt_tests;
 mod data;
+mod custom_fonts;
 mod folders;
 mod overview;
 mod plan_questions;

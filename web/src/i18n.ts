@@ -883,6 +883,8 @@ const vi: Record<string, string> = {
   'Revision': 'Bản sửa đổi',
   'Revoke': 'Thu hồi',
   'Run ChatCMD as administrator': 'Chạy ChatCMD với quyền quản trị viên',
+  'Run ChatCMD as administrator?': 'Bạn có muốn chạy ChatCMD với quyền quản trị viên?',
+  'ChatCMD will restart with administrator privileges after you confirm.': 'ChatCMD sẽ khởi động lại với quyền quản trị viên sau khi bạn xác nhận.',
   'Run as administrator': 'Chạy với quyền quản trị viên',
   'Runtime, execution, and display preferences.': 'Tùy chọn runtime, thực thi và hiển thị.',
   'SETTINGS CATEGORY': 'DANH MỤC CÀI ĐẶT',

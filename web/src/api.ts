@@ -35,24 +35,30 @@ export interface SubagentFallbackResult {
   reason?: string;
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function rawRequest(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set('X-ChatCmdClient', 'local-ui');
   if (typeof init.body === 'string' && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   let response: Response;
   try { response = await fetch(path, { ...init, headers }); }
   catch { throw new ApiError(tr('Local API is unavailable. Check that ChatCMD is running.')); }
-  if (response.status === 204) return undefined as T;
-
-  let payload: T | ProblemDetails | undefined;
-  try { payload = await response.json() as T | ProblemDetails; }
-  catch { /* malformed or non-JSON upstream error */ }
   if (!response.ok) {
     if (response.status === 401) window.dispatchEvent(new Event('chatcmd-auth-required'));
-    const problem = payload as ProblemDetails | undefined;
+    let problem: ProblemDetails | undefined;
+    try { problem = await response.clone().json() as ProblemDetails; }
+    catch { /* binary or malformed error response */ }
     const fieldErrors = problem?.errors ? Object.values(problem.errors).flat().join(' ') : '';
     throw new ApiError(fieldErrors || problem?.message || problem?.detail || problem?.title || tr('Request failed ({status})', { status: response.status }), response.status, problem);
   }
+  return response;
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await rawRequest(path, init);
+  if (response.status === 204) return undefined as T;
+  let payload: T | ProblemDetails | undefined;
+  try { payload = await response.json() as T | ProblemDetails; }
+  catch { /* malformed success response */ }
   if (payload === undefined) throw new ApiError(tr('Request failed ({status})', { status: response.status }), response.status);
   return payload as T;
 }
@@ -140,6 +146,9 @@ export const api = {
   deleteSkill: (id: string) => request<void>(`/api/local/skills/${item(id)}`, { method: 'DELETE' }),
   settings: () => request<LocalSettings>('/api/local/settings'),
   saveSettings: (value: LocalSettings) => request<LocalSettings>('/api/local/settings', { method: 'PUT', body: json(value) }),
+  uploadInterfaceFont: (file: File, family: string) => request<{ family: string; fileName: string; mimeType: string; size: number }>('/api/local/settings/interface-font', { method: 'POST', headers: { 'Content-Type': file.type || 'application/octet-stream', 'X-ChatCmd-Font-Filename': file.name, 'X-ChatCmd-Font-Family': family }, body: file }),
+  interfaceFontBlob: async () => (await rawRequest('/api/local/settings/interface-font')).blob(),
+  deleteInterfaceFont: () => request<void>('/api/local/settings/interface-font', { method: 'DELETE' }),
   updateStatus: () => request<UpdateStatus>('/api/local/updates/status'),
   checkForUpdate: () => request<UpdateStatus>('/api/local/updates/check', { method: 'POST', body: '{}' }),
   startUpdate: () => request<UpdateStatus>('/api/local/updates/start', { method: 'POST', body: '{}' }),

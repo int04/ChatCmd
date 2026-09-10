@@ -302,8 +302,30 @@ function TurnProcess({ blocks, taskId, onStop }: { blocks: ReturnType<typeof bui
   return <div ref={scrollRef} className="turn-activities turn-process" role="region" tabIndex={0} aria-label={tr('Agent progress')} onScroll={updateScrollPosition}>
     {blocks.map((block) => block.type === 'progress'
       ? <ProgressMessage event={block.event} key={block.key} />
-      : <section className="turn-activity-batch" key={block.key} aria-label={summarizeActivities(block.activities)}><div className="turn-activity-summary" role="status"><Wrench aria-hidden="true" /><p>{summarizeActivities(block.activities)}</p></div><div className="turn-activity-rows">{block.activities.map((activity) => <ActivityRow activity={activity} taskId={taskId} onStop={onStop} key={activity.id} />)}</div></section>)}
+      : <ActivityBatch activities={block.activities} taskId={taskId} onStop={onStop} key={block.key} />)}
   </div>;
+}
+
+function ActivityBatch({ activities, taskId, onStop }: { activities: ToolActivity[]; taskId: string; onStop: (activity: ToolActivity) => void }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const nearBottomRef = useRef(true);
+  const last = activities.at(-1);
+  const updateKey = `${activities.length}:${last?.id ?? 'empty'}:${last?.status ?? ''}:${last?.finishedAt ?? ''}`;
+  useLayoutEffect(() => {
+    if (!nearBottomRef.current) return;
+    const root = scrollRef.current;
+    if (!root) return;
+    const frame = window.requestAnimationFrame(() => root.scrollTo({ top: root.scrollHeight, behavior: 'auto' }));
+    return () => window.cancelAnimationFrame(frame);
+  }, [updateKey]);
+  const updateScrollPosition = () => {
+    const root = scrollRef.current;
+    if (root) nearBottomRef.current = root.scrollHeight - root.scrollTop - root.clientHeight < 48;
+  };
+  return <section className="turn-activity-batch" aria-label={summarizeActivities(activities)}>
+    <div className="turn-activity-summary" role="status"><Wrench aria-hidden="true" /><p>{summarizeActivities(activities)}</p></div>
+    <div ref={scrollRef} className="turn-activity-rows" onScroll={updateScrollPosition}>{activities.map((activity) => <ActivityRow activity={activity} taskId={taskId} onStop={onStop} key={activity.id} />)}</div>
+  </section>;
 }
 
 function ProgressMessage({ event }: { event: TimelineEvent }) {
