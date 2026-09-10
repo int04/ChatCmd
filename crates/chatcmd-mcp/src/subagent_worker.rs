@@ -67,17 +67,19 @@ pub(super) async fn dispatch_registered_subagent(
         .is_some_and(|info| info.capabilities.sampling.is_some());
 
     if !sampling {
-        let reason = "MCP sampling is unavailable and browser child fallback is disabled so this task cannot open another ChatGPT conversation.";
-        let _ = runtime.fail_subagent(&child_task_id, reason).await;
+        let fallback = runtime
+            .request_subagent_fallback(&parent_context, &registration, &delegated_prompt)
+            .await?;
         return Ok(enrich_registration(
             registration,
             json!({
-                "dispatchMode": "parentContinuation",
+                "dispatchMode": "extensionFallback",
                 "nativeDelegationRequired": false,
-                "status": "failed",
+                "status": "pending",
                 "workerStarted": false,
-                "fallbackRequested": false,
-                "instruction": "Continue the delegated work directly in the parent conversation. Do not wait for a browser child and do not open or create another ChatGPT conversation."
+                "fallbackRequested": true,
+                "fallbackAttempt": fallback.get("attempt").cloned().unwrap_or(Value::Null),
+                "instruction": "ChatCMD queued this child for the ChatGPT browser extension. Do not duplicate the delegated work in the parent. Call agent_subagent_wait until the child finishes or the fallback exhausts its retries."
             }),
         ));
     }

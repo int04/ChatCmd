@@ -197,12 +197,17 @@ async function startSubagentRequestOnce(message) {
   if (!state.active || state.status !== 'pending') return;
   if (existing) await closeSubagentRequest(message.subagentId, existing.attempt);
 
-  if (!message.conversationUrl) {
-    throw new Error('Browser sub-agent fallback không được phép tạo ChatGPT conversation mới.');
+  const target = message.conversationUrl
+    ? await conversationTarget(message.conversationUrl)
+    : normalizeNewConversationUrl(message.newConversationUrl);
+  const tab = message.conversationUrl
+    ? await openConversationTab(target)
+    : await chrome.tabs.create({ url: target, active: false });
+  if (!tab?.id) {
+    throw new Error(message.conversationUrl
+      ? 'Không thể mở lại ChatGPT conversation hiện tại cho sub-agent.'
+      : 'Không thể mở tab ChatGPT mới cho sub-agent.');
   }
-  const target = await conversationTarget(message.conversationUrl);
-  const tab = await openConversationTab(target);
-  if (!tab?.id) throw new Error('Không thể mở lại ChatGPT conversation hiện tại cho sub-agent.');
   const requestId = `subagent:${message.subagentId}:${attempt}`;
   await chrome.storage.session.set({
     [requestKey(requestId)]: {
@@ -212,7 +217,7 @@ async function startSubagentRequestOnce(message) {
       subagentId: message.subagentId,
       childTaskId: message.childTaskId,
       attempt,
-      conversationUrl: target,
+      conversationUrl: message.conversationUrl ? target : null,
     },
     [subagentKey]: { requestId, tabId: tab.id, attempt },
   });

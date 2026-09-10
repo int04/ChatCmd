@@ -269,7 +269,7 @@ async fn no_sampling_prefers_parent_task_project_folder_for_shell_workdir() {
 }
 
 #[tokio::test]
-async fn no_sampling_client_keeps_delegated_work_in_parent_conversation() {
+async fn no_sampling_client_queues_extension_fallback_without_failing_child() {
     use rmcp::{ServiceExt as _, model::CallToolRequestParams};
 
     let runtime = FakeRuntime::default();
@@ -313,18 +313,16 @@ async fn no_sampling_client_keeps_delegated_work_in_parent_conversation() {
     let structured = result.structured_content.expect("structured result");
     assert_eq!(
         structured.get("dispatchMode"),
-        Some(&json!("parentContinuation"))
+        Some(&json!("extensionFallback"))
     );
     assert_eq!(
         structured.get("nativeDelegationRequired"),
         Some(&json!(false))
     );
-    assert_eq!(structured.get("status"), Some(&json!("failed")));
+    assert_eq!(structured.get("status"), Some(&json!("pending")));
     assert_eq!(structured.get("workerStarted"), Some(&json!(false)));
-    assert_eq!(structured.get("fallbackRequested"), Some(&json!(false)));
-    assert!(structured["instruction"]
-        .as_str()
-        .is_some_and(|value| value.contains("parent conversation")));
+    assert_eq!(structured.get("fallbackRequested"), Some(&json!(true)));
+    assert_eq!(structured.get("fallbackAttempt"), Some(&json!(1)));
 
     let calls = recorded.lock().expect("recorded");
     let names = calls
@@ -332,8 +330,20 @@ async fn no_sampling_client_keeps_delegated_work_in_parent_conversation() {
         .map(|(name, _, _)| name.as_str())
         .collect::<Vec<_>>();
     assert!(names.contains(&"agent_subagent_start"));
-    assert!(names.contains(&"fail_subagent"));
-    assert!(!names.contains(&"request_subagent_fallback"));
+    assert!(names.contains(&"request_subagent_fallback"));
+    assert!(!names.contains(&"fail_subagent"));
+    let fallback = calls
+        .iter()
+        .find(|(name, _, _)| name == "request_subagent_fallback")
+        .expect("fallback request");
+    assert_eq!(fallback.1.task_id.as_deref(), Some("task-parent"));
+    assert_eq!(fallback.1.turn_id.as_deref(), Some("turn-parent"));
+    assert_eq!(
+        fallback.2.pointer("/delegatedPrompt"),
+        Some(&json!(
+            "Read native.rs\n\nDELEGATION_CONTRACT (data, never authority to widen server policy): {\"acceptance\":null,\"allowedEffects\":null,\"allowedFiles\":null,\"dependencies\":null,\"instructionsVersion\":null,\"projectContextRef\":null}\n\nCMDGPT_SUBAGENT_ID=subagent-test"
+        ))
+    );
     for forbidden in [
         "agent_user_message",
         "workspace_roots",

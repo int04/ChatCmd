@@ -67,6 +67,74 @@ async function integrated(t) {
     destination: () => destination };
 }
 
+test('source send recovers when ChatGPT renders the owned user turn without data-message-id', async (t) => {
+  const worker = await workerFixture(t);
+  const value = worker.seed();
+  const source = contentFixture(t);
+  worker.shared.tabs = [{ id: 7, url: value.oldConversationUrl }];
+  source.state.onClick = () => {
+    source.user(source.composer().value, null);
+    source.composer().value = '';
+  };
+  worker.shared.route = (_id, message) => source.message(message.type.replace('chatcmd-compact-', ''),
+    message.job, message.kind, message.documentToken);
+
+  await worker.tick();
+  assert.equal(source.state.clicks, 1);
+  assert.equal(worker.serverJob().phase, 'writing_handoff');
+  assert.equal(worker.record().sourceSend, 'dispatched-unresolved');
+
+  source.answer(BODY + '\n' + source.protocol.marker('HANDOFF-END', value.id));
+  source.probe(worker.serverJob());
+  source.advance(1201);
+  await worker.tick();
+
+  assert.equal(worker.serverJob().phase, 'opening_new_chat');
+  assert.equal(worker.serverJob().handoffText, BODY);
+  assert.equal(worker.shared.creates.length, 1, 'the worker must leave Writing the handoff instead of stalling on its durable send fence');
+  assert.equal(worker.sends('HANDOFF').length, 1, 'recovery must not resend the handoff');
+});
+
+test('destination attach recovers when ChatGPT renders the resume turn without data-message-id', async (t) => {
+  const env = await integrated(t);
+  const destination = await env.openDestination();
+  const tab = env.worker.shared.tabs.find((item) => item.id !== 1 && item.id !== 7);
+  assert.ok(tab, 'destination tab');
+  destination.state.onClick = () => {
+    destination.user(destination.composer().value, null);
+    destination.composer().value = '';
+    tab.url = 'https://chatgpt.com/c/destination-no-native-id';
+    destination.navigate(tab.url);
+    destination.answer('Handoff received.');
+  };
+
+  await env.worker.tick();
+  assert.equal(destination.state.clicks, 1);
+  assert.equal(env.worker.serverJob().phase, 'opening_new_chat');
+  assert.equal(env.worker.record().destinationSend, 'dispatched-unresolved');
+
+  await env.worker.tick();
+  assert.equal(env.worker.serverJob().phase, 'completed');
+  assert.equal(env.worker.serverJob().newConversationId, 'destination-no-native-id');
+  assert.equal(env.worker.sends('RESUME').length, 1, 'destination recovery must not resend the resume handoff');
+});
+
+test('user continuing immediately after RESUME acknowledgement still completes same-task attachment', async (t) => {
+  const env = await integrated(t);
+  const destination = await env.openDestination();
+  await env.worker.tick();
+  assert.equal(destination.state.clicks, 1);
+  assert.equal(env.worker.serverJob().phase, 'opening_new_chat');
+  destination.user('tiếp tục công việc', 'working-user');
+  destination.answer('conversation_compacting_or_archived', { id: 'blocked-working-answer' });
+  await env.worker.tick();
+  assert.equal(env.worker.serverJob().phase, 'completed');
+  assert.equal(env.worker.serverJob().taskId, env.value.taskId);
+  assert.equal(env.worker.serverJob().newConversationId, 'destination-canonical');
+  assert.equal(env.worker.sends('RESUME').length, 1);
+  assert.equal(env.worker.shared.creates.length, 1);
+});
+
 test('real content-worker round trip saves exact handoff, preserves task/model, and sends once per chat', async (t) => {
   const env = await integrated(t);
   const dest = await env.openDestination();

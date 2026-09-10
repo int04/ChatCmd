@@ -31,7 +31,7 @@ const en = {
   step3Title: 'Load the packaged extension',
   step3Body: 'Choose Load unpacked, then select the chatgpt-extension folder that ships beside ChatCMD.',
   step4Title: 'Reload ChatCMD and verify',
-  step4Body: 'Return to ChatCMD, reload the page, then use Check again. ChatCMD currently requires extension version 0.1.10.',
+  step4Body: 'Return to ChatCMD, reload the page, then use Check again. ChatCMD currently requires extension version 0.1.12.',
 };
 
 type ExtensionCopy = { [K in keyof typeof en]: string };
@@ -67,7 +67,7 @@ const vi: ExtensionCopy = {
   step3Title: 'Nạp extension đi kèm ChatCMD',
   step3Body: 'Chọn Load unpacked, sau đó chọn thư mục chatgpt-extension nằm cạnh bản cài ChatCMD.',
   step4Title: 'Reload ChatCMD và kiểm tra',
-  step4Body: 'Quay lại ChatCMD, reload trang rồi bấm Kiểm tra lại. ChatCMD hiện yêu cầu extension phiên bản 0.1.10.',
+  step4Body: 'Quay lại ChatCMD, reload trang rồi bấm Kiểm tra lại. ChatCMD hiện yêu cầu extension phiên bản 0.1.12.',
 };
 
 export function extensionCopy(language: AppLanguage) {

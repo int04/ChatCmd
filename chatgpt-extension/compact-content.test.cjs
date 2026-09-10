@@ -80,13 +80,16 @@ test('a later user turn supersedes the owned handoff and cannot contaminate capt
   assert.equal(result.handoffText, null);
 });
 
-test('unidentified user nodes never authorize capture or locate', async (t) => {
+test('exact public handoff turn without native message id uses a safe DOM identity', async (t) => {
   const env = contentFixture(t);
   const value = job();
   env.user(env.protocol.handoffPrompt(value), null);
   env.answer(BODY + '\n' + env.protocol.marker('HANDOFF-END', value.id));
-  assert.equal(env.settled(value).handoffText, null);
-  assert.equal((await env.message('locate', value)).markerFound, false);
+  const result = env.settled(value);
+  assert.equal(result.markerFound, true);
+  assert.match(result.userMessageId, /^dom-compact:/);
+  assert.equal(result.handoffText, BODY);
+  assert.equal((await env.message('locate', value)).markerFound, true);
 });
 
 test('real transcript parser excludes tool roots, hidden surfaces, commentary and private state', (t) => {

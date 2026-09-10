@@ -152,7 +152,7 @@ async fn packaged_process_advertises_exact_manifest_contract_deterministically()
     for marker in [
         "samplingTools",
         "samplingText",
-        "parentContinuation",
+        "extensionFallback",
         "existing",
         "status=failed",
         "startupError",
