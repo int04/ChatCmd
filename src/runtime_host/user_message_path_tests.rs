@@ -531,3 +531,311 @@ async fn chatgpt_bridge_claims_unbound_request_before_bridge_started() {
         "claiming must not create an approval ghost task"
     );
 }
+
+#[tokio::test]
+async fn long_running_active_chatgpt_bridge_remains_the_unique_tool_identity() {
+    let (host, agent_id, _directory) = test_host().await;
+    let task_id = "task-chatgpt-long-running-active";
+    let request_id = "chatgpt-request-long-running-active";
+    let old = now_ms().saturating_sub(5 * 60 * 1000);
+
+    sqlx::query(
+        "INSERT INTO tasks(id,agent_id,device_id,conversation_scope_hash,title,source,allow_execute,status,active_session_id,generation,stopped_at_ms,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,'chatgpt_web',1,'running',NULL,1,NULL,?,?)",
+    )
+    .bind(task_id)
+    .bind(&agent_id)
+    .bind(host.device.id.as_str())
+    .bind("openai:browser-conversation-scope")
+    .bind("Long running ChatGPT task")
+    .bind(old)
+    .bind(old)
+    .execute(host.repository.pool())
+    .await
+    .expect("insert long running task");
+
+    sqlx::query(
+        "INSERT INTO chatgpt_bridge_requests(id,task_id,turn_id,agent_id,model,user_content,submitted_content,status,conversation_id,conversation_url,assistant_content,error_message,created_at_ms,updated_at_ms,completed_at_ms) VALUES(?,?,?,?,?,?,?,'running',?,?,NULL,NULL,?,?,NULL)",
+    )
+    .bind(request_id)
+    .bind(task_id)
+    .bind("chatgpt-turn-long-running")
+    .bind(&agent_id)
+    .bind("Auto")
+    .bind("Long running")
+    .bind("Long running")
+    .bind("conversation-long-running")
+    .bind("https://chatgpt.com/c/conversation-long-running")
+    .bind(old)
+    .bind(old)
+    .execute(host.repository.pool())
+    .await
+    .expect("insert long running request");
+
+    sqlx::query(
+        "INSERT INTO chatgpt_conversations(task_id,conversation_id,conversation_url,model,active_request_id,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?)",
+    )
+    .bind(task_id)
+    .bind("conversation-long-running")
+    .bind("https://chatgpt.com/c/conversation-long-running")
+    .bind("Auto")
+    .bind(request_id)
+    .bind(old)
+    .bind(old)
+    .execute(host.repository.pool())
+    .await
+    .expect("insert long running conversation");
+
+    let mut context = turn_context(
+        "late-tool-call",
+        &agent_id,
+        "workspace_roots",
+        "turn-from-rotated-openai-session",
+        "openai:rotated-host-session-scope",
+    );
+    host.ensure_call_identity(&mut context, None)
+        .await
+        .expect("canonical active browser request must survive a long model turn");
+
+    assert_eq!(context.task_id.as_deref(), Some(task_id));
+    let task_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks WHERE agent_id=?")
+        .bind(&agent_id)
+        .fetch_one(host.repository.pool())
+        .await
+        .expect("count tasks");
+    assert_eq!(
+        task_count, 1,
+        "a rotated OpenAI session must not create a second local task"
+    );
+}
+
+#[tokio::test]
+async fn ambiguous_openai_tool_call_fails_closed_without_creating_approval_task() {
+    let (host, agent_id, _directory) = test_host().await;
+    let now = now_ms();
+
+    for suffix in ["a", "b"] {
+        let task_id = format!("task-chatgpt-ambiguous-{suffix}");
+        let request_id = format!("chatgpt-request-ambiguous-{suffix}");
+        let conversation_id = format!("conversation-ambiguous-{suffix}");
+        let conversation_url = format!("https://chatgpt.com/c/{conversation_id}");
+
+        sqlx::query(
+            "INSERT INTO tasks(id,agent_id,device_id,conversation_scope_hash,title,source,allow_execute,status,active_session_id,generation,stopped_at_ms,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,'chatgpt_web',1,'running',NULL,1,NULL,?,?)",
+        )
+        .bind(&task_id)
+        .bind(&agent_id)
+        .bind(host.device.id.as_str())
+        .bind(format!("openai:browser-scope-{suffix}"))
+        .bind(format!("Ambiguous {suffix}"))
+        .bind(now)
+        .bind(now)
+        .execute(host.repository.pool())
+        .await
+        .expect("insert ambiguous task");
+
+        sqlx::query(
+            "INSERT INTO chatgpt_bridge_requests(id,task_id,turn_id,agent_id,model,user_content,submitted_content,status,conversation_id,conversation_url,assistant_content,error_message,created_at_ms,updated_at_ms,completed_at_ms) VALUES(?,?,?,?,?,?,?,'running',?,?,NULL,NULL,?,?,NULL)",
+        )
+        .bind(&request_id)
+        .bind(&task_id)
+        .bind(format!("chatgpt-turn-ambiguous-{suffix}"))
+        .bind(&agent_id)
+        .bind("Auto")
+        .bind(format!("Ambiguous {suffix}"))
+        .bind(format!("Ambiguous {suffix}"))
+        .bind(&conversation_id)
+        .bind(&conversation_url)
+        .bind(now)
+        .bind(now)
+        .execute(host.repository.pool())
+        .await
+        .expect("insert ambiguous request");
+
+        sqlx::query(
+            "INSERT INTO chatgpt_conversations(task_id,conversation_id,conversation_url,model,active_request_id,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?)",
+        )
+        .bind(&task_id)
+        .bind(&conversation_id)
+        .bind(&conversation_url)
+        .bind("Auto")
+        .bind(&request_id)
+        .bind(now)
+        .bind(now)
+        .execute(host.repository.pool())
+        .await
+        .expect("insert ambiguous conversation");
+    }
+
+    let mut context = turn_context(
+        "ambiguous-tool-call",
+        &agent_id,
+        "workspace_roots",
+        "turn-without-local-binding",
+        "openai:rotated-or-ambiguous-session",
+    );
+    let error = host
+        .ensure_call_identity(&mut context, None)
+        .await
+        .expect_err("ambiguous tool call must not mint an approval task");
+    assert_eq!(error.code, "conversation_identity_unbound");
+
+    let task_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks WHERE agent_id=?")
+        .bind(&agent_id)
+        .fetch_one(host.repository.pool())
+        .await
+        .expect("count tasks");
+    assert_eq!(task_count, 2, "must not create a third ghost task");
+    let mcp_task_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM tasks WHERE agent_id=? AND source='mcp'")
+            .bind(&agent_id)
+            .fetch_one(host.repository.pool())
+            .await
+            .expect("count generic MCP tasks");
+    assert_eq!(
+        mcp_task_count, 0,
+        "must not create an approval-only MCP task"
+    );
+}
+
+#[tokio::test]
+async fn approved_ghost_scope_without_user_message_cannot_hijack_browser_tool_calls() {
+    let (host, agent_id, _directory) = test_host().await;
+    let browser_task = "task-chatgpt-browser-after-ghost";
+    let request_id = "chatgpt-request-browser-after-ghost";
+    let ghost_task = "task-chatgpt-approved-ghost";
+    let rotated_scope = "openai:approved-ghost-session";
+    let now = now_ms();
+
+    sqlx::query(
+        "INSERT INTO tasks(id,agent_id,device_id,conversation_scope_hash,title,source,allow_execute,status,active_session_id,generation,stopped_at_ms,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,'chatgpt_web',1,'running',NULL,1,NULL,?,?)",
+    )
+    .bind(browser_task)
+    .bind(&agent_id)
+    .bind(host.device.id.as_str())
+    .bind("openai:real-browser-scope")
+    .bind("Browser task")
+    .bind(now)
+    .bind(now)
+    .execute(host.repository.pool())
+    .await
+    .expect("insert browser task");
+
+    sqlx::query(
+        "INSERT INTO chatgpt_bridge_requests(id,task_id,turn_id,agent_id,model,user_content,submitted_content,status,conversation_id,conversation_url,assistant_content,error_message,created_at_ms,updated_at_ms,completed_at_ms) VALUES(?,?,?,?,?,?,?,'running',?,?,NULL,NULL,?,?,NULL)",
+    )
+    .bind(request_id)
+    .bind(browser_task)
+    .bind("chatgpt-turn-browser-after-ghost")
+    .bind(&agent_id)
+    .bind("Auto")
+    .bind("Continue browser task")
+    .bind("Continue browser task")
+    .bind("conversation-browser-after-ghost")
+    .bind("https://chatgpt.com/c/conversation-browser-after-ghost")
+    .bind(now)
+    .bind(now)
+    .execute(host.repository.pool())
+    .await
+    .expect("insert browser request");
+
+    sqlx::query(
+        "INSERT INTO chatgpt_conversations(task_id,conversation_id,conversation_url,model,active_request_id,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?)",
+    )
+    .bind(browser_task)
+    .bind("conversation-browser-after-ghost")
+    .bind("https://chatgpt.com/c/conversation-browser-after-ghost")
+    .bind("Auto")
+    .bind(request_id)
+    .bind(now)
+    .bind(now)
+    .execute(host.repository.pool())
+    .await
+    .expect("insert browser conversation");
+
+    sqlx::query(
+        "INSERT INTO tasks(id,agent_id,device_id,conversation_scope_hash,title,source,allow_execute,status,active_session_id,generation,stopped_at_ms,created_at_ms,updated_at_ms) VALUES(?,?,?,?,NULL,'mcp',1,'running',NULL,1,NULL,?,?)",
+    )
+    .bind(ghost_task)
+    .bind(&agent_id)
+    .bind(host.device.id.as_str())
+    .bind(rotated_scope)
+    .bind(now)
+    .bind(now)
+    .execute(host.repository.pool())
+    .await
+    .expect("insert approval-only ghost task");
+
+    let mut context = turn_context(
+        "tool-after-approved-ghost",
+        &agent_id,
+        "workspace_roots",
+        "turn-after-approved-ghost",
+        rotated_scope,
+    );
+    host.ensure_call_identity(&mut context, None)
+        .await
+        .expect("approved ghost scope must be ignored in favor of the active browser task");
+
+    assert_eq!(context.task_id.as_deref(), Some(browser_task));
+    let ghost_user_messages: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM timeline_events WHERE task_id=? AND actor='user' AND kind='message'",
+    )
+    .bind(ghost_task)
+    .fetch_one(host.repository.pool())
+    .await
+    .expect("count ghost user messages");
+    assert_eq!(ghost_user_messages, 0);
+    let task_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks WHERE agent_id=?")
+        .bind(&agent_id)
+        .fetch_one(host.repository.pool())
+        .await
+        .expect("count tasks after ghost recovery");
+    assert_eq!(task_count, 2, "must not create another approval task");
+}
+
+#[tokio::test]
+async fn established_native_mcp_conversation_scope_still_reuses_its_task() {
+    let (host, agent_id, _directory) = test_host().await;
+    let scope = "openai:established-native-mcp-scope";
+    let accepted = host
+        .call_persisted(
+            "agent_user_message",
+            turn_context(
+                "native-mcp-user",
+                &agent_id,
+                "agent_user_message",
+                "native-mcp-user-turn",
+                scope,
+            ),
+            json!({"content":"Normal ChatGPT MCP conversation"}),
+        )
+        .await
+        .expect("establish native MCP conversation");
+    let task_id = accepted["taskId"].as_str().expect("task id").to_owned();
+
+    let source: String = sqlx::query_scalar("SELECT source FROM tasks WHERE id=?")
+        .bind(&task_id)
+        .fetch_one(host.repository.pool())
+        .await
+        .expect("read native MCP task source");
+    assert_eq!(source, "mcp");
+
+    let mut context = turn_context(
+        "native-mcp-follow-up-tool",
+        &agent_id,
+        "workspace_roots",
+        "native-mcp-follow-up-turn",
+        scope,
+    );
+    host.ensure_call_identity(&mut context, None)
+        .await
+        .expect("established native MCP conversation must remain reusable by scope");
+    assert_eq!(context.task_id.as_deref(), Some(task_id.as_str()));
+
+    let task_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks WHERE agent_id=?")
+        .bind(&agent_id)
+        .fetch_one(host.repository.pool())
+        .await
+        .expect("count native MCP tasks");
+    assert_eq!(task_count, 1);
+}
