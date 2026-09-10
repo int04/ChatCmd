@@ -93,6 +93,7 @@ export const api = {
   tools: () => request<Tool[]>('/api/local/mcp/tools'),
   presets: () => request<ToolPreset[]>('/api/local/mcp/tool-presets'),
   pickProjectFolder: () => request<{ path: string | null }>('/api/local/system/folder-picker', { method: 'POST', body: '{}' }),
+  pickFilePath: () => request<{ path: string | null }>('/api/local/system/file-picker', { method: 'POST', body: '{}' }),
   openChatGptExtensionFolder: () => request<{ opened: boolean; target: string }>('/api/local/system/chatgpt-extension-folder/open', { method: 'POST', body: '{}' }),
   openBrowserExtensions: (browser: 'chrome' | 'edge' | 'brave') => request<{ opened: boolean; target: string }>('/api/local/system/browser-extensions/open', { method: 'POST', body: json({ browser }) }),
   elevationStatus: () => request<ElevationStatus>('/api/local/system/elevation'),

@@ -8,6 +8,7 @@ import { tr } from '../i18n';
 import { canonicalProjectPath } from '../tasks/workspaceProjects';
 import { useLoad } from '../useLoad';
 import { ChatGptMessageQueuePanel, type ChatGptQueueMode } from './ChatGptMessageQueue';
+import { ComposerFileInput } from './ComposerFileInput';
 import { CompactAction, CompactStatusCard } from './compact/CompactControls';
 import { useCompact } from './compact/CompactProvider';
 import { useCompactBridgeSync } from './compact/useCompactBridgeSync';
@@ -250,7 +251,19 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
         {textAttachments.map((attachment) => <span key={attachment.id} title={tr('{name} · {count} characters', { name: attachment.name, count: attachment.content.length.toLocaleString() })}><FileText />{attachment.name}<button type="button" aria-label={tr('Remove file {name}', { name: attachment.name })} onClick={() => setTextAttachments((current) => current.filter((item) => item.id !== attachment.id))}><X /></button></span>)}
       </div>}
       <div className="chatgpt-composer-row">
-        <textarea aria-label={tr('Next message to ChatGPT')} rows={2} value={content} onChange={(event) => setContent(event.target.value)} onPaste={handlePaste} disabled={active || busy || compactPaused || bridgeSync || extensionReady === false || chatGptTabOpen === false} placeholder={answerCompletedWaitingForUi ? tr('Answer completed; waiting for the ChatGPT UI before continuing.') : active ? tr('ChatGPT is responding…') : tr('Continue the ChatGPT conversation…')} />
+        <ComposerFileInput
+          value={content}
+          setValue={setContent}
+          attachments={textAttachments}
+          setAttachments={setTextAttachments}
+          onPaste={handlePaste}
+          onError={setError}
+          disabled={active || busy || compactPaused || bridgeSync || extensionReady === false || chatGptTabOpen === false}
+          ariaLabel={tr('Next message to ChatGPT')}
+          placeholder={answerCompletedWaitingForUi ? tr('Answer completed; waiting for the ChatGPT UI before continuing.') : active ? tr('ChatGPT is responding…') : tr('Continue the ChatGPT conversation…')}
+          rows={2}
+          variant="task"
+        />
         {active ? <button type="button" className="chatgpt-stop-button" onClick={() => void stop()} disabled={busy || compactPaused || bridgeSync || bridge.data?.activeStatus === 'stop_requested'}><CircleStop /><span>{bridge.data?.activeStatus === 'stop_requested' ? tr('Stopping…') : tr('Stop')}</span></button>
           : <button type="submit" className="chatgpt-composer-send" disabled={busy || compactPaused || bridgeSync || extensionReady !== true || chatGptTabOpen !== true || chatGptReady !== true || (!content.trim() && textAttachments.length === 0)}><Send /><span>{tr('Send')}</span></button>}
       </div>

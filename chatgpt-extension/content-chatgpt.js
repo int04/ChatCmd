@@ -109,7 +109,7 @@ async function runRequest(message) {
     if (owner) owner.observer = globalThis.ChatCmdObserver?.create(message.requestId, message.submittedContent, {
       current: () => activeRequest === owner && globalThis.ChatCmdRuntime.current(CONTENT_CONTEXT),
     });
-    await attachTextFiles(composer, message.attachments);
+    await attachFiles(composer, message.attachments);
     setComposerText(composer, message.submittedContent);
     await submitPrompt(composer);
     ({ conversationId, conversationUrl } = await waitForConversationIdentity());
@@ -346,10 +346,10 @@ function setComposerText(composer, text) {
   composer.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
 }
 
-async function attachTextFiles(composer, rawAttachments) {
-  const attachments = normalizeTextFileAttachments(rawAttachments);
+async function attachFiles(composer, rawAttachments) {
+  const attachments = normalizeFileAttachments(rawAttachments);
   if (!attachments.length) return;
-  const files = attachments.map((attachment) => new File([attachment.content], attachment.name, {
+  const files = attachments.map((attachment) => new File([attachmentFilePart(attachment)], attachment.name, {
     type: attachment.mimeType,
     lastModified: Date.now(),
   }));
@@ -363,14 +363,30 @@ async function attachTextFiles(composer, rawAttachments) {
   );
 }
 
-function normalizeTextFileAttachments(rawAttachments) {
+function normalizeFileAttachments(rawAttachments) {
   if (!Array.isArray(rawAttachments)) return [];
   return rawAttachments.flatMap((attachment, index) => {
     if (!attachment || typeof attachment !== 'object' || typeof attachment.content !== 'string' || !attachment.content) return [];
     const rawName = String(attachment.name || `pasted-text-${index + 1}.txt`).split(/[\\/]/).pop().trim();
+    if (attachment.encoding === 'base64') {
+      return [{
+        name: rawName || `attachment-${index + 1}`,
+        content: attachment.content,
+        mimeType: String(attachment.mimeType || 'application/octet-stream'),
+        encoding: 'base64',
+      }];
+    }
     const name = rawName.toLowerCase().endsWith('.txt') ? rawName : `${rawName || `pasted-text-${index + 1}`}.txt`;
-    return [{ name, content: attachment.content, mimeType: 'text/plain;charset=utf-8' }];
+    return [{ name, content: attachment.content, mimeType: 'text/plain;charset=utf-8', encoding: 'utf8' }];
   });
+}
+
+function attachmentFilePart(attachment) {
+  if (attachment.encoding !== 'base64') return attachment.content;
+  const decoded = atob(attachment.content);
+  const bytes = new Uint8Array(decoded.length);
+  for (let index = 0; index < decoded.length; index += 1) bytes[index] = decoded.charCodeAt(index);
+  return bytes;
 }
 
 function findComposerFileInput(composer) {
@@ -389,8 +405,9 @@ function findComposerFileInput(composer) {
 
 function fileInputScore(input) {
   const accept = String(input.accept || '').toLowerCase();
-  if (!accept || accept.includes('text') || accept.includes('.txt') || accept.includes('*/*')) return 3 + (input.multiple ? 1 : 0);
-  return 0;
+  if (!accept || accept.includes('*/*')) return 4 + (input.multiple ? 1 : 0);
+  if (accept.includes('text') || accept.includes('image') || accept.includes('application') || accept.includes('.')) return 2 + (input.multiple ? 1 : 0);
+  return 1;
 }
 
 function assignFilesToInput(input, files) {

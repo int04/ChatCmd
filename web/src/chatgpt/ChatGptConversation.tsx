@@ -11,6 +11,7 @@ import { canonicalProjectPath } from '../tasks/workspaceProjects';
 import type { Agent } from '../types';
 import { orderAgentsByRecentUse, rememberAgentUse } from './agentRecency';
 import { useLoad } from '../useLoad';
+import { ComposerFileInput } from './ComposerFileInput';
 export { ChatGptTaskComposer } from './ChatGptTaskComposer';
 import { useCompactBridgeSync } from './compact/useCompactBridgeSync';
 import { fileAttachmentPayloads, messageContentWithTextAttachments, textAttachmentFromPaste, type ChatGptTextAttachment } from './pasteAttachments';
@@ -191,13 +192,22 @@ export function NewChatGptConversation() {
             </div>
           </div>
         </div>
-        {textAttachments.length > 0 && <div className="chatgpt-message-attachments" aria-label={tr('Text files from clipboard')}>
+        {textAttachments.length > 0 && <div className="chatgpt-message-attachments" aria-label={tr('Attachments for the next message')}>
           {textAttachments.map((attachment) => <span key={attachment.id} title={tr('{name} · {count} characters', { name: attachment.name, count: attachment.content.length.toLocaleString() })}><FileText />{attachment.name}<button type="button" aria-label={tr('Remove file {name}', { name: attachment.name })} onClick={() => setTextAttachments((current) => current.filter((item) => item.id !== attachment.id))}><X /></button></span>)}
         </div>}
-        <div className="chatgpt-chat-input-wrap">
-          <textarea rows={3} value={content} onChange={(event) => setContent(event.target.value)} onPaste={handlePaste} disabled={busy} placeholder={tr('Enter a request for ChatGPT…')} />
-          <button className="chatgpt-chat-send" type="submit" aria-label={tr('Send to ChatGPT')} disabled={busy || !agentId || !effectiveContent || extensionReady === false}>{busy ? <LoaderCircle className="spin" /> : <Send />}</button>
-        </div>
+        <ComposerFileInput
+          value={content}
+          setValue={setContent}
+          attachments={textAttachments}
+          setAttachments={setTextAttachments}
+          onPaste={handlePaste}
+          onError={setError}
+          disabled={busy}
+          placeholder={tr('Enter a request for ChatGPT…')}
+          rows={3}
+          variant="new"
+          endAction={<button className="chatgpt-chat-send" type="submit" aria-label={tr('Send to ChatGPT')} disabled={busy || !agentId || !effectiveContent || extensionReady === false}>{busy ? <LoaderCircle className="spin" /> : <Send />}</button>}
+        />
         <div className="chatgpt-chat-composer-meta"><span>{selectedAgent ? tr('Send to @{name}', { name: selectedAgent.name }) : tr('No enabled agent')}</span><span><ShieldCheck />{tr('Actual message')}: <code>{selectedPrompt(enabledAgents, agentId, projectFolder, effectiveContent)}</code></span></div>
       </form>
     </section>

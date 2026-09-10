@@ -5,22 +5,36 @@ use serde_json::{Value, json};
 
 use super::Problem;
 
-fn folder_problem(detail: impl Into<String>) -> Problem {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PickerKind {
+    Folder,
+    File,
+}
+
+fn picker_problem(detail: impl Into<String>) -> Problem {
     Problem::new(
         StatusCode::INTERNAL_SERVER_ERROR,
-        "Folder picker failed",
+        "Path picker failed",
         detail,
     )
 }
 
 pub(super) async fn pick_project_folder() -> Result<Json<Value>, Problem> {
-    let path = tokio::task::spawn_blocking(open_folder_picker)
+    pick_path(PickerKind::Folder).await
+}
+
+pub(super) async fn pick_file_path() -> Result<Json<Value>, Problem> {
+    pick_path(PickerKind::File).await
+}
+
+async fn pick_path(kind: PickerKind) -> Result<Json<Value>, Problem> {
+    let path = tokio::task::spawn_blocking(move || open_path_picker(kind))
         .await
-        .map_err(|error| folder_problem(error.to_string()))??;
+        .map_err(|error| picker_problem(error.to_string()))??;
     Ok(Json(json!({ "path": path })))
 }
 
-fn open_folder_picker() -> Result<Option<String>, Problem> {
+fn open_path_picker(kind: PickerKind) -> Result<Option<String>, Problem> {
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -30,6 +44,9 @@ fn open_folder_picker() -> Result<Option<String>, Problem> {
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+$pickFolders = $env:CHATCMD_PICK_KIND -eq 'folder'
+$title = if ($pickFolders) { 'Chọn thư mục' } else { 'Chọn tệp' }
+$okLabel = if ($pickFolders) { 'Chọn thư mục' } else { 'Chọn tệp' }
 
 $source = @'
 using System;
@@ -40,6 +57,7 @@ public enum FileOpenOptions : uint {
     PickFolders = 0x00000020,
     ForceFileSystem = 0x00000040,
     PathMustExist = 0x00000800,
+    FileMustExist = 0x00001000,
     DontAddToRecent = 0x02000000
 }
 
@@ -94,17 +112,19 @@ public interface IFileOpenDialog {
 [Guid("DC1C5A9C-E88A-4DDE-A5A1-60F82A20AEF7")]
 public class FileOpenDialogCom { }
 
-public static class ModernFolderPicker {
+public static class ModernPathPicker {
     private const int Cancelled = unchecked((int)0x800704C7);
 
-    public static string Pick(IntPtr owner) {
+    public static string Pick(IntPtr owner, bool pickFolders, string title, string okLabel) {
         IFileOpenDialog dialog = (IFileOpenDialog)new FileOpenDialogCom();
         try {
             FileOpenOptions options;
             dialog.GetOptions(out options);
-            dialog.SetOptions(options | FileOpenOptions.PickFolders | FileOpenOptions.ForceFileSystem | FileOpenOptions.PathMustExist | FileOpenOptions.DontAddToRecent);
-            dialog.SetTitle("Chọn thư mục dự án");
-            dialog.SetOkButtonLabel("Chọn thư mục");
+            FileOpenOptions required = FileOpenOptions.ForceFileSystem | FileOpenOptions.PathMustExist | FileOpenOptions.DontAddToRecent;
+            required |= pickFolders ? FileOpenOptions.PickFolders : FileOpenOptions.FileMustExist;
+            dialog.SetOptions(options | required);
+            dialog.SetTitle(title);
+            dialog.SetOkButtonLabel(okLabel);
 
             int result = dialog.Show(owner);
             if (result == Cancelled) return null;
@@ -141,7 +161,7 @@ $owner.Activate()
 $owner.BringToFront()
 
 try {
-    $path = [ModernFolderPicker]::Pick($owner.Handle)
+    $path = [ModernPathPicker]::Pick($owner.Handle, $pickFolders, $title, $okLabel)
     if ($path) { Write-Output $path }
 } finally {
     $owner.Close()
@@ -159,50 +179,72 @@ try {
                 "-Command",
                 script,
             ])
+            .env(
+                "CHATCMD_PICK_KIND",
+                if kind == PickerKind::Folder {
+                    "folder"
+                } else {
+                    "file"
+                },
+            )
             .creation_flags(CREATE_NO_WINDOW)
             .output()
-            .map_err(|error| folder_problem(error.to_string()))?;
+            .map_err(|error| picker_problem(error.to_string()))?;
         if !output.status.success() {
-            return Err(folder_problem(
+            return Err(picker_problem(
                 String::from_utf8_lossy(&output.stderr).trim().to_string(),
             ));
         }
-        Ok(clean_path(&output.stdout))
+        Ok(clean_selected_path(&output.stdout, kind))
     }
 
     #[cfg(target_os = "macos")]
     {
+        let script = if kind == PickerKind::Folder {
+            "POSIX path of (choose folder with prompt \"Chọn thư mục\")"
+        } else {
+            "POSIX path of (choose file with prompt \"Chọn tệp\")"
+        };
         let output = Command::new("osascript")
-            .args([
-                "-e",
-                "POSIX path of (choose folder with prompt \"Chọn thư mục dự án\")",
-            ])
+            .args(["-e", script])
             .output()
-            .map_err(|error| folder_problem(error.to_string()))?;
+            .map_err(|error| picker_problem(error.to_string()))?;
         if !output.status.success() {
             return Ok(None);
         }
-        Ok(clean_path(&output.stdout).map(|value| value.trim_end_matches('/').to_string()))
+        Ok(clean_selected_path(&output.stdout, kind))
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        let output = Command::new("zenity")
-            .args([
-                "--file-selection",
-                "--directory",
-                "--title=Chọn thư mục dự án",
-            ])
+        let mut command = Command::new("zenity");
+        command.arg("--file-selection");
+        if kind == PickerKind::Folder {
+            command.arg("--directory");
+        }
+        command.arg(if kind == PickerKind::Folder {
+            "--title=Chọn thư mục"
+        } else {
+            "--title=Chọn tệp"
+        });
+        let output = command
             .output()
-            .map_err(|error| folder_problem(error.to_string()))?;
+            .map_err(|error| picker_problem(error.to_string()))?;
         if !output.status.success() {
             return Ok(None);
         }
-        return Ok(clean_path(&output.stdout));
+        Ok(clean_selected_path(&output.stdout, kind))
     }
 }
 
-fn clean_path(bytes: &[u8]) -> Option<String> {
+fn clean_selected_path(bytes: &[u8], kind: PickerKind) -> Option<String> {
     let value = String::from_utf8_lossy(bytes).trim().to_string();
-    (!value.is_empty()).then_some(value)
+    if value.is_empty() {
+        return None;
+    }
+    Some(if kind == PickerKind::Folder {
+        value.trim_end_matches(['/', '\\']).to_string()
+    } else {
+        value
+    })
 }
