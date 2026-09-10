@@ -1,4 +1,4 @@
-import { CircleAlert, CircleStop, ExternalLink, FileText, FolderOpen, LoaderCircle, PlugZap, Send, Unplug, X } from 'lucide-react';
+import { CircleAlert, CircleStop, ExternalLink, FolderOpen, LoaderCircle, PlugZap, Send, Unplug, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../api';
@@ -9,6 +9,7 @@ import { canonicalProjectPath } from '../tasks/workspaceProjects';
 import { useLoad } from '../useLoad';
 import { ChatGptMessageQueuePanel, type ChatGptQueueMode } from './ChatGptMessageQueue';
 import { ComposerFileInput } from './ComposerFileInput';
+import { ChatGptAttachmentPreview } from './ChatGptAttachmentPreview';
 import { CompactAction, CompactStatusCard } from './compact/CompactControls';
 import { useCompact } from './compact/CompactProvider';
 import { useCompactBridgeSync } from './compact/useCompactBridgeSync';
@@ -248,7 +249,7 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
       {(attachedPlugin || attachedProjectFolder || textAttachments.length > 0) && <div className="chatgpt-message-attachments" aria-label={tr('Attachments for the next message')}>
         {attachedPlugin && <span><PlugZap />@{attachedPlugin.name}<button type="button" aria-label={tr('Remove attached plugin')} onClick={() => setAttachedAgentId('')}><X /></button></span>}
         {attachedProjectFolder && <span title={attachedProjectFolder}><FolderOpen />{attachedProjectFolder}<button type="button" aria-label={tr('Remove attached project')} onClick={() => setAttachedProjectFolder('')}><X /></button></span>}
-        {textAttachments.map((attachment) => <span key={attachment.id} title={tr('{name} · {count} characters', { name: attachment.name, count: attachment.content.length.toLocaleString() })}><FileText />{attachment.name}<button type="button" aria-label={tr('Remove file {name}', { name: attachment.name })} onClick={() => setTextAttachments((current) => current.filter((item) => item.id !== attachment.id))}><X /></button></span>)}
+        {textAttachments.map((attachment) => <ChatGptAttachmentPreview key={attachment.id} attachment={attachment} onRemove={() => setTextAttachments((current) => current.filter((item) => item.id !== attachment.id))} />)}
       </div>}
       <div className="chatgpt-composer-row">
         <ComposerFileInput

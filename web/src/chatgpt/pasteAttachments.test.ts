@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LONG_PASTE_TEXT_THRESHOLD, fileAttachmentFromFile, fileAttachmentPayloads, messageContentWithTextAttachments, textAttachmentFromPaste } from './pasteAttachments';
+import { LONG_PASTE_TEXT_THRESHOLD, clipboardAttachmentFromFile, fileAttachmentFromFile, fileAttachmentPayloads, messageContentWithTextAttachments, textAttachmentFromPaste } from './pasteAttachments';
 
 describe('clipboard and file attachments', () => {
   it('keeps short clipboard text in the textarea', () => {
@@ -23,6 +23,18 @@ describe('clipboard and file attachments', () => {
       name: 'sample.bin',
       content: 'AAEC/w==',
       mimeType: 'application/octet-stream',
+      encoding: 'base64',
+      sizeBytes: 4,
+    });
+  });
+
+  it('converts a pasted screenshot into a named image attachment', async () => {
+    const file = new File([new Uint8Array([137, 80, 78, 71])], 'image.png', { type: 'image/png' });
+    await expect(clipboardAttachmentFromFile(file, 4)).resolves.toEqual({
+      id: 'clipboard-file-4',
+      name: 'clipboard-image-4.png',
+      content: 'iVBORw==',
+      mimeType: 'image/png',
       encoding: 'base64',
       sizeBytes: 4,
     });

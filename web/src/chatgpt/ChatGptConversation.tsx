@@ -1,4 +1,4 @@
-import { Bot, CircleAlert, CircleStop, ExternalLink, FileText, FolderOpen, LoaderCircle, MessageSquarePlus, Send, ShieldCheck, Sparkles, Unplug, X } from 'lucide-react';
+import { Bot, CircleAlert, CircleStop, ExternalLink, FolderOpen, LoaderCircle, MessageSquarePlus, Send, ShieldCheck, Sparkles, Unplug, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ClipboardEvent, FormEvent } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -12,6 +12,7 @@ import type { Agent } from '../types';
 import { orderAgentsByRecentUse, rememberAgentUse } from './agentRecency';
 import { useLoad } from '../useLoad';
 import { ComposerFileInput } from './ComposerFileInput';
+import { ChatGptAttachmentPreview } from './ChatGptAttachmentPreview';
 export { ChatGptTaskComposer } from './ChatGptTaskComposer';
 import { useCompactBridgeSync } from './compact/useCompactBridgeSync';
 import { fileAttachmentPayloads, messageContentWithTextAttachments, textAttachmentFromPaste, type ChatGptTextAttachment } from './pasteAttachments';
@@ -193,7 +194,7 @@ export function NewChatGptConversation() {
           </div>
         </div>
         {textAttachments.length > 0 && <div className="chatgpt-message-attachments" aria-label={tr('Attachments for the next message')}>
-          {textAttachments.map((attachment) => <span key={attachment.id} title={tr('{name} · {count} characters', { name: attachment.name, count: attachment.content.length.toLocaleString() })}><FileText />{attachment.name}<button type="button" aria-label={tr('Remove file {name}', { name: attachment.name })} onClick={() => setTextAttachments((current) => current.filter((item) => item.id !== attachment.id))}><X /></button></span>)}
+          {textAttachments.map((attachment) => <ChatGptAttachmentPreview key={attachment.id} attachment={attachment} onRemove={() => setTextAttachments((current) => current.filter((item) => item.id !== attachment.id))} />)}
         </div>}
         <ComposerFileInput
           value={content}

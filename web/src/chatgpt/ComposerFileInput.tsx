@@ -1,11 +1,11 @@
 import { FileText, FolderOpen, Paperclip } from 'lucide-react';
-import { useRef, useState, type ClipboardEventHandler, type Dispatch, type DragEvent, type ReactNode, type SetStateAction } from 'react';
+import { useRef, useState, type ClipboardEvent, type ClipboardEventHandler, type Dispatch, type DragEvent, type ReactNode, type SetStateAction } from 'react';
 import { createPortal } from 'react-dom';
 
 import { api } from '../api';
 import { Modal } from '../components';
 import { useAppLanguage } from '../i18n';
-import { fileAttachmentFromFile, type ChatGptTextAttachment } from './pasteAttachments';
+import { clipboardAttachmentFromFile, fileAttachmentFromFile, type ChatGptTextAttachment } from './pasteAttachments';
 
 type DroppedFile = { file: File; path?: string };
 type DropEntry = { isDirectory?: boolean; isFile?: boolean; name?: string };
@@ -35,13 +35,15 @@ export function ComposerFileInput(props: ComposerFileInputProps) {
   const [reading, setReading] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<DroppedFile[]>([]);
 
-  const attachFiles = async (files: File[]) => {
+  const attachFiles = async (files: File[], source: 'selected' | 'clipboard' = 'selected') => {
     if (!files.length || reading || props.disabled) return;
     setReading(true);
     try {
       const attachments = await Promise.all(files.map((file) => {
         fileSequence.current += 1;
-        return fileAttachmentFromFile(file, fileSequence.current);
+        return source === 'clipboard'
+          ? clipboardAttachmentFromFile(file, fileSequence.current)
+          : fileAttachmentFromFile(file, fileSequence.current);
       }));
       props.setAttachments((current) => [...current, ...attachments]);
     } catch {
@@ -49,6 +51,16 @@ export function ComposerFileInput(props: ComposerFileInputProps) {
     } finally {
       setReading(false);
     }
+  };
+
+  const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = clipboardFiles(event.clipboardData);
+    if (!files.length) {
+      props.onPaste(event);
+      return;
+    }
+    event.preventDefault();
+    void attachFiles(files, 'clipboard');
   };
 
   const resolveFolderPaths = async (folders: Array<{ name: string; path?: string }>) => {
@@ -136,7 +148,7 @@ export function ComposerFileInput(props: ComposerFileInputProps) {
         rows={props.rows}
         value={props.value}
         onChange={(event) => props.setValue(event.target.value)}
-        onPaste={props.onPaste}
+        onPaste={handlePaste}
         disabled={props.disabled}
         placeholder={props.placeholder}
       />
@@ -188,6 +200,14 @@ function dropEntry(item: DataTransferItem): DropEntry | undefined {
 
 function hasFiles(data: DataTransfer) {
   return Array.from(data.types).includes('Files');
+}
+
+function clipboardFiles(data: DataTransfer) {
+  const itemFiles = Array.from(data.items)
+    .filter((item) => item.kind === 'file')
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => Boolean(file));
+  return itemFiles.length ? itemFiles : Array.from(data.files);
 }
 
 function droppedAbsolutePaths(data: DataTransfer) {
@@ -255,7 +275,7 @@ const enCopy = {
   dropDescription: 'Attach the dropped file to ChatGPT, or insert only its local path into the message.',
   attachFile: 'Attach file',
   attachPath: 'Attach path',
-  readError: 'Could not read the selected file.',
+  readError: 'Could not read the selected or pasted file.',
   pathError: 'Could not resolve the local path.',
   folder: 'Folder',
 };
@@ -266,7 +286,7 @@ const viCopy = {
   dropDescription: 'Đính kèm tệp vào ChatGPT hoặc chỉ chèn đường dẫn cục bộ của tệp vào nội dung.',
   attachFile: 'Đính kèm tệp',
   attachPath: 'Đính kèm path',
-  readError: 'Không thể đọc tệp đã chọn.',
+  readError: 'Không thể đọc tệp đã chọn hoặc dán từ clipboard.',
   pathError: 'Không thể lấy đường dẫn cục bộ.',
   folder: 'Thư mục',
 };

@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { useState } from 'react';
+import { useState, type ClipboardEventHandler } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getAppLanguage, setAppLanguage, type AppLanguage } from '../i18n';
@@ -18,7 +18,7 @@ vi.mock('../api', () => ({
   },
 }));
 
-function Harness() {
+function Harness({ onPaste = () => undefined }: { onPaste?: ClipboardEventHandler<HTMLTextAreaElement> }) {
   const [value, setValue] = useState('');
   const [attachments, setAttachments] = useState<ChatGptTextAttachment[]>([]);
   const [error, setError] = useState('');
@@ -28,7 +28,7 @@ function Harness() {
       setValue={setValue}
       attachments={attachments}
       setAttachments={setAttachments}
-      onPaste={() => undefined}
+      onPaste={onPaste}
       onError={setError}
       placeholder="Type here"
       rows={2}
@@ -62,6 +62,15 @@ function folderItem(name: string) {
     getAsFile: () => null,
     webkitGetAsEntry: () => ({ isFile: false, isDirectory: true, name }),
   };
+}
+
+function clipboardData(files: File[], text = '') {
+  return {
+    types: files.length ? ['Files'] : ['text/plain'],
+    files,
+    items: files.map((file) => ({ kind: 'file', type: file.type, getAsFile: () => file })),
+    getData: (type: string) => type === 'text/plain' ? text : '',
+  } as unknown as DataTransfer;
 }
 
 describe('ComposerFileInput', () => {
@@ -133,5 +142,28 @@ describe('ComposerFileInput', () => {
     await waitFor(() => expect(screen.getByTestId('attachments')).toHaveTextContent('sample.bin'));
     expect(screen.getByTestId('value')).toBeEmptyDOMElement();
     expect(screen.getByTestId('error')).toBeEmptyDOMElement();
+  });
+
+  it('turns a Ctrl+V screenshot into an image attachment instead of inserting clipboard text', async () => {
+    const onPaste = vi.fn();
+    render(<Harness onPaste={onPaste} />);
+    const image = new File([new Uint8Array([137, 80, 78, 71])], 'image.png', { type: 'image/png' });
+
+    fireEvent.paste(screen.getByRole('textbox'), { clipboardData: clipboardData([image], 'ignored text') });
+
+    await waitFor(() => expect(screen.getByTestId('attachments')).toHaveTextContent('clipboard-image-1.png'));
+    expect(screen.getByTestId('value')).toBeEmptyDOMElement();
+    expect(onPaste).not.toHaveBeenCalled();
+    expect(screen.getByTestId('error')).toBeEmptyDOMElement();
+  });
+
+  it('delegates ordinary Ctrl+V text to the existing paste handler', () => {
+    const onPaste = vi.fn();
+    render(<Harness onPaste={onPaste} />);
+
+    fireEvent.paste(screen.getByRole('textbox'), { clipboardData: clipboardData([], 'short text') });
+
+    expect(onPaste).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('attachments')).toBeEmptyDOMElement();
   });
 });

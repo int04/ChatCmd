@@ -25,16 +25,14 @@ export function textAttachmentFromPaste(text: string, sequence: number): ChatGpt
 }
 
 export async function fileAttachmentFromFile(file: File, sequence: number): Promise<ChatGptTextAttachment> {
-  const safeSequence = Math.max(1, Math.trunc(sequence) || 1);
-  const fallbackName = `attachment-${safeSequence}`;
-  return {
-    id: `selected-file-${safeSequence}`,
-    name: file.name.trim() || fallbackName,
-    content: await fileAsBase64(file),
-    mimeType: file.type || 'application/octet-stream',
-    encoding: 'base64',
-    sizeBytes: file.size,
-  };
+  const safeSequence = safeAttachmentSequence(sequence);
+  return binaryAttachmentFromFile(file, `selected-file-${safeSequence}`, file.name.trim() || `attachment-${safeSequence}`);
+}
+
+export async function clipboardAttachmentFromFile(file: File, sequence: number): Promise<ChatGptTextAttachment> {
+  const safeSequence = safeAttachmentSequence(sequence);
+  const name = clipboardAttachmentName(file, safeSequence);
+  return binaryAttachmentFromFile(file, `clipboard-file-${safeSequence}`, name);
 }
 
 export function messageContentWithTextAttachments(content: string, attachments: ChatGptTextAttachment[]) {
@@ -46,6 +44,38 @@ export function messageContentWithTextAttachments(content: string, attachments: 
 
 export function fileAttachmentPayloads(attachments: ChatGptTextAttachment[]): ChatGptFileAttachmentPayload[] {
   return attachments.map(({ name, content, mimeType, encoding }) => ({ name, content, mimeType, ...(encoding ? { encoding } : {}) }));
+}
+
+async function binaryAttachmentFromFile(file: File, id: string, name: string): Promise<ChatGptTextAttachment> {
+  return {
+    id,
+    name,
+    content: await fileAsBase64(file),
+    mimeType: file.type || 'application/octet-stream',
+    encoding: 'base64',
+    sizeBytes: file.size,
+  };
+}
+
+function safeAttachmentSequence(sequence: number) {
+  return Math.max(1, Math.trunc(sequence) || 1);
+}
+
+function clipboardAttachmentName(file: File, sequence: number) {
+  if (!file.type.toLowerCase().startsWith('image/')) return file.name.trim() || `clipboard-file-${sequence}`;
+  return `clipboard-image-${sequence}.${imageExtension(file.type)}`;
+}
+
+function imageExtension(mimeType: string) {
+  switch (mimeType.toLowerCase()) {
+    case 'image/jpeg': return 'jpg';
+    case 'image/gif': return 'gif';
+    case 'image/webp': return 'webp';
+    case 'image/bmp': return 'bmp';
+    case 'image/svg+xml': return 'svg';
+    case 'image/avif': return 'avif';
+    default: return 'png';
+  }
 }
 
 function fileAsBase64(file: File) {
