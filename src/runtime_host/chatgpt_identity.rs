@@ -28,6 +28,12 @@ impl RuntimeHost {
         .map_err(|_| RuntimeError::new("storage_error", "unbound ChatGPT bridge lookup failed"))?;
 
         let matching_rows = matching_unbound_rows(&rows, first_user_message);
+        if first_user_message.is_some() && matching_rows.len() > 1 {
+            return Err(RuntimeError::new(
+                "conversation_identity_ambiguous",
+                "multiple pending ChatUI requests match this message; wait for the browser binding and reuse the existing taskId instead of creating a new conversation",
+            ));
+        }
         if matching_rows.len() != 1 {
             return Ok(None);
         }

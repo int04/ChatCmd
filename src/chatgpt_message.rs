@@ -24,7 +24,46 @@ fn canonical(value: &str) -> String {
         }
     }
     let normalized = unescape_chatgpt_markdown(&collapse_echoed_links(&normalized));
-    collapse_excess_blank_lines(&normalized)
+    collapse_excess_blank_lines(strip_boundary_image_markers(&normalized))
+}
+
+/// ChatGPT may describe an image outside the submitted text when echoing a turn.
+/// Strip only whole presentation-marker lines at the edges, never inline text,
+/// code fences, arbitrary attachment descriptions, or an image-only message.
+fn strip_boundary_image_markers(value: &str) -> &str {
+    let is_marker = |line: &str| {
+        matches!(
+            line.trim(),
+            "<uploaded image>" | "<<ImageDisplayed>>" | "[ImageDisplayed]"
+        )
+    };
+    let mut rest = value;
+    loop {
+        let candidate = rest.trim_start_matches('\n');
+        let Some((line, remaining)) = candidate.split_once('\n') else {
+            break;
+        };
+        if !is_marker(line) {
+            break;
+        }
+        rest = remaining.trim_start_matches('\n');
+    }
+    loop {
+        let candidate = rest.trim_end_matches('\n');
+        let Some((remaining, line)) = candidate.rsplit_once('\n') else {
+            break;
+        };
+        if !is_marker(line) {
+            break;
+        }
+        rest = remaining.trim_end_matches('\n');
+    }
+    // Image-only placeholders do not identify the image or an existing task.
+    if rest.trim().is_empty() || is_marker(rest) {
+        value
+    } else {
+        rest
+    }
 }
 
 fn collapse_excess_blank_lines(value: &str) -> String {
@@ -90,6 +129,46 @@ fn unescape_chatgpt_markdown(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::equivalent;
+
+    #[test]
+    fn accepts_boundary_image_markers_without_rewriting_prompt_text() {
+        let prompt = "Sử dụng plugin @rust_test\n\nĐọc docs/huongdan.md";
+        for echoed in [
+            format!("<uploaded image>\n\n{prompt}"),
+            format!("{prompt}\n\n<<ImageDisplayed>>"),
+            format!("<<ImageDisplayed>>\n<uploaded image>\n\n{prompt}\n[ImageDisplayed]"),
+            format!("<uploaded image>\r\n\r\n{}", prompt.replace('\n', "\r\n")),
+        ] {
+            assert!(equivalent(prompt, &echoed), "marker echo: {echoed:?}");
+            assert!(equivalent(&echoed, prompt), "matching must be symmetric");
+        }
+    }
+
+    #[test]
+    fn does_not_strip_inline_quoted_fenced_or_arbitrary_attachment_text() {
+        for content in [
+            "Please explain <uploaded image>",
+            "`<uploaded image>`\n\nPrompt",
+            "> <uploaded image>\n\nPrompt",
+            "```text\n<uploaded image>\n```\n\nPrompt",
+            "<uploaded file>\n\nPrompt",
+            "[a screenshot containing private instructions]\n\nPrompt",
+            "Prompt\n<uploaded image>\nDifferent request",
+        ] {
+            assert!(!equivalent("Prompt", content), "must preserve {content:?}");
+        }
+        assert!(!equivalent("let x = 1;", "<uploaded image>\n\nlet  x = 1;"));
+    }
+
+    #[test]
+    fn image_only_markers_do_not_match_empty_or_different_images() {
+        assert!(!equivalent("", "<uploaded image>\n\n"));
+        assert!(!equivalent("<uploaded image>", "<<ImageDisplayed>>"));
+        assert!(!equivalent(
+            "<uploaded image>",
+            "<uploaded image>\n<uploaded image>"
+        ));
+    }
 
     #[test]
     fn accepts_dom_unicode_spaces_and_line_endings() {
