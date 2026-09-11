@@ -9,6 +9,10 @@ use super::{RuntimeHost, invalid, now_ms, storage_error};
 
 #[path = "identity_bridge.rs"]
 mod bridge;
+#[path = "identity_routing.rs"]
+mod routing;
+#[path = "identity_scope.rs"]
+mod scope;
 #[cfg(test)]
 use bridge::unique_bridge_task_for_message;
 
@@ -19,23 +23,35 @@ impl RuntimeHost {
         first_user_message: Option<&str>,
     ) -> RuntimeResult<()> {
         let conversation_scope = context.conversation_scope_id.clone();
-        let explicit_task = context
+        let explicit = context
             .task_id
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_owned);
-        let bound_task = if explicit_task.is_none() {
+        let bound = if explicit.is_none() {
             self.bound_task_for_turn(context).await?
         } else {
             None
         };
-        let delegated_task = self
+        let delegated = self
             .delegated_subagent_task_id(context, first_user_message)
             .await?;
-        // Persisted identity outranks prompt similarity: two chats may both say "commit".
-        let mapped_scope_task =
-            if explicit_task.is_none() && bound_task.is_none() && delegated_task.is_none() {
+        let alias = self.mapped_mcp_scope_task(context).await?;
+        if alias.as_deref().is_some_and(|owner| {
+            explicit
+                .as_deref()
+                .or(bound.as_deref())
+                .or(delegated.as_deref())
+                .is_some_and(|expected| expected != owner)
+        }) {
+            return Err(RuntimeError::new(
+                "conversation_identity_conflict",
+                "the supplied task conflicts with the durable MCP conversation binding",
+            ));
+        }
+        let mapped =
+            if explicit.is_none() && bound.is_none() && delegated.is_none() && alias.is_none() {
                 if let Some(scope) = conversation_scope.as_deref() {
                     self.bound_task_for_conversation_scope(&context.agent_id, scope)
                         .await?
@@ -45,83 +61,86 @@ impl RuntimeHost {
             } else {
                 None
             };
-        let chatgpt_bridge_task = if explicit_task.is_none()
-            && bound_task.is_none()
-            && delegated_task.is_none()
-            && mapped_scope_task.is_none()
-        {
-            if let Some(message) = first_user_message {
+        let known = explicit
+            .clone()
+            .or(bound)
+            .or(delegated)
+            .or(alias)
+            .or(mapped);
+        let routed = if first_user_message.is_some() || known.is_none() {
+            self.bridge_task_from_route(context, first_user_message, known.as_deref())
+                .await?
+        } else {
+            None
+        };
+        let mut selected = known.or(routed);
+        if selected.is_none() {
+            selected = if let Some(message) = first_user_message {
                 self.chatgpt_bridge_task_for_message(&context.agent_id, None, message)
                     .await?
             } else {
-                None
-            }
-        } else {
-            None
-        };
-        let pending_chatgpt_bridge_task = if explicit_task.is_none()
-            && bound_task.is_none()
-            && delegated_task.is_none()
-            && chatgpt_bridge_task.is_none()
-            && mapped_scope_task.is_none()
-        {
-            let bound = if first_user_message.is_none() {
                 self.unique_recent_chatgpt_bridge_task(&context.agent_id)
                     .await?
-            } else {
-                None
             };
-            match bound {
-                Some(task_id) => Some(task_id),
-                None => {
-                    self.claim_unbound_chatgpt_bridge_task(
-                        &context.agent_id,
-                        conversation_scope.as_deref(),
-                        first_user_message,
-                    )
-                    .await?
-                }
+        }
+        if selected.is_none() {
+            selected = self
+                .claim_unbound_chatgpt_bridge_task(
+                    &context.agent_id,
+                    conversation_scope.as_deref(),
+                    first_user_message,
+                )
+                .await?;
+        }
+        if selected.is_none() {
+            if let Some(message) = first_user_message {
+                self.guard_rewritten_chatui_message(context, message)
+                    .await?;
+            } else if conversation_scope
+                .as_deref()
+                .is_some_and(|scope| scope.starts_with("openai:"))
+            {
+                return Err(RuntimeError::new(
+                    "conversation_identity_unbound",
+                    "this ChatGPT tool call is not bound to an existing local conversation; call agent_user_message with the ChatUI routing turnId and reuse its taskId",
+                ));
             }
-        } else {
-            None
-        };
-        let unresolved_openai_tool_call = first_user_message.is_none()
-            && explicit_task.is_none()
-            && bound_task.is_none()
-            && delegated_task.is_none()
-            && chatgpt_bridge_task.is_none()
-            && mapped_scope_task.is_none()
-            && pending_chatgpt_bridge_task.is_none()
+        }
+        let task = selected.unwrap_or_else(|| {
+            if let (Some(scope), Some(message)) =
+                (conversation_scope.as_deref(), first_user_message)
+            {
+                task_identity_from_first_message(&context.agent_id, scope, message)
+            } else {
+                select_task_identity(
+                    &context.agent_id,
+                    conversation_scope.as_deref(),
+                    None,
+                    None,
+                    &context.request_id,
+                )
+            }
+        });
+        if explicit.is_some()
             && conversation_scope
                 .as_deref()
-                .is_some_and(|scope| scope.starts_with("openai:"));
-        if unresolved_openai_tool_call {
-            return Err(RuntimeError::new(
-                "conversation_identity_unbound",
-                "this ChatGPT tool call is not bound to an existing local conversation. Call agent_user_message first and reuse its taskId/turnId instead of creating a new conversation",
-            ));
+                .is_some_and(|scope| scope.starts_with("openai:"))
+        {
+            let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM tasks WHERE id=?)")
+                .bind(&task)
+                .fetch_one(self.repository.pool())
+                .await
+                .map_err(|_| {
+                    RuntimeError::new("storage_error", "explicit conversation lookup failed")
+                })?;
+            if !exists {
+                return Err(RuntimeError::new(
+                    "conversation_identity_unbound",
+                    "the supplied taskId does not exist; use the ChatUI routing turnId instead of inventing a new conversation",
+                ));
+            }
         }
-        let task = explicit_task
-            .or(bound_task)
-            .or(delegated_task)
-            .or(mapped_scope_task)
-            .or(chatgpt_bridge_task)
-            .or(pending_chatgpt_bridge_task)
-            .unwrap_or_else(|| {
-                if let (Some(scope), Some(message)) =
-                    (conversation_scope.as_deref(), first_user_message)
-                {
-                    task_identity_from_first_message(&context.agent_id, scope, message)
-                } else {
-                    select_task_identity(
-                        &context.agent_id,
-                        conversation_scope.as_deref(),
-                        None,
-                        None,
-                        &context.request_id,
-                    )
-                }
-            });
+        self.validate_resolved_task(context, &task).await?;
         let turn = context.turn_id.clone().unwrap_or_else(|| {
             safe_id(
                 "turn",
@@ -269,7 +288,12 @@ impl RuntimeHost {
                 last_used_at_ms: now,
             })
             .await
-            .map_err(storage_error)
+            .map_err(storage_error)?;
+        // A provisional tool-only match must not become a durable conversation alias.
+        if first_user_message.is_some() {
+            self.persist_mcp_scope_binding(context).await?;
+        }
+        Ok(())
     }
 
     async fn approve_new_conversations_enabled(&self) -> RuntimeResult<bool> {
@@ -359,3 +383,11 @@ mod tests;
 #[cfg(test)]
 #[path = "identity_regression_tests.rs"]
 mod regression_tests;
+
+#[cfg(test)]
+#[path = "identity_routing_tests.rs"]
+mod routing_tests;
+
+#[cfg(test)]
+#[path = "identity_routing_guard_tests.rs"]
+mod routing_guard_tests;

@@ -19,7 +19,18 @@ async fn compact_resumed_bridge_started_preserves_permissions_project_and_task()
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(sent["taskId"], "task-a");
-    assert_eq!(sent["submittedContent"], "Resume ordinary work");
+    assert_eq!(sent["userContent"], "Resume ordinary work");
+    let submitted = sent["submittedContent"]
+        .as_str()
+        .expect("submitted content");
+    assert_eq!(
+        crate::chatgpt_routing::body_without_route(submitted),
+        "Resume ordinary work"
+    );
+    assert_eq!(
+        crate::chatgpt_routing::request_id(submitted),
+        sent["id"].as_str()
+    );
     let id = sent["id"].as_str().expect("new request id");
     // Simulate a delayed request snapshot after the user updates the task project.
     sqlx::query("UPDATE chatgpt_bridge_requests SET project_folder='D:\\stale-project' WHERE id=?")

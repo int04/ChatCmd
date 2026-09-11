@@ -50,6 +50,7 @@ async fn compact_work_resume_requires_attachment_and_is_idempotent_on_same_task(
     assert_eq!(row.2, "queued");
     assert!(row.3.contains("task-a"));
     assert!(row.3.contains("[[CHATCMD-CONTINUE:"));
+    assert_eq!(crate::chatgpt_routing::request_id(&row.3), Some(id));
     assert_eq!(done["taskId"], "task-a");
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks")
         .fetch_one(state.repository.pool())

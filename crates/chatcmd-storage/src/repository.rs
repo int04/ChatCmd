@@ -29,7 +29,7 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
 };
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 25;
+pub const CURRENT_SCHEMA_VERSION: i64 = 26;
 pub const MAX_TERMINAL_CHUNK_BYTES: usize = 65_536;
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 

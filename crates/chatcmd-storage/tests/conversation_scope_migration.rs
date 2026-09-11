@@ -50,7 +50,7 @@ async fn schema_24_upgrade_repairs_split_chatgpt_scope_and_enforces_one_top_leve
     old.pool().close().await;
 
     let (upgraded, report) = SqliteRepository::open(&path, 1).await.expect("upgrade");
-    assert_eq!(CURRENT_SCHEMA_VERSION, 25);
+    assert_eq!(CURRENT_SCHEMA_VERSION, 26);
     assert_eq!(report.schema_version, CURRENT_SCHEMA_VERSION);
 
     let web_scope: Option<String> =

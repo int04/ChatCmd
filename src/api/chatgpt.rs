@@ -64,6 +64,11 @@ pub(super) async fn create_request(
     let now = now_ms();
     let request_id = Uuid::new_v4().to_string();
     let turn_id = format!("chatgpt-turn-{}", Uuid::new_v4());
+    let submitted = if agent_name == super::chatgpt_native::RECORDER_AGENT_NAME {
+        submitted
+    } else {
+        crate::chatgpt_routing::with_route(&submitted, &request_id, &turn_id)
+    };
     sqlx::query("INSERT INTO chatgpt_bridge_requests(id,task_id,turn_id,agent_id,model,user_content,submitted_content,project_folder,status,conversation_id,conversation_url,assistant_content,error_message,created_at_ms,updated_at_ms,completed_at_ms) VALUES(?,NULL,?,?,?,?,?,?,'queued',NULL,NULL,NULL,NULL,?,?,NULL)")
         .bind(&request_id)
         .bind(&turn_id)
@@ -132,6 +137,11 @@ pub(super) async fn continue_message(
     let submitted = input.content.trim().to_owned();
     let request_id = Uuid::new_v4().to_string();
     let turn_id = format!("chatgpt-turn-{}", Uuid::new_v4());
+    let submitted = if row.get::<String, _>("name") == super::chatgpt_native::RECORDER_AGENT_NAME {
+        submitted
+    } else {
+        crate::chatgpt_routing::with_route(&submitted, &request_id, &turn_id)
+    };
     let now = now_ms();
     sqlx::query("INSERT INTO chatgpt_bridge_requests(id,task_id,turn_id,agent_id,model,user_content,submitted_content,project_folder,status,conversation_id,conversation_url,assistant_content,error_message,created_at_ms,updated_at_ms,completed_at_ms) VALUES(?,?,?,?,?,?,?,?, 'queued',?,?,NULL,NULL,?,?,NULL)")
         .bind(&request_id)
@@ -392,3 +402,7 @@ pub(super) async fn bridge_identity(
     transaction.commit().await.map_err(db_problem)?;
     request_json(&state, request_id).await
 }
+
+#[cfg(test)]
+#[path = "chatgpt_routing_tests.rs"]
+mod routing_tests;

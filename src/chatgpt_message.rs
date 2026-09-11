@@ -3,6 +3,7 @@ pub(crate) fn equivalent(left: &str, right: &str) -> bool {
 }
 
 fn canonical(value: &str) -> String {
+    let value = crate::chatgpt_routing::body_without_route(value);
     let mut normalized = String::with_capacity(value.len());
     let mut chars = value.chars().peekable();
     while let Some(ch) = chars.next() {

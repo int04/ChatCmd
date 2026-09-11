@@ -74,6 +74,16 @@ pub(super) async fn resume_compact(
         job.project_folder.as_deref(),
         &content,
     );
+    let submitted = if job.agent_name.as_deref() == Some(super::chatgpt_native::RECORDER_AGENT_NAME)
+    {
+        submitted
+    } else {
+        crate::chatgpt_routing::with_route(
+            &submitted,
+            &request_id,
+            &format!("compact-turn-{}", job.id),
+        )
+    };
     let now = now_ms();
     sqlx::query("INSERT INTO chatgpt_bridge_requests(id,task_id,turn_id,agent_id,model,user_content,submitted_content,status,conversation_id,conversation_url,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?,'queued',?,?,?,?)")
         .bind(&request_id).bind(&job.task_id).bind(format!("compact-turn-{}", job.id))

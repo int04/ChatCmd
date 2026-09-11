@@ -55,7 +55,7 @@ impl RuntimeHost {
         .await
     }
 
-    async fn commit_unbound_chatgpt_bridge_claim(
+    pub(super) async fn commit_unbound_chatgpt_bridge_claim(
         &self,
         agent_id: &str,
         conversation_scope: Option<&str>,
@@ -126,11 +126,11 @@ impl RuntimeHost {
     }
 }
 
-struct PendingBridgeClaim {
-    request_id: String,
-    user_content: String,
-    project_folder: Option<String>,
-    created_at_ms: i64,
+pub(super) struct PendingBridgeClaim {
+    pub(super) request_id: String,
+    pub(super) user_content: String,
+    pub(super) project_folder: Option<String>,
+    pub(super) created_at_ms: i64,
 }
 
 fn matching_unbound_rows<'a>(rows: &'a [SqliteRow], message: Option<&str>) -> Vec<&'a SqliteRow> {
@@ -151,7 +151,7 @@ fn matching_unbound_rows<'a>(rows: &'a [SqliteRow], message: Option<&str>) -> Ve
         .collect()
 }
 
-fn pending_bridge_task_id(agent_id: &str, request_id: &str) -> String {
+pub(super) fn pending_bridge_task_id(agent_id: &str, request_id: &str) -> String {
     let material = format!("task-chat\0agent:{agent_id}\0bridge-request:{request_id}");
     format!(
         "task-chat-{}",
