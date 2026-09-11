@@ -8,6 +8,7 @@ const extensionRoot = __dirname;
 // Unit harness exposes runner locals; integration tests load its real IIFE through the manifest.
 const source = readFileSync(join(extensionRoot, 'content-chatgpt.js'), 'utf8').replace(/^\(\(\) => \{\r?\n/, '').replace(/\}\)\(\);\s*$/, '').replace('const waitForAssistant =', 'let waitForAssistant =');
 const monitorSource = readFileSync(join(extensionRoot, 'content-chatgpt-monitor.js'), 'utf8');
+const composeSource = readFileSync(join(extensionRoot, 'content-chatgpt-compose.js'), 'utf8');
 const runtimeSource = readFileSync(join(extensionRoot, 'content-runtime.js'), 'utf8');
 const recoverySource = readFileSync(join(extensionRoot, 'background-recovery.js'), 'utf8');
 const chatCmdSource = readFileSync(join(extensionRoot, 'content-chatcmd.js'), 'utf8');
@@ -51,7 +52,7 @@ function loadBridge(statusHandler = () => Promise.resolve({ ok: true, known: tru
   context.ChatCmdConversationDom = {
     assistantNodes: () => context.__assistantNodes,
     clickStopButton() {},
-    findSendButton: () => context.__sendButton,
+    findSendButton: () => typeof context.__sendButton === 'function' ? context.__sendButton() : context.__sendButton,
     findStopButton: () => typeof context.__stopButton === 'function' ? context.__stopButton() : context.__stopButton,
     findThreadError: () => context.__threadError || null,
     findVisible: () => null,
@@ -62,6 +63,7 @@ function loadBridge(statusHandler = () => Promise.resolve({ ok: true, known: tru
   vm.createContext(context);
   vm.runInContext(runtimeSource, context, { filename: 'content-runtime.js' });
   vm.runInContext(monitorSource, context, { filename: 'content-chatgpt-monitor.js' });
+  vm.runInContext(composeSource, context, { filename: 'content-chatgpt-compose.js' });
   vm.runInContext(source, context, { filename: 'content-chatgpt.js' });
   return context;
 }
@@ -262,7 +264,7 @@ test('a stop-like button outside the unified composer does not mark ChatGPT as g
 
 test('content scripts load helpers before the request runner', () => {
   const entry = manifest.content_scripts.find((item) => item.matches.includes('https://chatgpt.com/*'));
-  assert.deepEqual(entry.js, ['content-runtime.js', 'content-chatgpt-clock.js', 'content-chatgpt-render.js', 'content-chatgpt-ui.js', 'content-chatgpt-dom.js', 'content-chatgpt-transcript.js', 'content-chatgpt-observer.js', 'content-chatgpt-approval-ui.js', 'content-chatgpt-monitor.js', 'content-chatgpt.js', 'compact-protocol.js', 'content-chatgpt-compact.js', 'content-chatgpt-resume.js', 'content-chatgpt-native.js']);
+  assert.deepEqual(entry.js, ['content-runtime.js', 'content-chatgpt-clock.js', 'content-chatgpt-render.js', 'content-chatgpt-ui.js', 'content-chatgpt-dom.js', 'content-chatgpt-transcript.js', 'content-chatgpt-observer.js', 'content-chatgpt-approval-ui.js', 'content-chatgpt-monitor.js', 'content-chatgpt-compose.js', 'content-chatgpt.js', 'compact-protocol.js', 'content-chatgpt-compact.js', 'content-chatgpt-resume.js', 'content-chatgpt-native.js']);
 });
 
 test('new project tabs wait for a stable ChatGPT composer before sending', () => {
@@ -276,8 +278,8 @@ test('all extension sources stay within the 500-line maintenance limit', () => {
   for (const [name, value] of Object.entries({
     'background.js': backgroundSource, 'background-io.js': backgroundIoSource,
     'background-tabs.js': backgroundTabsSource,
-    'content-chatgpt.js': source, 'content-chatgpt-dom.js': domSource,
-    'content-chatgpt-ui.js': uiHelperSource,
+    'content-chatgpt.js': source, 'content-chatgpt-compose.js': composeSource,
+    'content-chatgpt-dom.js': domSource, 'content-chatgpt-ui.js': uiHelperSource,
   })) assert.ok(lineCount(value) <= 500, `${name} has ${lineCount(value)} lines`);
 });
 
@@ -343,6 +345,39 @@ test('runner never completes a stale observation under the next conversation ide
   `, context);
   await vm.runInContext("runRequest({ requestId: 'request-1', submittedContent: 'Hello' })", context);
   assert.equal(context.__results.length, 0);
+});
+
+test('submit reacquires the composer after an attachment rerender before clicking send', async () => {
+  const context = loadBridge();
+  vm.runInContext(`
+    globalThis.__now = 0;
+    globalThis.__writes = [];
+    globalThis.__clicks = 0;
+    globalThis.__blurs = 0;
+    Date.now = () => globalThis.__now;
+    const firstComposer = { value: '', blur() { globalThis.__blurs += 1; } };
+    const replacementComposer = { value: '', blur() { globalThis.__blurs += 1; } };
+    let currentComposer = firstComposer;
+    findComposer = () => currentComposer;
+    setComposerText = (composer, text) => {
+      globalThis.__writes.push(composer === firstComposer ? 'first' : 'replacement');
+      composer.value = text;
+      if (composer === firstComposer) currentComposer = replacementComposer;
+    };
+    globalThis.__sendButton = () => currentComposer.value === 'PROMPT' ? {
+      isConnected: true,
+      disabled: false,
+      getAttribute: () => null,
+      click() { globalThis.__clicks += 1; },
+    } : null;
+    globalThis.__stopButton = null;
+    delay = async (ms) => { globalThis.__now += ms; };
+  `, context);
+
+  await vm.runInContext("submitPrompt('PROMPT')", context);
+  assert.deepEqual(Array.from(context.__writes), ['first', 'replacement']);
+  assert.equal(context.__clicks, 1);
+  assert.equal(context.__blurs, 1);
 });
 
 test('page render bridge runs in MAIN at document_start while capture stays isolated', () => {

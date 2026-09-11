@@ -110,8 +110,7 @@ async function runRequest(message) {
       current: () => activeRequest === owner && globalThis.ChatCmdRuntime.current(CONTENT_CONTEXT),
     });
     await attachFiles(composer, message.attachments);
-    setComposerText(composer, message.submittedContent);
-    await submitPrompt(composer);
+    await submitPrompt(message.submittedContent);
     ({ conversationId, conversationUrl } = await waitForConversationIdentity());
     started = true;
     await progress({
@@ -346,97 +345,16 @@ function setComposerText(composer, text) {
   composer.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
 }
 
-async function attachFiles(composer, rawAttachments) {
-  const attachments = normalizeFileAttachments(rawAttachments);
-  if (!attachments.length) return;
-  const files = attachments.map((attachment) => new File([attachmentFilePart(attachment)], attachment.name, {
-    type: attachment.mimeType,
-    lastModified: Date.now(),
-  }));
-  const input = findComposerFileInput(composer);
-  if (input) assignFilesToInput(input, files);
-  else pasteFilesIntoComposer(composer, files);
-  await waitFor(
-    () => files.every((file) => document.body?.textContent?.includes(file.name)) ? true : null,
-    12_000,
-    `ChatGPT không xác nhận tệp đính kèm ${files.map((file) => file.name).join(', ')}.`,
-  );
-}
-
-function normalizeFileAttachments(rawAttachments) {
-  if (!Array.isArray(rawAttachments)) return [];
-  return rawAttachments.flatMap((attachment, index) => {
-    if (!attachment || typeof attachment !== 'object' || typeof attachment.content !== 'string' || !attachment.content) return [];
-    const rawName = String(attachment.name || `pasted-text-${index + 1}.txt`).split(/[\\/]/).pop().trim();
-    if (attachment.encoding === 'base64') {
-      return [{
-        name: rawName || `attachment-${index + 1}`,
-        content: attachment.content,
-        mimeType: String(attachment.mimeType || 'application/octet-stream'),
-        encoding: 'base64',
-      }];
-    }
-    const name = rawName.toLowerCase().endsWith('.txt') ? rawName : `${rawName || `pasted-text-${index + 1}`}.txt`;
-    return [{ name, content: attachment.content, mimeType: 'text/plain;charset=utf-8', encoding: 'utf8' }];
-  });
-}
-
-function attachmentFilePart(attachment) {
-  if (attachment.encoding !== 'base64') return attachment.content;
-  const decoded = atob(attachment.content);
-  const bytes = new Uint8Array(decoded.length);
-  for (let index = 0; index < decoded.length; index += 1) bytes[index] = decoded.charCodeAt(index);
-  return bytes;
-}
-
-function findComposerFileInput(composer) {
-  const form = composer.closest('form');
-  const composerScope = composer.closest('[data-type="unified-composer"], [data-testid*="composer" i]');
-  const scoped = [
-    ...(form ? form.querySelectorAll('input[type="file"]') : []),
-    ...(composerScope && composerScope !== form ? composerScope.querySelectorAll('input[type="file"]') : []),
-  ].filter((input, index, items) => input instanceof HTMLInputElement && !input.disabled && items.indexOf(input) === index);
-  const compatibleScoped = scoped.filter((input) => fileInputScore(input) > 0);
-  if (compatibleScoped.length) return compatibleScoped.sort((left, right) => fileInputScore(right) - fileInputScore(left))[0];
-  const explicit = [...document.querySelectorAll('input[type="file"][data-testid*="composer" i], input[type="file"][data-testid*="upload" i]')]
-    .filter((input) => input instanceof HTMLInputElement && !input.disabled && fileInputScore(input) > 0);
-  return explicit.sort((left, right) => fileInputScore(right) - fileInputScore(left))[0] || null;
-}
-
-function fileInputScore(input) {
-  const accept = String(input.accept || '').toLowerCase();
-  if (!accept || accept.includes('*/*')) return 4 + (input.multiple ? 1 : 0);
-  if (accept.includes('text') || accept.includes('image') || accept.includes('application') || accept.includes('.')) return 2 + (input.multiple ? 1 : 0);
-  return 1;
-}
-
-function assignFilesToInput(input, files) {
-  const transfer = new DataTransfer();
-  for (const existing of input.files || []) transfer.items.add(existing);
-  for (const file of files) transfer.items.add(file);
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'files')?.set;
-  if (setter) setter.call(input, transfer.files); else input.files = transfer.files;
-  input.dispatchEvent(new Event('input', { bubbles: true }));
-  input.dispatchEvent(new Event('change', { bubbles: true }));
-}
-
-function pasteFilesIntoComposer(composer, files) {
-  const transfer = new DataTransfer();
-  for (const file of files) transfer.items.add(file);
-  const event = new ClipboardEvent('paste', { bubbles: true, cancelable: true, composed: true, clipboardData: transfer });
-  composer.dispatchEvent(event);
-}
-
-async function submitPrompt(composer) {
-  await delay(100);
-  const button = await waitFor(findSendButton, 5_000, 'Không tìm thấy nút gửi của ChatGPT.');
-  if (button.disabled || button.getAttribute('aria-disabled') === 'true') {
-    await waitFor(() => !button.disabled && button.getAttribute('aria-disabled') !== 'true' ? button : null, 20_000, 'Nút gửi ChatGPT đang bị vô hiệu hóa hoặc tệp đính kèm chưa tải xong.');
-  }
-  button.click();
-  composer.blur();
-}
-
+const composerBridge = globalThis.ChatCmdComposerBridge.create({
+  findComposer: (...args) => findComposer(...args),
+  findSendButton: (...args) => findSendButton(...args),
+  findStopButton: (...args) => findStopButton(...args),
+  setComposerText: (...args) => setComposerText(...args),
+  waitFor: (...args) => waitFor(...args),
+  delay: (...args) => delay(...args),
+});
+const attachFiles = (...args) => composerBridge.attachFiles(...args);
+let submitPrompt = (...args) => composerBridge.submitPrompt(...args);
 async function waitForConversationIdentity() {
   return waitFor(currentConversationIdentity, 15_000, 'ChatGPT chưa tạo conversation ID trên URL.');
 }
@@ -494,10 +412,9 @@ async function reportBrowserCompletion(requestId, assistantContent) {
 }
 
 async function retryPrompt(requestId, content, reason, continuesPreviousProgress) {
-  const composer = await waitForComposer();
+  await waitForComposer();
   const retryCount = (activeRequest?.retryCount || 0) + 1;
-  setComposerText(composer, content);
-  await submitPrompt(composer);
+  await submitPrompt(content);
   if (activeRequest?.id === requestId) activeRequest.retryCount = retryCount;
   await progress({ requestId, stage: 'retrying', retryCount, reason, continuesPreviousProgress });
 }
