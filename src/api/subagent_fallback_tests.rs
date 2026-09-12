@@ -9,6 +9,9 @@ use tempfile::TempDir;
 use super::*;
 use crate::runtime_host::user_message_tests::test_host;
 
+#[path = "subagent_browser_completion_tests.rs"]
+mod browser_completion_tests;
+
 const SUBAGENT_ID: &str = "subagent-fallback-api";
 const PARENT_TASK_ID: &str = "task-fallback-api-parent";
 const CHILD_TASK_ID: &str = "task-fallback-api-child";
@@ -130,6 +133,7 @@ async fn stale_browser_result_after_mcp_claim_is_ignored_without_retry() {
         State(state.clone()),
         Path(SUBAGENT_ID.to_owned()),
         Json(SubagentFallbackResult {
+            completion_evidence: None,
             attempt: 1,
             status: "failed".to_owned(),
             assistant_content: None,
@@ -162,6 +166,7 @@ async fn browser_failures_retry_same_child_then_exhaust_on_attempt_three() {
             State(state.clone()),
             Path(SUBAGENT_ID.to_owned()),
             Json(SubagentFallbackResult {
+                completion_evidence: None,
                 attempt,
                 status: "failed".to_owned(),
                 assistant_content: None,
@@ -222,6 +227,7 @@ async fn browser_only_final_response_completes_child_and_saves_conversation() {
         State(state.clone()),
         Path(SUBAGENT_ID.to_owned()),
         Json(SubagentFallbackResult {
+            completion_evidence: None,
             attempt: 1,
             status: "completed".to_owned(),
             assistant_content: Some("Browser-only delegated answer".to_owned()),

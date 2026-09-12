@@ -192,8 +192,13 @@ async function reportRequestResult(payload) {
     if (activeRequest.resultReported) return;
     await activeRequest.observer?.flush(payload.status === 'completed');
   }
-  await progress({ requestId: payload.requestId, stage: 'result', ...payload });
-  if (activeRequest?.id === payload.requestId) activeRequest.resultReported = true;
+  const reply = await progress({ requestId: payload.requestId, stage: 'result', ...payload });
+  if (payload.requestId.startsWith('subagent:') && reply?.completed !== true && reply?.terminalAcknowledged !== true) return false;
+  if (activeRequest?.id === payload.requestId) {
+    activeRequest.resultReported = true;
+    activeRequest.observer?.acknowledgeCompletion?.();
+  }
+  return true;
 }
 
 async function waitForComposer() {
@@ -389,21 +394,30 @@ async function requestState(requestId) {
   }
 }
 
-async function reportBrowserCompletion(requestId, assistantContent) {
+async function reportBrowserCompletion(requestId, assistantContent, completionEvidence) {
   const recorder = activeRequest?.id === requestId ? activeRequest.observer : null;
   if (recorder && !await recorder.flush(true)) return false;
+  if (requestId.startsWith('subagent:') && recorder) {
+    recorder.scan();
+    if (!recorder.active || recorder.answer !== assistantContent
+      || recorder.completionEvidence?.assistantMessageId !== completionEvidence?.assistantMessageId) return false;
+  }
   if (!globalThis.ChatCmdRuntime.current(CONTENT_CONTEXT)) return false; const identity = currentConversationIdentity();
   try {
     const response = await globalThis.ChatCmdRuntime.sendMessage({
       type: 'chatcmd-chatgpt-progress',
       stage: 'browser-completed',
       requestId,
+      completionEvidence,
       conversationId: identity?.conversationId,
       conversationUrl: identity?.conversationUrl || window.location.href,
       assistantContent,
     });
     if (response?.ok !== true || response.browserCompleted !== true || response.hasFinalResponse !== true) return false;
-    if (activeRequest?.id === requestId) activeRequest.resultReported = true;
+    if (activeRequest?.id === requestId) {
+      activeRequest.resultReported = true;
+      activeRequest.observer?.acknowledgeCompletion?.();
+    }
     return true;
   } catch (error) {
     if (!globalThis.ChatCmdRuntime.invalidated(error)) console.warn('[ChatCMD bridge] Không thể xác nhận raw bubble với backend.', error);

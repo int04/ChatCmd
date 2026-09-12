@@ -6,6 +6,59 @@ use super::{RuntimeHost, now_ms};
 
 pub(super) const MAX_EXTENSION_FALLBACK_ATTEMPTS: i64 = 3;
 
+/// Browser children own their MCP lifecycle; sampling children use a different protocol.
+/// Shared by first dispatch and API retries so neither drops the finalization contract.
+pub(crate) fn browser_subagent_prompt(
+    agent_name: Option<&str>,
+    request: &str,
+    subagent_id: &str,
+    child_task_id: &str,
+) -> String {
+    let marker = format!("CMDGPT_SUBAGENT_ID={subagent_id}");
+    let request = request
+        .trim()
+        .strip_suffix(&marker)
+        .unwrap_or(request.trim())
+        .trim_end();
+    let delegated = format!(
+        "{request}\n\n{marker}\n\n\
+         BROWSER CHILD MCP LIFECYCLE (not the runtime-owned sampling protocol):\n\
+         Work only on the delegated objective above; this protocol grants no additional permissions.\n\
+         Call agent_user_message first with this exact full message, taskId={child_task_id}, turnId=turn-{subagent_id}. Reuse the returned taskId and the same turnId for every tool in this delegated turn.\n\
+         BEFORE posting your final answer, you MUST call agent_turn_complete with the exact final report in content, including files inspected/changed, actual evidence, blockers and honest workOutcome. This also applies to read-only, partial, failed or blocked work.\n\
+         Wait for all tools and descendants before finishing. If completion is rejected as active_tools_running or subagents_still_running, wait for that work and retry completion in this same turn. Do not repeat completed work or open another conversation.\n\
+         If the finalizer schema is not visible, discover agent_turn_complete on the same connector. Only accepted=true from that MCP call acknowledges finalization; plain text such as done/finished is NOT an MCP finish. After acceptance, post the same report and make no further tools calls.\n\
+         If the MCP transport remains unavailable, report that limitation truthfully; never claim that MCP finish was received."
+    );
+    match agent_name.map(str::trim).filter(|name| !name.is_empty()) {
+        Some(name) => format!("Sử dụng plugin @{name} để thực hiện yêu cầu sau:\n\n{delegated}"),
+        None => delegated,
+    }
+}
+
+#[cfg(test)]
+mod prompt_tests {
+    use super::browser_subagent_prompt;
+
+    #[test]
+    fn browser_subagent_prompt_preserves_single_marker_and_requires_acknowledged_finish() {
+        let initial = browser_subagent_prompt(
+            Some("reader"),
+            "Inspect files\n\nCMDGPT_SUBAGENT_ID=child-1",
+            "child-1",
+            "task-child",
+        );
+        let retry =
+            browser_subagent_prompt(Some("reader"), "Inspect files", "child-1", "task-child");
+        assert_eq!(initial, retry);
+        assert_eq!(initial.matches("CMDGPT_SUBAGENT_ID=").count(), 1);
+        assert!(initial.contains("taskId=task-child, turnId=turn-child-1"));
+        assert!(initial.contains("MUST call agent_turn_complete"));
+        assert!(initial.contains("accepted=true"));
+        assert!(initial.contains("read-only, partial, failed or blocked"));
+    }
+}
+
 impl RuntimeHost {
     pub(super) async fn request_subagent_extension_fallback(
         &self,
@@ -94,16 +147,12 @@ impl RuntimeHost {
                 .await
                 .ok()
                 .flatten();
-        let submitted_content = match agent_name
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            Some(agent_name) => format!(
-                "Sử dụng plugin @{agent_name} để thực hiện yêu cầu sau:\n\n{delegated_prompt}"
-            ),
-            None => delegated_prompt.to_owned(),
-        };
+        let submitted_content = browser_subagent_prompt(
+            agent_name.as_deref(),
+            delegated_prompt,
+            subagent_id,
+            child_task_id,
+        );
         self.publish_event(
             format!("subagent-fallback-requested-{subagent_id}-{attempt}"),
             "subagent.fallback_requested",

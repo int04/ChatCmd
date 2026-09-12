@@ -14,6 +14,8 @@ use crate::websocket::{AppEvent, AppState};
 use super::{Problem, db_problem, not_found, now_ms};
 
 const MAX_EXTENSION_FALLBACK_ATTEMPTS: i64 = 3;
+#[path = "subagent_browser_completion.rs"]
+mod browser_completion;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,6 +31,7 @@ pub(super) struct SubagentFallbackResult {
     attempt: i64,
     status: String,
     assistant_content: Option<String>,
+    completion_evidence: Option<browser_completion::BrowserFinalEvidence>,
     error_message: Option<String>,
     conversation_id: Option<String>,
     conversation_url: Option<String>,
@@ -62,6 +65,11 @@ pub(super) async fn subagent_fallback_started(
     validate_attempt(input.attempt)?;
     let subagent_id = subagent_id.trim();
     let row = fallback_row(&state, subagent_id).await?;
+    if row.get::<String, _>("status") == "running" {
+        return browser_completion::record_claimed_identity(&state, subagent_id, &input)
+            .await
+            .map(Json);
+    }
     if let Some(response) = reject_if_not_current(&row, input.attempt) {
         return Ok(Json(response));
     }
@@ -123,6 +131,15 @@ pub(super) async fn subagent_fallback_result(
     validate_attempt(input.attempt)?;
     let subagent_id = subagent_id.trim();
     let row = fallback_row(&state, subagent_id).await?;
+    if input.status == "completed"
+        && input.completion_evidence.is_some()
+        && row.get::<String, _>("status") == "running"
+        && row.get::<String, _>("fallback_state") == "claimed"
+    {
+        return browser_completion::recover_claimed_final(&state, subagent_id, &input)
+            .await
+            .map(Json);
+    }
     if let Some(response) = reject_if_not_current(&row, input.attempt) {
         return Ok(Json(response));
     }
@@ -279,6 +296,7 @@ async fn append_browser_only_completion(
         row.get::<Option<String>, _>("agent_name").as_deref(),
         &request,
         subagent_id,
+        child_task_id,
     );
     super::chatgpt_support::append_user_message(
         state,
@@ -405,6 +423,9 @@ fn fallback_request_value(row: &sqlx::sqlite::SqliteRow, attempt: i64) -> Value 
         row.get::<Option<String>, _>("agent_name").as_deref(),
         &request,
         &subagent_id,
+        row.get::<Option<String>, _>("child_task_id")
+            .as_deref()
+            .unwrap_or(""),
     );
     json!({
         "subagentId": subagent_id,
@@ -421,19 +442,7 @@ fn fallback_request_value(row: &sqlx::sqlite::SqliteRow, attempt: i64) -> Value 
     })
 }
 
-fn fallback_submitted_content(
-    agent_name: Option<&str>,
-    request: &str,
-    subagent_id: &str,
-) -> String {
-    let delegated_prompt = format!("{request}\n\nCMDGPT_SUBAGENT_ID={subagent_id}");
-    match agent_name.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(agent_name) => {
-            format!("Sử dụng plugin @{agent_name} để thực hiện yêu cầu sau:\n\n{delegated_prompt}")
-        }
-        None => delegated_prompt,
-    }
-}
+use crate::runtime_host::subagent_fallback::browser_subagent_prompt as fallback_submitted_content;
 
 fn publish_fallback_requested(state: &Arc<AppState>, row: &sqlx::sqlite::SqliteRow, attempt: i64) {
     let value = fallback_request_value(row, attempt);

@@ -216,16 +216,23 @@ async function handleProgress(message, tabId) {
         conversationId: identity.conversationId,
         conversationUrl: identity.conversationUrl,
         assistantContent: message.assistantContent,
+        completionEvidence: message.completionEvidence,
         errorMessage: message.errorMessage,
       });
-      if (result?.accepted !== true && ['pending', 'running'].includes(result?.status)) {
-        return { stage: message.stage, completed: false, browserCompleted: false, hasFinalResponse: false, status: result.status, reason: result.reason };
+      const terminal = ['completed', 'failed', 'stopped', 'interrupted', 'timedOut'].includes(result?.status);
+      const sameAttempt = result?.attempt === undefined || Number(result.attempt) === Number(context.attempt);
+      const acknowledged = sameAttempt && result?.reason !== 'stale_attempt'
+        && (result?.accepted === true || terminal);
+      if (!acknowledged) {
+        return { stage: message.stage, completed: false, browserCompleted: false, hasFinalResponse: false, status: result?.status, reason: result?.reason };
       }
-      await releaseRequest(message.requestId);
-      await chrome.storage.session.remove(`${SUBAGENT_PREFIX}${context.subagentId}`);
-      if (context.tabId) setTimeout(() => void safeTab(context.tabId).then((tab) => tab?.id && chrome.tabs.remove(tab.id).catch(() => undefined)), 100);
+      // Delay closing until the content script receives the acknowledgement. The
+      // existing attempt-fenced cleanup must not remove a newer retry's tab.
+      setTimeout(() => void closeSubagentRequest(context.subagentId, context.attempt).catch(() => undefined), 100);
       const completed = result?.completed === true || result?.status === 'completed';
-      return { stage: message.stage, completed, browserCompleted: completed, hasFinalResponse: completed, retryScheduled: result?.retryScheduled === true, status: result?.status, reason: result?.reason };
+      return { stage: message.stage, completed, terminalAcknowledged: true, browserCompleted: completed,
+        hasFinalResponse: completed, retryScheduled: result?.retryScheduled === true, status: result?.status,
+        reason: result?.reason, completionSource: result?.completionSource };
     }
     throw new Error(`ChatGPT sub-agent progress stage không được hỗ trợ: ${message.stage || 'missing'}.`);
   }
