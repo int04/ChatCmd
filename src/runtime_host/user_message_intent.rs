@@ -25,69 +25,11 @@ pub(super) fn is_plan_mode_request(content: &str) -> bool {
             || normalized.split_whitespace().any(|word| word == "#plan"))
 }
 
+#[path = "subagent_intent.rs"]
+mod subagent;
+
 pub(super) fn is_explicit_multi_agent_request(content: &str) -> bool {
-    let normalized = intent_prose(content)
-        .to_lowercase()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-    let negated = [
-        "không chia agent",
-        "không cần chia agent",
-        "đừng chia agent",
-        "không thử chia agent",
-        "không cần thử chia agent",
-        "đừng thử chia agent",
-        "không muốn chia agent",
-        "không dùng nhiều agent",
-        "không sử dụng nhiều agent",
-        "do not split into agents",
-        "do not try to split into agents",
-        "don't try to split into agents",
-        "don't split into agents",
-        "do not use multiple agents",
-        "don't use multiple agents",
-        "without subagents",
-        "no subagents",
-    ]
-    .iter()
-    .any(|phrase| normalized.contains(phrase));
-    if negated {
-        return false;
-    }
-
-    let starts_with_command = |command: &str| {
-        normalized.strip_prefix(command).is_some_and(|rest| {
-            rest.is_empty()
-                || rest.starts_with(' ')
-                || rest.starts_with(':')
-                || rest.starts_with('-')
-        })
-    };
-
-    starts_with_command("chia agent")
-        || ((starts_with_command("chia ra") || starts_with_command("tách ra"))
-            && normalized.contains(" agent"))
-        || starts_with_command("dùng nhiều agent")
-        || starts_with_command("sử dụng nhiều agent")
-        || starts_with_command("use multiple agents")
-        || starts_with_command("use several agents")
-        || starts_with_command("split into agents")
-        || starts_with_command("split across agents")
-        || [
-            "hãy chia agent",
-            "vui lòng chia agent",
-            "thử chia agent",
-            "giúp tôi chia agent",
-            "giúp t chia agent",
-            "hãy dùng nhiều agent",
-            "vui lòng dùng nhiều agent",
-            "hãy sử dụng nhiều agent",
-            "please use multiple agents",
-            "please split into agents",
-        ]
-        .iter()
-        .any(|phrase| normalized.contains(phrase))
+    subagent::is_explicit_request(content)
 }
 
 pub(super) fn intent_hint(content: &str) -> Value {
@@ -153,6 +95,10 @@ fn intent_prose(content: &str) -> String {
     }
     prose
 }
+
+#[cfg(test)]
+#[path = "subagent_intent_tests.rs"]
+mod subagent_intent_tests;
 
 #[cfg(test)]
 mod tests {

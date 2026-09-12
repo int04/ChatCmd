@@ -64,7 +64,8 @@ impl RuntimeHost {
         let (root_task_id, root_turn_id) =
             root.unwrap_or_else(|| (task_id.as_str().to_owned(), turn_id.as_str().to_owned()));
         let payload = sqlx::query_scalar::<_, String>(
-            "SELECT payload_json FROM timeline_events WHERE task_id=? AND turn_id=? AND actor='user' AND kind='message' ORDER BY created_at_ms,event_id LIMIT 1",
+            // Browser transcript echoes are observations, never delegation authority.
+            "SELECT payload_json FROM timeline_events WHERE task_id=? AND turn_id=? AND actor='user' AND kind='message' AND COALESCE(json_extract(payload_json,'$.provider'),'')<>'chatgpt_web' ORDER BY created_at_ms,event_id LIMIT 1",
         )
         .bind(&root_task_id)
         .bind(&root_turn_id)
@@ -305,7 +306,10 @@ impl RuntimeHost {
             Value::Null
         };
         let subagent_limit = self.subagent_concurrency_limit().await?;
-        let explicit_subagent_intent = is_explicit_multi_agent_request(content);
+        // Report exactly the same root-turn decision used by agent_subagent_start.
+        let explicit_subagent_intent = self
+            .subagent_delegation_explicitly_requested(context)
+            .await?;
         let intent_hint = intent_hint(content);
         Ok(json!({
             "accepted": true,
