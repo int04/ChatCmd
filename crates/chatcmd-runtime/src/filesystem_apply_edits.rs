@@ -1006,7 +1006,6 @@ mod tests {
                     | "path_changed_after_authorization"
                     | "symlink_not_allowed"
                     | "symlink_traversal_rejected"
-                    | "path_outside_allowed_scope"
                     | "versionConflict"
             ),
             "unexpected symlink rejection code: {}",

@@ -610,7 +610,7 @@ async fn cancellation_and_session_backpressure_are_explicit() {
 }
 
 #[tokio::test]
-async fn shell_absolute_external_working_directory_requires_grant() {
+async fn shell_absolute_external_working_directory_is_authorized_without_grant() {
     let workspace = tempfile::tempdir().expect("workspace directory");
     let external = tempfile::tempdir().expect("external directory");
     let runtime = runtime(workspace.path().to_path_buf(), 2);
@@ -619,23 +619,13 @@ async fn shell_absolute_external_working_directory_requires_grant() {
         .canonicalize()
         .expect("canonical external directory");
 
-    let denied = runtime
-        .create(
-            &OperationContext::new("external-absolute-denied", "agent", "shell_create"),
-            create_request(external.path().to_path_buf(), "external-absolute-denied"),
-        )
-        .await
-        .expect_err("absolute external cwd without a task path grant must be rejected");
-    assert_eq!(denied.code, "path_outside_allowed_scope");
-
     let created = runtime
-        .create_with_additional_scopes(
-            &OperationContext::new("external-absolute-granted", "agent", "shell_create"),
-            create_request(external.path().to_path_buf(), "external-absolute-granted"),
-            &[external.path().to_path_buf()],
+        .create(
+            &OperationContext::new("external-absolute", "agent", "shell_create"),
+            create_request(external.path().to_path_buf(), "external-absolute"),
         )
         .await
-        .expect("explicit task path grant must allow the external cwd");
+        .expect("absolute external cwd must be accepted without a task path grant");
     assert_eq!(created.initial_working_directory, expected);
 
     runtime
@@ -646,6 +636,32 @@ async fn shell_absolute_external_working_directory_requires_grant() {
         )
         .await
         .expect("close external shell");
+}
+
+#[tokio::test]
+async fn workspace_replace_text_allows_absolute_external_path_without_grant() {
+    let workspace_directory = tempfile::tempdir().expect("workspace directory");
+    let external_directory = tempfile::tempdir().expect("external directory");
+    let workspace = WorkspaceService::new(&[workspace_directory.path().to_path_buf()], policy())
+        .expect("workspace");
+    let file = external_directory.path().join("MoneyController.cs");
+    std::fs::write(&file, "before").expect("write external file");
+
+    workspace
+        .replace_text(
+            &OperationContext::new("external-replace", "agent", "fs_replace_text"),
+            &file,
+            "before",
+            "after",
+            1,
+        )
+        .await
+        .expect("external absolute replace must not require a workspace grant");
+
+    assert_eq!(
+        std::fs::read_to_string(&file).expect("read external replacement"),
+        "after"
+    );
 }
 
 #[tokio::test]
@@ -819,7 +835,7 @@ async fn workspace_search_respects_default_gitignore_exclude_and_direct_root_ove
 }
 
 #[tokio::test]
-async fn workspace_traversal_is_denied() {
+async fn missing_external_path_is_not_found() {
     let directory = tempfile::tempdir().expect("temp directory");
     let workspace =
         WorkspaceService::new(&[directory.path().to_path_buf()], policy()).expect("workspace");
@@ -831,9 +847,6 @@ async fn workspace_traversal_is_denied() {
     let error = workspace
         .read_text(&outside, 100)
         .await
-        .expect_err("outside path denied");
-    assert!(matches!(
-        error.code.as_str(),
-        "not_found" | "path_outside_allowed_scope"
-    ));
+        .expect_err("missing external path must report not found");
+    assert_eq!(error.code, "not_found");
 }
