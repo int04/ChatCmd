@@ -150,6 +150,7 @@ unused `ShellCreateRequest` import warning; web build retains the bundle-size wa
 
 Activation requires rebuilding/restarting the Rust client, using the rebuilt web UI, and
 loading extension `0.1.17`. Reload existing ChatGPT/ChatCMD pages only after active work has
-finished. Test a fresh explicitly requested read-only delegation and inspect the actual
+finished. With sub-agent concurrency enabled, test a fresh model-selected read-only delegation in
+any user language and inspect the actual
 `agent_user_message` response and final report receipt fields. An unsynchronized/denied
 child should report the blocker, not perform the file read by another route.

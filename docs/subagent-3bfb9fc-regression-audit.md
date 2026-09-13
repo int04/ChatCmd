@@ -1,5 +1,9 @@
 # Subagent regression audit against 3bfb9fc9
 
+> Historical audit. The language-specific explicit-intent gate analyzed here was removed on
+> 2026-09-13 in favor of structured enablement through `subagentConcurrency` and model-decided
+> delegation. The routing, identity, lifecycle, and observable-error findings remain applicable.
+
 ## Scope and reference
 
 Reference: `3bfb9fc95252b2e1ccd3915cb2ee58351b713517` (10 September 2026). Committed HEAD at audit: `9db77508a99f10fb2eba85ce87e6b8e83ab7c0dc`, branch `dev`. The existing uncommitted startup/ACK/receipt changes (extension 0.1.17) were retained. No reset, migration, live-database change, application restart, commit or push was performed.

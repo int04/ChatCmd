@@ -403,5 +403,5 @@ async fn plan13_content_ref_timeline_growth_stays_near_summary_size() {
 
 #[path = "user_message_lifecycle_tests.rs"]
 mod lifecycle_tests;
-#[path = "subagent_intent_lifecycle_tests.rs"]
-mod subagent_intent_lifecycle_tests;
+#[path = "subagent_policy_lifecycle_tests.rs"]
+mod subagent_policy_lifecycle_tests;

@@ -27,7 +27,7 @@ Luồng agent bắt buộc:
 5. Nếu có sub-agent thì phải chờ chúng hoàn tất bằng `agent_subagent_wait`.
 6. `agent_turn_complete` phải là tool cuối cùng, gọi đúng một lần ngay trước khi agent trả lời user.
 
-Schema đang bị ẩn, chưa load, discovery chưa đúng query, hoặc model chưa thực hiện tool call không phải là một lần tool bị từ chối. Chỉ được mô tả host/OpenAI safety là nguyên nhân khi có lỗi quan sát được từ chính lần gọi và lỗi đó nêu rõ nguyên nhân này; nếu không, phải báo đúng trạng thái chưa gọi hoặc lỗi thực tế mà không tự quy kết.
+Quy tắc bằng chứng này áp dụng cho mọi ChatCMD tool: schema đang bị ẩn/defer, discovery chưa đúng query, schema đã tìm thấy nhưng chưa invoke, hoặc model chưa thực hiện tool call không phải là một lần tool bị từ chối. Chỉ được nói một tool bị reject/block/deny sau khi invocation thực sự trả observable error, kèm đúng error code/state. Discovery error chỉ mô tả discovery, không phải kết quả của tool được tìm. Chỉ quy nguyên nhân cho host/OpenAI safety, permission hoặc policy khi raw observed error nêu rõ nguyên nhân đó; nếu không có invocation thì báo `not attempted` và không tự suy diễn.
 
 ---
 
@@ -141,7 +141,7 @@ Git chạy với stdin/pager/credential prompt bị vô hiệu hóa; path luôn 
 
 | Method | Tham số chính | Ý nghĩa |
 |---|---|---|
-| `skills_list` | Không có tham số riêng | Khám phá các skill trong `.agents` và `.codex`. Với project work không tầm thường, method này phải được gọi sau `agent_user_message` và trước khi inspect/code nếu chưa biết skill phù hợp. |
+| `skills_list` | Không có tham số riêng | Khám phá các skill trong `.agents` và `.codex`. Với project work không tầm thường, method này phải được gọi sau `agent_user_message` và trước khi inspect/code nếu chưa biết skill phù hợp. Nếu schema bị ẩn/defer trên ChatGPT, gọi `api_tool.list_resources` trên connector hiện tại với exact query `skills_list` (fallback `skill`), load schema rồi invoke `skills_list` trong cùng turn. Tìm thấy nhưng chưa gọi là `not attempted`, không phải safety block. |
 | `skill_read` | `skillId` | Đọc đầy đủ instruction của một skill phù hợp. `id` là compatibility alias của `skillId`. |
 
 ---
@@ -167,7 +167,7 @@ Git chạy với stdin/pager/credential prompt bị vô hiệu hóa; path luôn 
 | `agent_user_message` | `content` | **Bắt buộc là MCP call đầu tiên và chỉ gọi đúng một lần trong mỗi user turn.** Nếu schema bị defer/ẩn, discover đúng tên `agent_user_message`, load rồi gọi ngay trong cùng turn; không được dừng sau discovery. Đồng bộ nguyên văn user message lên ChatCMD và thiết lập/correlate `taskId` + `turnId`. `content` phải đúng nguyên văn message hiện tại. Trạng thái chưa load/chưa gọi không phải rejection. Không dùng method này cho progress/reflection/finding sau tool result; các cập nhật đó phải dùng `agent_progress`. |
 | `agent_progress` | `message`, `suggestedTitle?` | **Rule phía AI cho mọi turn project không-trivial.** Ngay sau `agent_user_message` nên gửi progress tóm tắt yêu cầu + hành động kế tiếp. Sau các kết quả `fs_*` có ý nghĩa (đặc biệt `fs_find`, `fs_search`, `fs_read_text`, edit/write/delete), Git/process, `shell_read`/`shell_wait` còn pending, sub-agent wait chưa xong, hoặc failure/non-zero, AI nên gửi progress mô tả kết quả quan sát được và bước tiếp theo trước khi tiếp tục. Đây không phải runtime gate: server không reject tool chỉ vì thiếu progress; các thao tác low-level liên quan chặt có thể gom thành một checkpoint để tránh làm chậm tiến độ và tránh callback MCP không cần thiết. Không gửi private chain-of-thought. |
 | `agent_plan_question` | `question`, `options`, `questionKind?` | `questionKind` mặc định `clarification`; `executionConsent` dùng semantics consent do server định nghĩa. Lifecycle được audit durable; restart/disconnect/timeout/custom answer fail closed. Approved consent không đổi execution mode, không mint grant và mọi side effect vẫn qua C01 tool authorization. |
-| `agent_subagent_start` | `name`, `request` | Tạo hoặc reuse child. `samplingTools`/`samplingText` là worker sampling; `extensionFallback` là child pending để browser extension claim nên parent không làm trùng; `existing` không spawn lại. Startup lỗi sau registration trả structured `status=failed` + `startupError`. |
+| `agent_subagent_start` | `name`, `request` | Sau khi đồng bộ turn, có thể tạo/reuse child khi `subagentPolicy.policyVersion=2`, `delegationAllowed=true`, `enabled=true`, `maxConcurrent>0`, `decisionMode=modelJudgment`, `decisionSource=configuredConcurrency`, `delegationTextClassifierUsed=false` và model đánh giá delegation hữu ích. Đây là opt-in có cấu trúc; không cần keyword hay ngôn ngữ cụ thể. Delegation vẫn chịu normal tool authorization, execution approval, approved-grant/path budget, cancellation, identity và security policy. `allowedFiles`/`allowedEffects` tùy chọn mô tả delegated scope nhưng tự chúng không cấp quyền. `samplingTools`/`samplingText` là worker sampling; `extensionFallback` là child pending để browser extension claim nên parent không làm trùng; `existing` không spawn lại. Startup lỗi sau registration trả structured `status=failed` + `startupError`. |
 | `agent_subagent_wait` | `timeoutMs?`, `subagentId?`, `reportOffset?`, `reportVersion?` | Chờ toàn bộ cây agent của parent turn và trả báo cáo công khai trong `subagents[].report.content`. `allFinished`/`allCompleted` chỉ là lifecycle; kiểm tra `workOutcome`, các bộ đếm lỗi và báo cáo thiếu. Nếu `allFinished=false` hoặc `reportPendingCount>0` thì tiếp tục gọi lại. Báo cáo dài trả `report.continuation` để truyền lại vào tool, không cần đọc lại repo. Xem [hợp đồng báo cáo sub-agent](subagent-reports.md). |
 | `agent_turn_complete` | `content`, `suggestedTitle?`, `workOutcome?`, `verificationIntent?`, `verificationReason?`, `verificationScope?`, `criteria?`, `evidenceRefs?`, `blockers?`, `limitations?` | **Bắt buộc là MCP call cuối cùng.** Xác nhận turn đã hoàn tất và gửi đúng nội dung cuối cùng agent sẽ trả cho user. `workOutcome` là agent assessment; verification do server resolve từ `command_run` execution IDs. Client cũ chỉ gửi `content` vẫn hợp lệ và được normalize thành legacy completed + `notRun`, không phải verified. |
 
@@ -218,6 +218,12 @@ agent_user_message
 Cadence mặc định là khoảng **2–4 substantive operation hoặc hết một coherent batch**, không phải một progress cho mỗi tool call. Nếu có finding quan trọng, lỗi, hoặc chuyển phase thì có thể báo sớm hơn.
 
 Một turn có sub-agent:
+
+Model chỉ chọn flow này sau khi `agent_user_message` trả
+`subagentPolicy.policyVersion=2`, `delegationAllowed=true`, `enabled=true`, `maxConcurrent>0`,
+`decisionMode=modelJudgment`, `decisionSource=configuredConcurrency` và
+`delegationTextClassifierUsed=false`, dựa trên lợi ích chia việc chứ không dựa vào keyword trong câu
+user.
 
 ```text
 agent_user_message

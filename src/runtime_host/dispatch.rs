@@ -462,15 +462,11 @@ impl RuntimeHost {
                 .await
             }
             "agent_subagent_start" => {
-                if !self
-                    .subagent_delegation_explicitly_requested(&context)
-                    .await?
-                {
-                    return Err(RuntimeError::new(
-                        "subagent_explicit_user_intent_required",
-                        "ChatCMD could not confirm delegation intent in the synchronized root user request. No child was created. Check the current taskId/turnId and original request; this is local intent validation, not a host safety decision. Continue in the current conversation.",
-                    ));
-                }
+                // call_persisted already authenticated the agent/task and synchronized this
+                // exact turn. Repeat the sync guard here so direct internal dispatch cannot
+                // bypass the structured authorization boundary. Delegation eligibility is a
+                // runtime capability decision; never classify natural-language user content.
+                self.ensure_user_message_synced(&context).await?;
                 let input: SubagentStartInput = parse(arguments)?;
                 super::subagent_contract::validate_delegation_contract(&input)?;
                 self.register_subagent(

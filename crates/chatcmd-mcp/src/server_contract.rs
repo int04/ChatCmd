@@ -16,6 +16,12 @@ const LEGACY_INITIALIZATION_FAILURE_INSTRUCTIONS: &str = "INITIALIZATION FAILURE
 
 const INITIALIZATION_FAILURE_INSTRUCTIONS: &str = "INITIALIZATION FAILURE RULE: agent_user_message remains mandatory, including on a new chat. When its schema is hidden, deferred, or not yet loaded, use connector/resource discovery for the exact tool name agent_user_message; if exact-name discovery is unsupported, use the focused query 'agent'. Load and invoke agent_user_message in this same turn. Successful discovery requires invocation before any reply; never stop after merely loading the schema. A hidden, deferred, not-yet-loaded, or not-attempted schema or call is not an initialization failure and must not be described as rejected, blocked, unavailable, or denied. If discovery itself returns an error, report that exact discovery state and error as a discovery failure, not as a user-message synchronization rejection. Initialization fails only after an attempted agent_user_message call returns an observable rejection or error. For a genuine rejection, preserve the exact observable state and error, do not call task tools or agent_turn_complete, and never bypass or disguise the request. Attribute a rejection to host safety or permission only when the raw observable host error explicitly identifies that cause; otherwise do not name OpenAI or speculate about any upstream cause. State that MCP finalization was not attempted for the unsynchronized turn; never say it was rejected or not accepted unless an actual agent_turn_complete call returned that result.";
 
+const LEGACY_EXPLICIT_DELEGATION_INSTRUCTIONS: &str = "SUB-AGENT RULE: create or register a child agent only when the exact current root user message explicitly asks to split work across agents or use multiple agents. Never delegate merely because parallel or specialized work seems useful; continue in the current conversation instead. EXPLICIT MULTI-AGENT INTENT RULE: if agent_user_message.content clearly asks to split work across agents, for example phrases equivalent to 'chia agent', 'chia ra N agent', 'dùng nhiều agent', 'split into agents', or 'use multiple agents', the parent MUST attempt host-native delegation/subagent execution before doing the delegated work itself. Prefer the ChatGPT host's native delegation capability when available, and register/synchronize each delegated child with ChatCMD via agent_subagent_start so the parent/child task relationship remains visible to ChatCMD. Do not substitute a local Codex fallback for this explicit multi-agent request.";
+
+const MODEL_DECIDED_DELEGATION_INSTRUCTIONS: &str = "SUB-AGENT POLICY RULE: after agent_user_message successfully synchronizes the turn, inspect the structured subagentPolicy result. subagentPolicy.policyVersion=2, subagentPolicy.delegationAllowed=true, subagentPolicy.enabled=true, and subagentPolicy.maxConcurrent greater than zero are the user's structured opt-in to sub-agent delegation; subagentPolicy.decisionMode=modelJudgment, subagentPolicy.decisionSource=configuredConcurrency, and subagentPolicy.delegationTextClassifierUsed=false confirm that the model decides whether delegation is useful based on separable work, available concurrency, expected latency, and integration cost rather than matching request text. No exact phrase, keyword, or language-specific intent match is required. When subagentPolicy.delegationAllowed=false, subagentPolicy.enabled=false, or subagentPolicy.maxConcurrent is zero, do not create a child. Delegation never widens authority: every child remains subject to normal tool authorization, execution approval, approved-grant and path budgets, cancellation, identity, and security rules. Prefer the ChatGPT host's native delegation capability when available, and register/synchronize each delegated child with ChatCMD via agent_subagent_start so the parent/child task relationship remains visible to ChatCMD. Do not substitute a local Codex fallback for a registered child.";
+
+const OBSERVABLE_TOOL_FAILURE_INSTRUCTIONS: &str = "OBSERVABLE TOOL FAILURE RULE: this rule applies to every ChatCMD tool. A hidden, deferred, not-yet-loaded, discovered-but-not-invoked, or otherwise not-attempted tool call is not a rejection, denial, or safety block. A discovery error describes only discovery and must not be presented as the discovered tool's call result. State that a tool was rejected, blocked, or denied only after an actual invocation returns an observable error, and preserve the exact observable error code and state. Attribute a failure to host or OpenAI safety, permissions, or policy only when the raw observed error explicitly identifies that cause; otherwise report the actual error without speculating about its origin. If no invocation occurred, report the tool as not attempted and continue same-turn exact-name discovery when recovery remains possible.";
+
 const TASK_WORKSPACE_INSTRUCTIONS: &str = "TASK WORKSPACE RESULT RULE: treat projectFolder returned by agent_user_message as the authoritative workspace for the current task. workspace_roots is task-scoped: when the task has a project folder it returns that folder, never the Agent folder or process-wide server root. Do not reject an explicit task project folder because it differs from a previous workspace_roots result from another task or connection.";
 
 pub(crate) fn instruction_bundle_for_hash() -> String {
@@ -23,11 +29,18 @@ pub(crate) fn instruction_bundle_for_hash() -> String {
 }
 
 fn server_protocol_instructions() -> String {
-    SERVER_INSTRUCTIONS.replacen(
-        LEGACY_INITIALIZATION_FAILURE_INSTRUCTIONS,
-        INITIALIZATION_FAILURE_INSTRUCTIONS,
-        1,
-    )
+    let instructions = SERVER_INSTRUCTIONS
+        .replacen(
+            LEGACY_INITIALIZATION_FAILURE_INSTRUCTIONS,
+            INITIALIZATION_FAILURE_INSTRUCTIONS,
+            1,
+        )
+        .replacen(
+            LEGACY_EXPLICIT_DELEGATION_INSTRUCTIONS,
+            MODEL_DECIDED_DELEGATION_INSTRUCTIONS,
+            1,
+        );
+    format!("{instructions} {OBSERVABLE_TOOL_FAILURE_INSTRUCTIONS}")
 }
 
 #[tool_handler]
@@ -278,28 +291,45 @@ mod tests {
     }
 
     #[test]
-    fn server_instructions_require_explicit_multi_agent_intent_to_try_native_delegation() {
+    fn server_instructions_use_structured_opt_in_and_model_decided_delegation() {
+        let instructions = server_protocol_instructions();
+        assert!(instructions.contains("SUB-AGENT POLICY RULE"));
+        assert!(instructions.contains("subagentPolicy.policyVersion=2"));
+        assert!(instructions.contains("subagentPolicy.delegationAllowed=true"));
+        assert!(instructions.contains("subagentPolicy.enabled=true"));
+        assert!(instructions.contains("subagentPolicy.maxConcurrent greater than zero"));
+        assert!(instructions.contains("user's structured opt-in"));
+        assert!(instructions.contains("subagentPolicy.decisionMode=modelJudgment"));
+        assert!(instructions.contains("subagentPolicy.decisionSource=configuredConcurrency"));
+        assert!(instructions.contains("subagentPolicy.delegationTextClassifierUsed=false"));
+        assert!(instructions.contains("the model decides whether delegation is useful"));
         assert!(
-            SERVER_INSTRUCTIONS
-                .contains("only when the exact current root user message explicitly asks")
+            instructions.contains("No exact phrase, keyword, or language-specific intent match")
         );
+        assert!(!instructions.contains("explicitUserIntent"));
+        assert!(instructions.contains("Delegation never widens authority"));
+        assert!(instructions.contains("normal tool authorization, execution approval"));
+        assert!(instructions.contains("approved-grant and path budgets"));
+        assert!(instructions.contains("cancellation, identity, and security rules"));
+        assert!(!instructions.contains("path and effect constraints"));
+        assert!(!instructions.contains("EXPLICIT MULTI-AGENT INTENT RULE"));
         assert!(
-            SERVER_INSTRUCTIONS.contains(
-                "Never delegate merely because parallel or specialized work seems useful"
-            )
+            !instructions.contains("only when the exact current root user message explicitly asks")
         );
-        assert!(!SERVER_INSTRUCTIONS.contains("parent independently judges delegation useful"));
-        assert!(SERVER_INSTRUCTIONS.contains("EXPLICIT MULTI-AGENT INTENT RULE"));
-        assert!(SERVER_INSTRUCTIONS.contains("'chia agent'"));
-        assert!(SERVER_INSTRUCTIONS.contains("'chia ra N agent'"));
-        assert!(SERVER_INSTRUCTIONS.contains("'dùng nhiều agent'"));
-        assert!(
-            SERVER_INSTRUCTIONS.contains("MUST attempt host-native delegation/subagent execution")
-        );
-        assert!(SERVER_INSTRUCTIONS.contains(
-            "register/synchronize each delegated child with ChatCMD via agent_subagent_start"
-        ));
-        assert!(SERVER_INSTRUCTIONS.contains("Do not substitute a local Codex fallback"));
+        assert!(!instructions.contains("'chia ra N agent'"));
+    }
+
+    #[test]
+    fn server_instructions_require_observable_failure_evidence_for_every_tool() {
+        let instructions = server_protocol_instructions();
+        assert!(instructions.contains("OBSERVABLE TOOL FAILURE RULE"));
+        assert!(instructions.contains("applies to every ChatCMD tool"));
+        assert!(instructions.contains("discovered-but-not-invoked"));
+        assert!(instructions.contains("A discovery error describes only discovery"));
+        assert!(instructions.contains("only after an actual invocation"));
+        assert!(instructions.contains("exact observable error code and state"));
+        assert!(instructions.contains("raw observed error explicitly identifies that cause"));
+        assert!(instructions.contains("report the tool as not attempted"));
     }
 
     #[test]

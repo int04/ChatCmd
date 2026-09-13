@@ -25,13 +25,6 @@ pub(super) fn is_plan_mode_request(content: &str) -> bool {
             || normalized.split_whitespace().any(|word| word == "#plan"))
 }
 
-#[path = "subagent_intent.rs"]
-mod subagent;
-
-pub(super) fn is_explicit_multi_agent_request(content: &str) -> bool {
-    subagent::is_explicit_request(content)
-}
-
 pub(super) fn intent_hint(content: &str) -> Value {
     let normalized = intent_prose(content).to_lowercase();
     let workflow_kind = if is_plan_mode_request(content) {
@@ -97,10 +90,6 @@ fn intent_prose(content: &str) -> String {
 }
 
 #[cfg(test)]
-#[path = "subagent_intent_tests.rs"]
-mod subagent_intent_tests;
-
-#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -120,46 +109,6 @@ mod tests {
             "Ví dụ:\n```text\nlập kế hoạch\n```\nSửa code"
         ));
         assert!(!is_plan_mode_request("Review chuỗi \"lên kế hoạch\""));
-    }
-
-    #[test]
-    fn multi_agent_intent_requires_an_explicit_user_request() {
-        assert!(is_explicit_multi_agent_request(
-            "Chia agent đọc file giúp tôi"
-        ));
-        assert!(is_explicit_multi_agent_request(
-            "Chia agent: create delegated reviewer"
-        ));
-        assert!(is_explicit_multi_agent_request(
-            "Thử chia agent đọc các file chưa commit"
-        ));
-        assert!(is_explicit_multi_agent_request(
-            "Chia ra 3 agent để audit song song"
-        ));
-        assert!(is_explicit_multi_agent_request(
-            "Use multiple agents to review this repo"
-        ));
-        assert!(!is_explicit_multi_agent_request(
-            "Rà soát toàn bộ source code, sub agent, để tìm lỗi"
-        ));
-        assert!(!is_explicit_multi_agent_request(
-            "Kiểm tra logic chia agent hiện tại"
-        ));
-        assert!(!is_explicit_multi_agent_request(
-            "Kiểm tra logic dùng nhiều agent hiện tại"
-        ));
-        assert!(!is_explicit_multi_agent_request(
-            "Không chia agent, làm trong cuộc trò chuyện hiện tại"
-        ));
-        assert!(!is_explicit_multi_agent_request(
-            "Review chuỗi `chia agent` trong source"
-        ));
-        assert!(!is_explicit_multi_agent_request(
-            "Đừng thử chia agent; làm trong cuộc trò chuyện hiện tại"
-        ));
-        assert!(!is_explicit_multi_agent_request(
-            "Review nhãn \"thử chia agent\" trong UI"
-        ));
     }
 
     #[test]

@@ -1,5 +1,7 @@
 use chatcmd_mcp::catalog_hash;
-use chatcmd_runtime::{OperationContext, ShellCreateRequest};
+use chatcmd_runtime::OperationContext;
+#[cfg(unix)]
+use chatcmd_runtime::ShellCreateRequest;
 use serde_json::{Value, json};
 use sqlx::Row as _;
 use tempfile::TempDir;

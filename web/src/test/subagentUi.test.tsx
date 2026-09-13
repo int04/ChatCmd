@@ -46,7 +46,7 @@ describe('subagent tree and chat layout', () => {
     expect(topbar).toHaveAttribute('tabindex', '0');
     expect(topbar.nextElementSibling).toHaveClass('task-chat-column');
     expect(screen.getByTestId('turn-children')).toHaveTextContent('child, grandchild');
-    fireEvent.click(screen.getByRole('button', { name: 'Đóng thông tin task' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close task information' }));
     expect(container.querySelector('.task-detail-sidebar')).toBeNull();
     expect(container.querySelector('.task-detail-shell')).toHaveClass('sidebar-collapsed');
   });
@@ -68,6 +68,8 @@ describe('subagent tree and chat layout', () => {
     const save = vi.spyOn(api, 'saveSettings').mockImplementation(async (value) => value);
     render(<MemoryRouter initialEntries={['/settings?tab=execution']}><SettingsPage /></MemoryRouter>);
     const select = await screen.findByRole('combobox', { name: /Sub-agent count/ });
+    expect(screen.getByText(/lets the model decide when delegation would improve a task/i)).toBeInTheDocument();
+    expect(screen.getByText(/may create additional model sessions or ChatGPT conversations/i)).toBeInTheDocument();
     expect(select).toHaveValue('0');
     expect(within(select).getAllByRole('option').map((option) => option.getAttribute('value'))).toEqual(['0', '1', '2', '3', '4', '5']);
     fireEvent.change(select, { target: { value: '2' } });

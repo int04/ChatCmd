@@ -17,7 +17,7 @@ macro_rules! tool_methods {
                 }
             )+
 
-            #[tool(description = "Create or reuse one child agent. Required: name, request. Optional delegation constraints: allowedFiles, allowedEffects, dependencies, acceptance, projectContextRef, instructionsVersion, and an optional read-only approvalGrant; these can only narrow server policy. approvalGrant is not a tool allowlist: use only distinct names from subagentPolicy.approvalGrant.allowedTools and an existing approved parent grant; never include Git/process or agent_* lifecycle tools. Omit it when no approved parent grant exists; normal per-operation policy still applies. The child returns a bounded report with files, symbols, changes, evidenceRefs, blockers, and workOutcome. Inspect dispatchMode: samplingTools/samplingText started sampling; extensionFallback remains pending, so wait without duplicating; existing reuses the child. Startup failure is structured status=failed with startupError.")]
+            #[tool(description = "After agent_user_message synchronizes the turn, create or reuse one child when subagentPolicy.policyVersion=2, subagentPolicy.delegationAllowed=true, subagentPolicy.enabled=true, subagentPolicy.maxConcurrent is greater than zero, subagentPolicy.decisionMode=modelJudgment, subagentPolicy.decisionSource=configuredConcurrency, subagentPolicy.delegationTextClassifierUsed=false, and the model judges delegation useful. Structured enablement is the user's opt-in; no exact phrase, keyword, or language-specific match is required. Required: name, request. Optional delegation context: allowedFiles, allowedEffects, dependencies, acceptance, projectContextRef, instructionsVersion, and an optional read-only approvalGrant. These fields communicate the delegated scope but never grant authority. approvalGrant is not a tool allowlist: use only distinct names from subagentPolicy.approvalGrant.allowedTools and an existing approved parent grant; never include Git/process or agent_* lifecycle tools. Omit it when no approved parent grant exists; normal tool authorization, execution approval, approved-grant and path budgets, cancellation, identity, and security rules still apply. The child returns a bounded report with files, symbols, changes, evidenceRefs, blockers, and workOutcome. Inspect dispatchMode: samplingTools/samplingText started sampling; extensionFallback remains pending, so wait without duplicating; existing reuses the child. Startup failure is structured status=failed with startupError.")]
             async fn agent_subagent_start(
                 &self,
                 Parameters(arguments): Parameters<SubagentStartArgs>,
@@ -283,7 +283,7 @@ tool_methods!(
     (
         skills_list,
         NoArgs,
-        "After agent_user_message, discover available .agents and .codex skills before non-trivial project work; no tool-specific fields."
+        "After agent_user_message, discover available .agents and .codex skills before non-trivial project work; no tool-specific fields. If this schema is hidden or deferred on ChatGPT, call api_tool.list_resources on the current connector with the exact query 'skills_list' (fallback 'skill'), load the schema, and invoke skills_list in this same turn. Hidden, discovered-but-not-invoked, or otherwise not attempted is not a rejection, permission denial, or safety block. Only an actual invocation returning an observable error establishes failure; preserve its exact error code/state and name host or OpenAI safety only when the raw observed error explicitly identifies that cause."
     ),
     (
         skill_read,
@@ -368,5 +368,40 @@ mod tool_method_instruction_tests {
         assert!(finalizer.contains("raw observable host error explicitly identifies it"));
         assert!(finalizer.contains("otherwise do not name OpenAI"));
         assert!(finalizer.contains("MCP finalization as not attempted"));
+    }
+
+    #[test]
+    fn skills_and_delegation_descriptions_use_observable_and_structured_policy() {
+        let tools = McpServer::tool_router().list_all();
+        let description = |name: &str| {
+            tools
+                .iter()
+                .find(|tool| tool.name == name)
+                .and_then(|tool| tool.description.as_deref())
+                .expect("tool must have a description")
+        };
+
+        let skills = description("skills_list");
+        assert!(skills.contains("api_tool.list_resources on the current connector"));
+        assert!(skills.contains("exact query 'skills_list' (fallback 'skill')"));
+        assert!(skills.contains("invoke skills_list in this same turn"));
+        assert!(skills.contains("discovered-but-not-invoked"));
+        assert!(skills.contains("Only an actual invocation"));
+        assert!(skills.contains("raw observed error explicitly identifies that cause"));
+
+        let start = description("agent_subagent_start");
+        assert!(start.contains("subagentPolicy.policyVersion=2"));
+        assert!(start.contains("subagentPolicy.delegationAllowed=true"));
+        assert!(start.contains("subagentPolicy.enabled=true"));
+        assert!(start.contains("subagentPolicy.decisionMode=modelJudgment"));
+        assert!(start.contains("subagentPolicy.decisionSource=configuredConcurrency"));
+        assert!(start.contains("subagentPolicy.delegationTextClassifierUsed=false"));
+        assert!(start.contains("model judges delegation useful"));
+        assert!(start.contains("no exact phrase, keyword, or language-specific match"));
+        assert!(!start.contains("explicitUserIntent"));
+        assert!(start.contains("normal tool authorization, execution approval"));
+        assert!(start.contains("approved-grant and path budgets"));
+        assert!(start.contains("cancellation, identity, and security rules"));
+        assert!(!start.contains("path/effect constraints"));
     }
 }

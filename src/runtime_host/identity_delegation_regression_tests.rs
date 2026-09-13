@@ -1,4 +1,4 @@
-//! The ChatUI request and the MCP acknowledgement must not disagree on delegation.
+//! Routed ChatUI turns use structured delegation policy, never text classification.
 use super::routing_tests::{REQUEST, SCOPE, TASK, TURN, seed};
 use crate::runtime_host::{
     RuntimeHost,
@@ -49,7 +49,7 @@ async fn invoke(
     host.call_persisted(tool, context, args).await
 }
 
-async fn policy_for_echo(original: &str, echo: &str) -> bool {
+async fn delegation_allowed_for_echo(original: &str, echo: &str) -> bool {
     let (host, agent, _dir) = fixture(original).await;
     let reply = host
         .call_persisted(
@@ -67,15 +67,19 @@ async fn policy_for_echo(original: &str, echo: &str) -> bool {
         .unwrap();
     assert_eq!(reply["userMessageSynced"], true);
     assert_eq!(reply["taskId"], TASK);
-    reply["subagentPolicy"]["explicitUserIntent"]
+    assert_eq!(
+        reply["subagentPolicy"]["delegationTextClassifierUsed"],
+        false
+    );
+    reply["subagentPolicy"]["delegationAllowed"]
         .as_bool()
         .unwrap()
 }
 
 #[tokio::test]
-async fn subagent_routed_user_instruction_survives_shortened_mcp_echo() {
+async fn subagent_routed_policy_survives_shortened_mcp_echo() {
     assert!(
-        policy_for_echo(
+        delegation_allowed_for_echo(
             "Chia ra agent đọc hai file, không sửa file",
             "Đọc hai file, không sửa file"
         )
@@ -84,9 +88,9 @@ async fn subagent_routed_user_instruction_survives_shortened_mcp_echo() {
 }
 
 #[tokio::test]
-async fn subagent_routed_user_refusal_cannot_be_overridden_by_mcp_echo() {
+async fn subagent_routed_policy_does_not_classify_original_or_echo_text() {
     assert!(
-        !policy_for_echo(
+        delegation_allowed_for_echo(
             "Không chia agent, chỉ đọc một file trong cuộc trò chuyện này",
             "Chia ra agent đọc file"
         )
@@ -107,7 +111,7 @@ async fn subagent_routed_two_readers_sync_progress_read_finish_and_parent_wait()
     )
     .await
     .unwrap();
-    assert_eq!(synced["subagentPolicy"]["explicitUserIntent"], true);
+    assert_eq!(synced["subagentPolicy"]["delegationAllowed"], true);
     root.task_id = Some(TASK.into());
     invoke(
         &host,
@@ -248,7 +252,7 @@ async fn subagent_routed_two_readers_sync_progress_read_finish_and_parent_wait()
 }
 
 #[tokio::test]
-async fn subagent_denial_does_not_block_progress_or_parent_finalization() {
+async fn subagent_registration_is_not_gated_by_vietnamese_text() {
     let (host, agent, _dir) = fixture("Đọc file trong cuộc trò chuyện này, không chia agent").await;
     let mut root = turn_context(
         "root-no-delegation",
@@ -266,41 +270,19 @@ async fn subagent_denial_does_not_block_progress_or_parent_finalization() {
     .await
     .unwrap();
     root.task_id = Some(TASK.into());
-    let error = invoke(
+    let run = invoke(
         &host,
         &root,
         "agent_subagent_start",
-        json!({"name":"unexpected","request":"Read file"}),
+        json!({"name":"model-selected-reader","request":"Read file"}),
     )
     .await
-    .unwrap_err();
-    assert_eq!(error.code, "subagent_explicit_user_intent_required");
-    assert_eq!(
-        invoke(
-            &host,
-            &root,
-            "agent_progress",
-            json!({"message":"Continuing without children"})
-        )
-        .await
-        .unwrap()["accepted"],
-        true
-    );
-    assert_eq!(
-        invoke(
-            &host,
-            &root,
-            "agent_turn_complete",
-            json!({"content":"No child created","workOutcome":"blocked"})
-        )
-        .await
-        .unwrap()["accepted"],
-        true
-    );
+    .expect("enabled synchronized turn may delegate without a text classifier");
+    assert!(run["childTaskId"].as_str().is_some());
 }
 
 #[tokio::test]
-async fn subagent_routed_intent_does_not_follow_a_later_request() {
+async fn subagent_routed_policy_is_bound_to_the_synchronized_child_turn() {
     let (host, agent, _dir) = fixture("Chia ra agent đọc file").await;
     let mut root = turn_context(
         "root-original-turn",
@@ -351,5 +333,5 @@ async fn subagent_routed_intent_does_not_follow_a_later_request() {
     )
     .await
     .unwrap();
-    assert_eq!(synced["subagentPolicy"]["explicitUserIntent"], true);
+    assert_eq!(synced["subagentPolicy"]["delegationAllowed"], true);
 }

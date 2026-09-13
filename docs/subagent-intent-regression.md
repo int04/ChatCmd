@@ -1,5 +1,11 @@
 # Subagent explicit-intent regression audit
 
+> Historical audit. The language-specific explicit-intent recognizer described below was removed
+> on 2026-09-13. Current delegation eligibility comes from the structured
+> `subagentConcurrency` setting; when it is greater than zero, the model decides whether delegation
+> is useful without keyword or language matching. The identity, approval, scope, budget, and
+> concurrency safeguards documented here remain relevant.
+
 ## Scope and historical cause
 
 Audited on 2026-09-12 at HEAD `3ed9728cfbe0cb9497e4ee8db7fbaeb0aefb6132`.

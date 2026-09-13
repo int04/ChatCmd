@@ -35,6 +35,23 @@ Một user turn hợp lệ có thứ tự:
 5. Chờ mọi child bằng `agent_subagent_wait` và dọn pending activity.
 6. `agent_turn_complete` đúng một lần, là tool cuối.
 
+Sau khi turn đồng bộ thành công, `subagentPolicy.policyVersion=2`, `delegationAllowed=true`,
+`enabled=true` cùng `maxConcurrent>0` là opt-in có cấu trúc của user cho phép dùng sub-agent. Các field
+`decisionMode=modelJudgment`, `decisionSource=configuredConcurrency` và
+`delegationTextClassifierUsed=false` xác nhận model tự quyết định có chia việc hay không dựa trên khả
+năng tách phần việc, số slot còn lại, độ trễ dự kiến và chi phí tích hợp thay vì khớp text; không cần
+keyword, câu chữ hay ngôn ngữ cụ thể trong message. Khi `delegationAllowed=false`, `enabled=false`
+hoặc `maxConcurrent=0`, không tạo child. Việc bật delegation không mở rộng quyền: normal tool
+authorization, execution approval, approved-grant/path budget, cancellation, identity và security
+rules vẫn áp dụng đầy đủ cho parent và từng child. Các field context tùy chọn như
+`allowedFiles`/`allowedEffects` mô tả delegated scope nhưng tự chúng không cấp quyền.
+
+Mọi kết luận tool bị reject/block/deny phải dựa trên một invocation thực sự và giữ nguyên error
+code/state quan sát được. Schema bị ẩn/defer, discovery chưa gọi được tool, hoặc model chưa thực hiện
+call chỉ có nghĩa `not attempted`, không phải safety block. Chỉ quy nguyên nhân cho host/OpenAI safety,
+permission hoặc policy khi raw observed error nêu rõ nguyên nhân đó; discovery error chỉ là lỗi
+discovery, không phải kết quả gọi tool được tìm.
+
 Child registration là idempotent theo parent turn/name/request/grant request. `extensionFallback`
 nghĩa là browser extension có quyền claim child đã đăng ký; parent không được làm trùng phần việc.
 Child không tự kế thừa authority. Grant cho child phải là intersection có budget của một grant cha
