@@ -1,6 +1,7 @@
 //! Regressions for ChatUI messages accidentally becoming new MCP conversations.
 use std::time::Duration;
 
+use chatcmd_storage::compact::{CompactCheckpoint, CompactPhase, openai_scope};
 use serde_json::{Value, json};
 
 use super::{RuntimeHost, now_ms};
@@ -270,4 +271,155 @@ async fn unrelated_new_message_is_not_assigned_to_the_only_active_bridge() {
         .expect("new direct chat");
     assert_ne!(context.task_id.as_deref(), Some(ORIGINAL));
     assert_eq!(task_count(&host).await, 2);
+}
+
+async fn seed_completed_manual_compact(host: &RuntimeHost, agent: &str) -> (String, String) {
+    let old_id = "manual-compact-old";
+    let new_id = "manual-compact-new";
+    let old_url = format!("https://chatgpt.com/c/{old_id}");
+    let new_url = format!("https://chatgpt.com/c/{new_id}");
+    let now = now_ms();
+    sqlx::query("INSERT INTO tasks(id,agent_id,device_id,conversation_scope_hash,source,allow_execute,status,generation,created_at_ms,updated_at_ms) VALUES(?,?,?,?,'chatgpt_web',1,'running',1,?,?)")
+        .bind(ORIGINAL).bind(agent).bind(host.device.id.as_str()).bind(openai_scope(old_id))
+        .bind(now).bind(now).execute(host.repository.pool()).await.expect("seed compact task");
+    sqlx::query("INSERT INTO chatgpt_conversations(task_id,conversation_id,conversation_url,model,active_request_id,created_at_ms,updated_at_ms) VALUES(?,?,?,'Auto',NULL,?,?)")
+        .bind(ORIGINAL).bind(old_id).bind(&old_url).bind(now).bind(now)
+        .execute(host.repository.pool()).await.expect("seed compact conversation");
+
+    let mut job = host
+        .repository
+        .compact_start(ORIGINAL, "manual-compact-start", now + 1)
+        .await
+        .expect("start manual compact");
+    job = host
+        .repository
+        .compact_checkpoint(
+            &job.id,
+            &CompactCheckpoint {
+                expected_revision: job.revision,
+                phase: Some(CompactPhase::SavingHandoff),
+                handoff_text: Some("manual compact handoff".to_owned()),
+                ..CompactCheckpoint::default()
+            },
+            "manual-compact-handoff",
+            now + 2,
+        )
+        .await
+        .expect("save manual handoff");
+    job = host
+        .repository
+        .compact_checkpoint(
+            &job.id,
+            &CompactCheckpoint {
+                expected_revision: job.revision,
+                phase: Some(CompactPhase::OpeningNewChat),
+                new_conversation_id: Some(new_id.to_owned()),
+                new_conversation_url: Some(new_url.clone()),
+                ..CompactCheckpoint::default()
+            },
+            "manual-compact-open",
+            now + 3,
+        )
+        .await
+        .expect("reserve manual destination");
+    job = host
+        .repository
+        .compact_checkpoint(
+            &job.id,
+            &CompactCheckpoint {
+                expected_revision: job.revision,
+                phase: Some(CompactPhase::Completed),
+                new_conversation_id: Some(new_id.to_owned()),
+                new_conversation_url: Some(new_url.clone()),
+                ..CompactCheckpoint::default()
+            },
+            "manual-compact-complete",
+            now + 4,
+        )
+        .await
+        .expect("complete manual compact");
+    assert_eq!(job.phase, CompactPhase::Completed);
+    (new_id.to_owned(), new_url)
+}
+
+#[tokio::test]
+async fn manual_post_compact_waits_for_browser_binding_and_reuses_task_without_approval() {
+    let (host, agent, _directory) = test_host().await;
+    let (new_id, new_url) = seed_completed_manual_compact(&host, &agent).await;
+    enable_approval(&host).await;
+    let pool = host.repository.pool().clone();
+    let browser_agent = agent.clone();
+    let writer = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let now = now_ms();
+        sqlx::query("INSERT INTO chatgpt_bridge_requests(id,task_id,turn_id,agent_id,model,user_content,submitted_content,status,conversation_id,conversation_url,created_at_ms,updated_at_ms) VALUES('manual-browser-turn',?,?,?,'Auto','tiếp tục','tiếp tục','running',?,?,?,?)")
+            .bind(ORIGINAL).bind("manual-browser-turn-id").bind(browser_agent)
+            .bind(&new_id).bind(&new_url).bind(now).bind(now)
+            .execute(&pool).await.expect("record browser continuation");
+        sqlx::query("UPDATE chatgpt_conversations SET active_request_id='manual-browser-turn',updated_at_ms=? WHERE task_id=?")
+            .bind(now).bind(ORIGINAL).execute(&pool).await.expect("activate browser continuation");
+    });
+
+    let provider_scope = "openai:provider-session-after-compact";
+    let mut context = turn_context(
+        "manual-post-compact",
+        &agent,
+        "agent_user_message",
+        "manual-post-compact-turn",
+        provider_scope,
+    );
+    let mut events = host.events.subscribe();
+    tokio::time::timeout(
+        Duration::from_secs(3),
+        host.ensure_call_identity(&mut context, Some("tiếp tục")),
+    )
+    .await
+    .expect("must not wait for approval")
+    .expect("reuse compact destination task");
+    writer.await.expect("browser writer task");
+
+    assert_eq!(context.task_id.as_deref(), Some(ORIGINAL));
+    assert_eq!(task_count(&host).await, 1);
+    let binding: (String, i64) = sqlx::query_as(
+        "SELECT task_id,generation FROM chatgpt_mcp_scope_bindings WHERE agent_id=? AND device_id=? AND scope_hash=?",
+    ).bind(&agent).bind(host.device.id.as_str()).bind(provider_scope)
+        .fetch_one(host.repository.pool()).await.expect("persist replacement provider scope");
+    let generation: i64 = sqlx::query_scalar("SELECT generation FROM tasks WHERE id=?")
+        .bind(ORIGINAL)
+        .fetch_one(host.repository.pool())
+        .await
+        .expect("read compact generation");
+    assert_eq!(binding.0, ORIGINAL);
+    assert_eq!(binding.1, generation);
+    while let Ok(event) = events.try_recv() {
+        assert_ne!(event.event_type, "conversation.approval_pending");
+    }
+}
+
+#[tokio::test]
+async fn manual_post_compact_fails_closed_instead_of_requesting_new_conversation_approval() {
+    let (host, agent, _directory) = test_host().await;
+    seed_completed_manual_compact(&host, &agent).await;
+    enable_approval(&host).await;
+    let mut context = turn_context(
+        "manual-post-compact-missing-browser",
+        &agent,
+        "agent_user_message",
+        "manual-post-compact-missing-browser-turn",
+        "openai:provider-session-before-browser",
+    );
+    let mut events = host.events.subscribe();
+    let error = tokio::time::timeout(
+        Duration::from_secs(3),
+        host.ensure_call_identity(&mut context, Some("tiếp tục")),
+    )
+    .await
+    .expect("bounded compact binding wait")
+    .expect_err("must not create a new approval conversation");
+
+    assert_eq!(error.code, "conversation_identity_pending");
+    assert_eq!(task_count(&host).await, 1);
+    while let Ok(event) = events.try_recv() {
+        assert_ne!(event.event_type, "conversation.approval_pending");
+    }
 }

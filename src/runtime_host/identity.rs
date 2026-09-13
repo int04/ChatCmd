@@ -74,6 +74,11 @@ impl RuntimeHost {
             None
         };
         let mut selected = known.or(routed);
+        if selected.is_none()
+            && let Some(message) = first_user_message
+        {
+            selected = self.recover_manual_compact_task(context, message).await?;
+        }
         if selected.is_none() {
             selected = if let Some(message) = first_user_message {
                 self.chatgpt_bridge_task_for_message(&context.agent_id, None, message)

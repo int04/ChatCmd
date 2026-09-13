@@ -18,11 +18,14 @@ async function locateCompactDestination(job, record, tabs) {
   const matches = [];
   for (const tab of tabs) {
     const conversationId = conversationIdFromUrl(tab.url || '');
-    const mayBeStaleDestination = Boolean(job.newConversationId || tab.id === record.destinationTabId);
+    const mayBeStaleDestination = Boolean(job.newConversationId || tab.id === record.destinationTabId
+      || record.destinationOpened === true);
     if (!tab.id || !isChatGptUrl(tab.url) || sameConversationUrl(tab.url, job.oldConversationUrl)
       || (!conversationId && !mayBeStaleDestination)) continue;
     try {
-      const found = await chrome.tabs.sendMessage(tab.id, { type: 'chatcmd-compact-locate', job, kind: 'RESUME' });
+      // Discovery needs the same receiver health/reinjection path as probe/dispatch.
+      // A missing listener after reload is not evidence that the destination was closed.
+      const found = await compactSend(tab.id, 'locate', job, 'RESUME');
       if (found?.ok && found.markerFound) matches.push(tab);
     } catch { /* an unrelated or not-yet-loaded document does not prove ownership */ }
   }
@@ -64,8 +67,13 @@ async function compactDestination(job, record, tabs) {
         newConversationUrl: probe.conversationUrl, detail: null });
       confirmed = await compactSend(destination.id, 'probe', job, 'RESUME');
     }
+    // The exact RESUME marker plus a real canonical conversation identity is enough to
+    // attach the default/manual flow. Waiting for the acknowledgement to stop generating
+    // leaves the task fenced even though the destination is already durably identified.
+    // Auto-continue still waits so its working request cannot race the bootstrap answer.
     if (!confirmed.markerFound || confirmed.conversationId !== job.newConversationId
-      || isProvisionalConversationId(confirmed.conversationId) || confirmed.generating) return;
+      || isProvisionalConversationId(confirmed.conversationId)
+      || (confirmed.generating && job.continueAfterCompact === true)) return;
     job = await compactCheckpoint(record, job, { phase: 'completed', newConversationId: confirmed.conversationId,
       newConversationUrl: confirmed.conversationUrl, detail: null });
     await finishCompactBrowser(job, record);

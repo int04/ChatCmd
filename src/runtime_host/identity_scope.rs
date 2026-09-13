@@ -1,6 +1,7 @@
 //! Durable MCP-scope aliases preserve task identity after bridge completion or restart.
 use super::{RuntimeHost, now_ms};
 use chatcmd_runtime::{OperationContext, RuntimeError, RuntimeResult};
+use std::{collections::BTreeSet, time::Duration};
 
 impl RuntimeHost {
     pub(super) async fn mapped_mcp_scope_task(
@@ -24,6 +25,118 @@ impl RuntimeHost {
             ));
         }
         Ok(Some(task))
+    }
+
+    pub(super) async fn recover_manual_compact_task(
+        &self,
+        context: &OperationContext,
+        message: &str,
+    ) -> RuntimeResult<Option<String>> {
+        let Some(scope) = context
+            .conversation_scope_id
+            .as_deref()
+            .filter(|scope| scope.starts_with("openai:"))
+        else {
+            return Ok(None);
+        };
+        if message.trim().is_empty() {
+            return Ok(None);
+        }
+
+        const RECENT_COMPACT_MS: i64 = 30_000;
+        const BROWSER_BIND_WAIT_MS: u64 = 1_200;
+        let cutoff = now_ms().saturating_sub(RECENT_COMPACT_MS);
+        let eligible: i64 = sqlx::query_scalar(
+            r#"SELECT COUNT(*)
+               FROM chatgpt_compact_jobs j
+               JOIN tasks t ON t.id=j.task_id
+               JOIN chatgpt_conversations c
+                 ON c.task_id=j.task_id AND c.conversation_id=j.new_conversation_id
+               WHERE j.phase='completed'
+                 AND j.continue_after_compact=0
+                 AND j.completed_at_ms IS NOT NULL AND j.completed_at_ms>=?
+                 AND t.agent_id=? AND t.device_id=?
+                 AND t.source='chatgpt_web' AND t.allow_execute=1
+                 AND NOT EXISTS(
+                   SELECT 1 FROM chatgpt_mcp_scope_bindings b
+                   WHERE b.task_id=t.id AND b.generation=t.generation
+                 )"#,
+        )
+        .bind(cutoff)
+        .bind(&context.agent_id)
+        .bind(self.device.id.as_str())
+        .fetch_one(self.repository.pool())
+        .await
+        .map_err(scope_storage_error)?;
+        if eligible == 0 {
+            return Ok(None);
+        }
+
+        let deadline = tokio::time::Instant::now() + Duration::from_millis(BROWSER_BIND_WAIT_MS);
+        loop {
+            let rows = sqlx::query_as::<_, (String, String)>(
+                r#"SELECT j.task_id,r.submitted_content
+                   FROM chatgpt_compact_jobs j
+                   JOIN tasks t ON t.id=j.task_id
+                   JOIN chatgpt_conversations c
+                     ON c.task_id=j.task_id AND c.conversation_id=j.new_conversation_id
+                   JOIN chatgpt_bridge_requests r
+                     ON r.task_id=j.task_id AND r.conversation_id=c.conversation_id
+                   WHERE j.phase='completed'
+                     AND j.continue_after_compact=0
+                     AND j.completed_at_ms IS NOT NULL AND j.completed_at_ms>=?
+                     AND t.agent_id=? AND t.device_id=?
+                     AND t.source='chatgpt_web' AND t.allow_execute=1
+                     AND r.agent_id=t.agent_id
+                     AND r.created_at_ms>=j.completed_at_ms
+                     AND r.status IN ('queued','running','stop_requested','completed')
+                     AND NOT EXISTS(
+                       SELECT 1 FROM chatgpt_compact_obsolete_requests o WHERE o.request_id=r.id
+                     )
+                     AND NOT EXISTS(
+                       SELECT 1 FROM chatgpt_mcp_scope_bindings b
+                       WHERE b.task_id=t.id AND b.generation=t.generation
+                     )
+                   ORDER BY r.updated_at_ms DESC,r.id DESC
+                   LIMIT 32"#,
+            )
+            .bind(cutoff)
+            .bind(&context.agent_id)
+            .bind(self.device.id.as_str())
+            .fetch_all(self.repository.pool())
+            .await
+            .map_err(scope_storage_error)?;
+            let matches = rows
+                .into_iter()
+                .filter(|(_, submitted)| {
+                    submitted == message || crate::chatgpt_message::equivalent(submitted, message)
+                })
+                .map(|(task, _)| task)
+                .collect::<BTreeSet<_>>();
+            if matches.len() == 1 {
+                return Ok(matches.into_iter().next());
+            }
+            if matches.len() > 1 {
+                return Err(RuntimeError::new(
+                    "conversation_identity_ambiguous",
+                    "multiple replacement conversations recorded the same user turn; retry from the intended ChatGPT tab instead of creating another conversation",
+                ));
+            }
+            if tokio::time::Instant::now() >= deadline {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        tracing::debug!(
+            agent_id = %context.agent_id,
+            provider_scope = %scope,
+            "manual post-compact MCP turn arrived before browser identity binding"
+        );
+        Err(RuntimeError::new(
+            "conversation_identity_pending",
+            "the replacement ChatGPT conversation is still binding this user turn to the existing task; retry the same message instead of approving a new conversation",
+        ))
     }
 
     pub(super) async fn validate_resolved_task(
