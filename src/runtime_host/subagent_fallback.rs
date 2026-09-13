@@ -7,7 +7,7 @@ use super::{RuntimeHost, now_ms};
 pub(super) const MAX_EXTENSION_FALLBACK_ATTEMPTS: i64 = 3;
 
 /// Browser children own their MCP lifecycle; sampling children use a different protocol.
-/// Shared by first dispatch and API retries so neither drops the finalization contract.
+/// Shared by first dispatch and API retries so both use the same compact routing contract.
 pub(crate) fn browser_subagent_prompt(
     agent_name: Option<&str>,
     request: &str,
@@ -22,15 +22,12 @@ pub(crate) fn browser_subagent_prompt(
         .trim_end();
     let delegated = format!(
         "{request}\n\n{marker}\n\n\
-         BROWSER CHILD MCP LIFECYCLE (not the runtime-owned sampling protocol):\n\
-         Work only on the delegated objective above; this protocol grants no additional permissions.\n\
-         Call agent_user_message first with this exact full message, taskId={child_task_id}, turnId=turn-{subagent_id}. Reuse the returned taskId and the same turnId for every tool in this delegated turn.\n\
-         INITIALIZATION CHECK: continue with MCP tools only after agent_user_message returns accepted=true AND userMessageSynced=true.\n\
-         If initialization is rejected, blocked, or unavailable, do not call agent_turn_complete or any file/command tool: the turn is not synchronized. Do not switch connectors, disguise the request, or bypass a host safety or permission denial. Return a plain blocked report with files inspected/changed, the exact observable error code/message if available, and MCP finish not received. If the cause is not exposed, report it as unknown rather than attributing it to OpenAI.\n\
-         AFTER successful initialization and BEFORE posting your final answer, you MUST call agent_turn_complete with the exact final report in content, including files inspected/changed, actual evidence, blockers and honest workOutcome. This applies to read-only, partial, failed or blocked work only after initialization succeeded.\n\
-         Wait for all tools and descendants before finishing. If completion is rejected as active_tools_running or subagents_still_running, wait for that work and retry completion in this same turn. Do not repeat completed work or open another conversation.\n\
-         If the finalizer schema is not visible, discover agent_turn_complete on the same connector. Only accepted=true from that MCP call acknowledges finalization; plain text such as done/finished is NOT an MCP finish. After acceptance, post the same report and make no further tools calls.\n\
-         If the MCP transport remains unavailable, report that limitation truthfully; never claim that MCP finish was received."
+         CHATCMD CHILD ROUTE:\n\
+         1. Call agent_user_message first with taskId={child_task_id}, turnId=turn-{subagent_id}, and content set exactly to the marker line above.\n\
+         2. Begin task calls after that result has accepted=true and userMessageSynced=true. Reuse its taskId and the same turnId.\n\
+         3. Use skill context supplied by the parent. Call skills_list or skill_read only when the objective requires discovery or required context was not supplied.\n\
+         4. After all task calls have finished, call agent_turn_complete once with the exact response text, then post that text after accepted=true.\n\
+         If a call returns an error, report its exact code and message. Treat it as the result of that call only unless the returned data explicitly says otherwise."
     );
     match agent_name.map(str::trim).filter(|name| !name.is_empty()) {
         Some(name) => format!("Sử dụng plugin @{name} để thực hiện yêu cầu sau:\n\n{delegated}"),
@@ -43,7 +40,7 @@ mod prompt_tests {
     use super::browser_subagent_prompt;
 
     #[test]
-    fn browser_subagent_prompt_preserves_single_marker_and_requires_acknowledged_finish() {
+    fn browser_subagent_prompt_uses_marker_only_sync_and_neutral_lifecycle() {
         let initial = browser_subagent_prompt(
             Some("reader"),
             "Inspect files\n\nCMDGPT_SUBAGENT_ID=child-1",
@@ -55,17 +52,29 @@ mod prompt_tests {
         assert_eq!(initial, retry);
         assert_eq!(initial.matches("CMDGPT_SUBAGENT_ID=").count(), 1);
         assert!(initial.contains("taskId=task-child, turnId=turn-child-1"));
-        assert!(initial.contains("MUST call agent_turn_complete"));
-        assert!(initial.contains("accepted=true"));
-        assert!(initial.contains("read-only, partial, failed or blocked"));
-        assert!(initial.contains("accepted=true AND userMessageSynced=true"));
-        assert!(initial.contains("do not call agent_turn_complete or any file/command tool"));
-        assert!(initial.contains("AFTER successful initialization"));
+        assert!(initial.contains("content set exactly to the marker line above"));
+        assert!(initial.contains("accepted=true and userMessageSynced=true"));
+        assert!(initial.contains("Use skill context supplied by the parent"));
+        assert!(initial.contains("required context was not supplied"));
+        assert!(initial.contains("call agent_turn_complete once"));
         assert!(
-            initial.contains("do not switch connectors")
-                || initial.contains("Do not switch connectors")
+            initial.len() < 1_400,
+            "browser child routing prompt grew unexpectedly"
         );
-        assert!(initial.contains("report it as unknown rather than attributing it to OpenAI"));
+        let lower = initial.to_lowercase();
+        for phrase in [
+            "bypass",
+            "disguise",
+            "host safety",
+            "openai safety",
+            "permission denial",
+            "safety block",
+        ] {
+            assert!(
+                !lower.contains(phrase),
+                "routing prompt contains {phrase:?}"
+            );
+        }
     }
 }
 

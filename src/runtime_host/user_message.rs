@@ -13,7 +13,7 @@ use super::{RuntimeHost, invalid, now_ms, storage_error};
 mod intent;
 #[path = "user_message_paths.rs"]
 mod paths;
-use intent::{intent_hint, is_plan_mode_request};
+use intent::is_plan_mode_request;
 use paths::extract_explicit_absolute_paths;
 
 impl RuntimeHost {
@@ -57,7 +57,7 @@ impl RuntimeHost {
         };
         let task_id = TaskId::new(task_id).map_err(|error| invalid("taskId", error))?;
         let payloads = sqlx::query_scalar::<_, String>(
-            "SELECT payload_json FROM timeline_events WHERE task_id=? AND actor='user' AND kind='message' ORDER BY created_at_ms,event_id",
+            "WITH RECURSIVE task_lineage(task_id,depth) AS (SELECT ?,0 UNION ALL SELECT r.parent_task_id,task_lineage.depth+1 FROM subagent_runs r JOIN task_lineage ON r.child_task_id=task_lineage.task_id WHERE task_lineage.depth<32) SELECT e.payload_json FROM task_lineage JOIN timeline_events e ON e.task_id=task_lineage.task_id WHERE e.actor='user' AND e.kind='message' ORDER BY task_lineage.depth,e.created_at_ms,e.event_id",
         )
         .bind(task_id.as_str())
         .fetch_all(self.repository.pool())
@@ -267,7 +267,31 @@ impl RuntimeHost {
         };
         let subagent_limit = self.subagent_concurrency_limit().await?;
         let delegation_allowed = subagent_limit > 0;
-        let intent_hint = intent_hint(content);
+        let delegated_child = sqlx::query_scalar::<_, i64>(
+            "SELECT EXISTS(SELECT 1 FROM subagent_runs WHERE child_task_id=? LIMIT 1)",
+        )
+        .bind(task_id.as_str())
+        .fetch_one(self.repository.pool())
+        .await
+        .map_err(|_| RuntimeError::new("storage_error", "task role lookup failed"))?
+            == 1;
+        let skill_discovery = if delegated_child {
+            json!({
+                "mode": "parentOwned",
+                "requirementMode": "delegatedContextFirst",
+                "requiredForThisTask": false,
+                "fallbackDiscoveryAllowed": true,
+                "instruction": "Use skill context supplied by the parent. Call skills_list only when the delegated objective requires skill discovery or required context was not supplied."
+            })
+        } else {
+            json!({
+                "mode": "rootDiscovery",
+                "requirementMode": "modelJudgment",
+                "requiredForThisTask": Value::Null,
+                "fallbackDiscoveryAllowed": true,
+                "instruction": "Discover relevant skills before non-trivial project work. Trivial and non-project turns do not require skill discovery."
+            })
+        };
         Ok(json!({
             "accepted": true,
             "duplicate": inserted == 0,
@@ -299,7 +323,8 @@ impl RuntimeHost {
                 }
             },
             "planMode": is_plan_mode_request(content),
-            "intentHint": intent_hint,
+            "taskRole": if delegated_child { "delegatedChild" } else { "rootCoordinator" },
+            "skillDiscovery": skill_discovery,
             "isFirstMessage": is_first_message,
             "suggestedTitleRequired": is_first_message,
             "provisionalTitle": is_first_message.then_some(provisional_title),

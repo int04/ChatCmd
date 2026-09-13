@@ -39,6 +39,13 @@ async fn user_message_is_required_first_and_is_idempotent_per_turn() {
     assert_eq!(accepted["userMessageSynced"], true);
     assert_eq!(accepted["duplicate"], false);
     assert_eq!(accepted["isFirstMessage"], true);
+    assert_eq!(accepted["taskRole"], "rootCoordinator");
+    assert_eq!(accepted["skillDiscovery"]["mode"], "rootDiscovery");
+    assert_eq!(
+        accepted["skillDiscovery"]["requirementMode"],
+        "modelJudgment"
+    );
+    assert!(accepted["skillDiscovery"]["requiredForThisTask"].is_null());
     assert_eq!(accepted["toolRecovery"]["catalogIsStable"], true);
     assert_eq!(accepted["toolRecovery"]["hostMayLazyLoadSchemas"], true);
     assert_eq!(

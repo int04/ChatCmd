@@ -219,41 +219,57 @@ async fn browser_failures_retry_same_child_then_exhaust_on_attempt_three() {
 }
 
 #[tokio::test]
-async fn browser_only_final_response_completes_child_and_saves_conversation() {
+async fn unsynchronized_browser_answers_retry_then_fail_without_a_completed_report() {
     let (state, _directory) = fixture().await;
     let conversation_id = "conversation-browser-only-child";
     let conversation_url = "https://chatgpt.com/c/conversation-browser-only-child";
-    let Json(result) = subagent_fallback_result(
-        State(state.clone()),
-        Path(SUBAGENT_ID.to_owned()),
-        Json(SubagentFallbackResult {
-            completion_evidence: None,
-            attempt: 1,
-            status: "completed".to_owned(),
-            assistant_content: Some("Browser-only delegated answer".to_owned()),
-            error_message: None,
-            conversation_id: Some(conversation_id.to_owned()),
-            conversation_url: Some(conversation_url.to_owned()),
-        }),
-    )
-    .await
-    .expect("browser-only completion");
-    assert_eq!(result["accepted"], true);
-    assert_eq!(result["completed"], true);
-    assert_eq!(result["retryScheduled"], false);
-
-    let run_status: String = sqlx::query_scalar("SELECT status FROM subagent_runs WHERE id=?")
-        .bind(SUBAGENT_ID)
-        .fetch_one(state.repository.pool())
+    for attempt in 1..=3 {
+        let Json(result) = subagent_fallback_result(
+            State(state.clone()),
+            Path(SUBAGENT_ID.to_owned()),
+            Json(SubagentFallbackResult {
+                completion_evidence: None,
+                attempt,
+                status: "completed".to_owned(),
+                assistant_content: Some(
+                    "Bị chặn trước khi đồng bộ nên chưa đọc file; workOutcome: blocked.".to_owned(),
+                ),
+                error_message: None,
+                conversation_id: Some(conversation_id.to_owned()),
+                conversation_url: Some(conversation_url.to_owned()),
+            }),
+        )
         .await
-        .expect("read completed run");
-    assert_eq!(run_status, "completed");
+        .expect("unsynchronized browser answer");
+        assert_eq!(result["accepted"], true);
+        assert_eq!(result["completed"], false);
+        if attempt < 3 {
+            assert_eq!(result["retryScheduled"], true);
+            assert_eq!(result["attempt"], attempt + 1);
+        } else {
+            assert_eq!(result["retryScheduled"], false);
+            assert_eq!(result["exhausted"], true);
+        }
+    }
+
+    let run =
+        sqlx::query("SELECT status,fallback_state,fallback_error FROM subagent_runs WHERE id=?")
+            .bind(SUBAGENT_ID)
+            .fetch_one(state.repository.pool())
+            .await
+            .expect("read exhausted run");
+    assert_eq!(run.get::<String, _>("status"), "failed");
+    assert_eq!(run.get::<String, _>("fallback_state"), "exhausted");
+    assert_eq!(
+        run.get::<Option<String>, _>("fallback_error").as_deref(),
+        Some("Browser child returned a response before MCP user-message synchronization.")
+    );
     let task_status: String = sqlx::query_scalar("SELECT status FROM tasks WHERE id=?")
         .bind(CHILD_TASK_ID)
         .fetch_one(state.repository.pool())
         .await
-        .expect("read completed child task");
-    assert_eq!(task_status, "completed");
+        .expect("read failed child task");
+    assert_eq!(task_status, "failed");
     let linked_task: String =
         sqlx::query_scalar("SELECT task_id FROM chatgpt_conversations WHERE conversation_id=?")
             .bind(conversation_id)
@@ -261,33 +277,15 @@ async fn browser_only_final_response_completes_child_and_saves_conversation() {
             .await
             .expect("read browser-only conversation link");
     assert_eq!(linked_task, CHILD_TASK_ID);
-    let final_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM timeline_events WHERE task_id=? AND json_extract(payload_json,'$.status')='completed'")
+    let final_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM timeline_events WHERE task_id=? AND actor='assistant' AND json_extract(payload_json,'$.status')='completed'")
         .bind(CHILD_TASK_ID)
         .fetch_one(state.repository.pool())
         .await
-        .expect("count browser-only final events");
-    assert_eq!(final_count, 1);
-    let stored_answer: String = sqlx::query_scalar("SELECT json_extract(payload_json,'$.content') FROM timeline_events WHERE task_id=? AND json_extract(payload_json,'$.status')='completed' LIMIT 1")
-        .bind(CHILD_TASK_ID)
-        .fetch_one(state.repository.pool())
-        .await
-        .expect("read browser-only final answer");
-    assert_eq!(stored_answer, "Browser-only delegated answer");
-    let report = chatcmd_storage::subagent_report::report_page(
-        state.repository.pool(),
-        SUBAGENT_ID,
-        0,
-        12_000,
-    )
-    .await
-    .expect("read browser report")
-    .expect("persisted final report");
-    assert_eq!(report["content"], stored_answer);
-    assert_eq!(report["source"], "browserFinal");
-    assert_eq!(report["mcpUserMessageSynced"], false);
-    assert_eq!(report["mcpFinalizerReceived"], false);
-    assert_eq!(report["workOutcome"], "unknown");
-    assert_eq!(report["verification"], "unknown");
+        .expect("count completed child reports");
+    assert_eq!(
+        final_count, 0,
+        "browser prose without MCP sync is not a final report"
+    );
 }
 
 async fn heartbeat_call(state: Arc<AppState>, attempt: i64) -> Value {

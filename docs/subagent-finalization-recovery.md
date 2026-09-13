@@ -14,9 +14,11 @@ Additional inspected gaps: browser subagents were excluded from the request-scop
 
 ### Required browser MCP lifecycle
 
-src/runtime_host/subagent_fallback.rs now builds the same browser-specific prompt for initial dispatch and retries. The API uses this shared builder. The prompt preserves one CMDGPT_SUBAGENT_ID marker, identifies the reserved child task and turn, requires exact user synchronization, then requires agent_turn_complete before the public final answer. Read-only, partial and blocked work also require finalization. The child must wait for active work, retry a rejected finalizer as appropriate, discover a lazy-loaded finalizer schema, and require accepted=true rather than treating plain text as MCP acknowledgement.
+src/runtime_host/subagent_fallback.rs builds the same compact browser-child route for initial dispatch and retries. The prompt preserves one CMDGPT_SUBAGENT_ID marker and identifies the reserved child task and turn. The child synchronizes by sending only that marker to agent_user_message; the server resolves the stored delegated request. After synchronization it completes the assigned calls and uses agent_turn_complete before its public answer. The parent owns skill discovery, so a bounded child does not repeat skills_list unless its objective specifically concerns skills.
 
-The native sampling protocol is unchanged: its runtime still owns synchronization, heartbeat and finalization. No new permission grant, execution mode, child delegation allowance or database migration is added.
+The sampling runtime owns synchronization, heartbeat and finalization. Lifecycle tools are removed from the sampled child's catalog, while skill discovery remains available when required context was not supplied. Parent finalization metadata is removed from task-tool results shown to that child without removing tool-owned fields such as shell_wait.completed. No new permission grant, execution mode, child delegation allowance or database migration is added.
+
+As of the 2026-09-13 follow-up, a browser answer produced before MCP user-message synchronization is no longer accepted as a completed child report. It retries the same fenced child through the configured attempts and ends failed/exhausted if none claims MCP. Browser prose cannot establish that a tool ran or failed; runtime call/result evidence remains authoritative.
 
 ### Browser fallback, not a counterfeit MCP message
 

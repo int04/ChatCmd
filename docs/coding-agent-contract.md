@@ -28,9 +28,9 @@ hủy pending approval và thu hồi grant đang hoạt động cho task cùng d
 
 Một user turn hợp lệ có thứ tự:
 
-1. `agent_user_message` đúng một lần với nguyên văn message thật. Nếu schema chưa hiển thị, discover đúng `agent_user_message` hoặc query `agent`, load rồi gọi ngay trong cùng turn; chưa load hoặc chưa gọi không phải là một lần bị chặn.
+1. `agent_user_message` đúng một lần. Root gửi nguyên văn message thật; registered browser child chỉ gửi standalone delegation marker. Runtime resolve marker bằng quan hệ task/child đã lưu, không dò text hay ngôn ngữ.
 2. `agent_progress` sớm cho công việc không tầm thường.
-3. Khám phá/đọc project skill và project context phù hợp trước thao tác liên quan.
+3. Root khám phá/đọc project skill và truyền requirements cần thiết vào delegated request. Registered child dùng parent context trước; chỉ discovery khi objective cần hoặc context bắt buộc chưa được cung cấp.
 4. Thực hiện tool calls với cùng `taskId`/`turnId`; progress tiếp theo chỉ báo kết quả quan sát được.
 5. Chờ mọi child bằng `agent_subagent_wait` và dọn pending activity.
 6. `agent_turn_complete` đúng một lần, là tool cuối.
@@ -56,6 +56,14 @@ Child registration là idempotent theo parent turn/name/request/grant request. `
 nghĩa là browser extension có quyền claim child đã đăng ký; parent không được làm trùng phần việc.
 Child không tự kế thừa authority. Grant cho child phải là intersection có budget của một grant cha
 đang active và bị ràng buộc với child attempt.
+
+`agent_subagent_start` là owner duy nhất của dispatch: nó chọn sampling hoặc browser fallback và không
+được kết hợp với một child do host tạo riêng cho cùng request. Sampling runtime tự sync/finalize và
+không đưa các tool lifecycle của parent cho child model; skill tools vẫn dùng được khi required context
+chưa được cung cấp. Browser child dùng marker để sync; một browser answer chưa có MCP sync chỉ là
+observation chưa xác minh, phải retry/fail theo attempt state chứ không được coi là completed report.
+Path scope của child được lấy từ user events của task/ancestor qua quan hệ task bền vững; text do model
+đặt trong delegated request không tự tạo quyền path.
 
 ## 3. Clarification và execution consent
 
@@ -145,7 +153,9 @@ owner, scope, catalog hash, expiry, counters và active state.
 
 Catalog thêm field/tool theo hướng additive nhưng schema/capability change làm đổi `catalogHash`.
 Client phải reconnect, initialize và list tools lại; chỉ retry operation một lần sau refresh.
-Behavior wording có `instructionsVersion`/`instructionsHash` riêng.
+Behavior wording có `instructionsVersion`/`instructionsHash` riêng. Contract này dùng
+`coding-core-v3`; hash bao phủ cả parent bundle, delegated-child role và tool descriptions. Thay đổi
+hash/version không tự ép hosted connector refresh, nên rollout vẫn phải rebuild/restart và reconnect.
 
 ## 7. Rollout và rollback
 

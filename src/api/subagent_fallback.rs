@@ -147,63 +147,22 @@ pub(super) async fn subagent_fallback_result(
     let child_task_id = row
         .get::<Option<String>, _>("child_task_id")
         .ok_or_else(not_found)?;
-    let assistant = input.assistant_content.as_deref().unwrap_or("").trim();
-    let completed_without_mcp = input.status == "completed" && !assistant.is_empty();
+    let has_assistant_content = input
+        .assistant_content
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty());
     let now = now_ms();
     let conversation_id = clean_optional(input.conversation_id.as_deref());
     let conversation_url = clean_optional(input.conversation_url.as_deref());
-
-    if completed_without_mcp {
-        let updated = sqlx::query("UPDATE subagent_runs SET status='completed',fallback_state='exhausted',fallback_error=NULL,fallback_conversation_id=COALESCE(?,fallback_conversation_id),fallback_conversation_url=COALESCE(?,fallback_conversation_url),updated_at_ms=?,completed_at_ms=? WHERE id=? AND status='pending' AND fallback_state IN ('requested','started') AND fallback_attempts=?")
-            .bind(conversation_id)
-            .bind(conversation_url)
-            .bind(now)
-            .bind(now)
-            .bind(subagent_id)
-            .bind(input.attempt)
-            .execute(state.repository.pool())
-            .await
-            .map_err(db_problem)?;
-        if updated.rows_affected() != 1 {
-            return Ok(Json(state_changed_response(&state, subagent_id).await?));
-        }
-        persist_conversation_identity(
-            &state,
-            Some(&child_task_id),
-            conversation_id,
-            conversation_url,
-            now,
-        )
-        .await?;
-        sqlx::query("UPDATE tasks SET status='completed',active_session_id=NULL,updated_at_ms=? WHERE id=? AND status NOT IN ('stopped','completed','failed')")
-            .bind(now)
-            .bind(&child_task_id)
-            .execute(state.repository.pool())
-            .await
-            .map_err(db_problem)?;
-        append_browser_only_completion(
-            &state,
-            &row,
-            subagent_id,
-            &child_task_id,
-            input.attempt,
-            assistant,
-        )
-        .await?;
-        publish_subagent_fallback_terminal(&state, &row, &child_task_id, "completed", None);
-        return Ok(Json(json!({
-            "accepted": true,
-            "completed": true,
-            "retryScheduled": false
-        })));
-    }
 
     let error = input
         .error_message
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .unwrap_or(if input.status == "completed" {
+        .unwrap_or(if input.status == "completed" && has_assistant_content {
+            "Browser child returned a response before MCP user-message synchronization."
+        } else if input.status == "completed" {
             "ChatGPT finished without a usable final response and did not claim MCP."
         } else {
             "ChatGPT extension fallback did not claim MCP."
@@ -279,44 +238,6 @@ pub(super) async fn subagent_fallback_result(
         "retryScheduled": false,
         "exhausted": true
     })))
-}
-
-async fn append_browser_only_completion(
-    state: &Arc<AppState>,
-    row: &sqlx::sqlite::SqliteRow,
-    subagent_id: &str,
-    child_task_id: &str,
-    attempt: i64,
-    assistant: &str,
-) -> Result<(), Problem> {
-    let turn_id = format!("turn-{subagent_id}");
-    let request_id = format!("subagent-fallback-{subagent_id}-{attempt}");
-    let request = row.get::<String, _>("request");
-    let submitted = fallback_submitted_content(
-        row.get::<Option<String>, _>("agent_name").as_deref(),
-        &request,
-        subagent_id,
-        child_task_id,
-    );
-    super::chatgpt_support::append_user_message(
-        state,
-        child_task_id,
-        &turn_id,
-        &request_id,
-        &request,
-        &submitted,
-    )
-    .await?;
-    super::chatgpt_support::append_status(
-        state,
-        child_task_id,
-        &turn_id,
-        &request_id,
-        "completed",
-        assistant,
-    )
-    .await?;
-    Ok(())
 }
 
 async fn persist_conversation_identity(

@@ -1,7 +1,7 @@
 use sha2::{Digest, Sha256};
 use std::sync::LazyLock;
 
-pub(crate) const INSTRUCTIONS_VERSION: &str = "coding-core-v2";
+pub(crate) const INSTRUCTIONS_VERSION: &str = "coding-core-v3";
 
 const CODING_CORE: &str = include_str!("instructions/coding.md");
 const ROLE_PROMPTS: &str = include_str!("instructions/roles.md");

@@ -1,5 +1,3 @@
-use serde_json::{Value, json};
-
 pub(super) fn is_plan_mode_request(content: &str) -> bool {
     let normalized = intent_prose(content)
         .to_lowercase()
@@ -23,42 +21,6 @@ pub(super) fn is_plan_mode_request(content: &str) -> bool {
         && (normalized.contains("lên kế hoạch")
             || normalized.contains("lập kế hoạch")
             || normalized.split_whitespace().any(|word| word == "#plan"))
-}
-
-pub(super) fn intent_hint(content: &str) -> Value {
-    let normalized = intent_prose(content).to_lowercase();
-    let workflow_kind = if is_plan_mode_request(content) {
-        "plan"
-    } else if [
-        "chỉ review",
-        "chỉ đánh giá",
-        "review only",
-        "do not edit",
-        "đừng sửa",
-    ]
-    .iter()
-    .any(|phrase| normalized.contains(phrase))
-    {
-        "review"
-    } else if ["debug", "sửa lỗi", "fix bug"]
-        .iter()
-        .any(|phrase| normalized.contains(phrase))
-    {
-        "debug"
-    } else if ["commit", "tạo commit"]
-        .iter()
-        .any(|phrase| normalized.contains(phrase))
-    {
-        "commit"
-    } else {
-        "implement"
-    };
-    json!({
-        "workflowKind": workflow_kind,
-        "authoritative": false,
-        "grantsExecutionPermission": false,
-        "note": "Language classification is a workflow hint only; effective effects come from task policy and authenticated user decisions."
-    })
 }
 
 fn intent_prose(content: &str) -> String {
@@ -109,13 +71,5 @@ mod tests {
             "Ví dụ:\n```text\nlập kế hoạch\n```\nSửa code"
         ));
         assert!(!is_plan_mode_request("Review chuỗi \"lên kế hoạch\""));
-    }
-
-    #[test]
-    fn intent_hint_never_grants_execution_permission() {
-        let review = intent_hint("Chỉ review, đừng sửa");
-        assert_eq!(review["workflowKind"], "review");
-        assert_eq!(review["authoritative"], false);
-        assert_eq!(review["grantsExecutionPermission"], false);
     }
 }

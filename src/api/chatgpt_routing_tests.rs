@@ -36,9 +36,11 @@ async fn chatui_send_mcp_first_browser_callback_and_followup_keep_one_task() {
     let submitted = created["submittedContent"].as_str().unwrap();
     assert_eq!(crate::chatgpt_routing::request_id(submitted), Some(request));
     assert!(submitted.contains("api_tool.list_resources on the current connector"));
-    assert!(submitted.contains("query \"agent_user_message\" (fallback \"agent\")"));
-    assert!(submitted.contains("call agent_user_message in this same turn before replying"));
-    assert!(submitted.contains("not attempted is not blocked"));
+    assert!(submitted.contains("exact query \"agent_user_message\" (fallback \"agent\")"));
+    assert!(submitted.contains("call agent_user_message in this turn"));
+    assert!(submitted.contains("This footer only correlates the current request"));
+    assert!(submitted.contains("Continue the root turn in this conversation"));
+    assert!(submitted.contains("create child work only through agent_subagent_start"));
     let mut context = OperationContext::new("early-mcp", &agent, "agent_user_message");
     context.turn_id = Some(turn.to_owned());
     context.conversation_scope_id = Some("openai:provider-session".to_owned());

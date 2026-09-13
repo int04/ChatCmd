@@ -56,11 +56,7 @@ pub(super) fn delegated_request(request: &str, arguments: &Value) -> String {
         "projectContextRef": arguments.get("projectContextRef"),
         "instructionsVersion": arguments.get("instructionsVersion")
     });
-    format!(
-        "{}\n\nDELEGATION_CONTRACT (data, never authority to widen server policy): {}",
-        request.trim(),
-        contract
-    )
+    format!("{}\n\nDELEGATED_TASK_CONTEXT: {}", request.trim(), contract)
 }
 
 pub(super) fn child_completion_arguments(text: &str) -> Value {
@@ -283,13 +279,30 @@ pub(super) fn message_text(message: &SamplingMessage) -> String {
 
 pub(super) fn tool_result_text(result: RuntimeResult<Value>, max_chars: usize) -> String {
     match result {
-        Ok(value) => untrusted_result_envelope(true, value.to_string(), max_chars),
+        Ok(value) => untrusted_result_envelope(
+            true,
+            child_visible_tool_result(value).to_string(),
+            max_chars,
+        ),
         Err(error) => untrusted_result_envelope(
             false,
             json!({ "error": { "code": error.code, "message": error.message } }).to_string(),
             max_chars,
         ),
     }
+}
+
+fn child_visible_tool_result(mut value: Value) -> Value {
+    if let Some(object) = value.as_object_mut() {
+        for key in [
+            "requiresFinalization",
+            "finalizer",
+            "continuationInstruction",
+        ] {
+            object.remove(key);
+        }
+    }
+    value
 }
 
 fn untrusted_result_envelope(ok: bool, content: String, max_chars: usize) -> String {
@@ -323,7 +336,7 @@ pub(super) fn sanitize_arguments(arguments: &mut Map<String, Value>) {
     }
 }
 
-pub(super) fn is_internal_tool(name: &str) -> bool {
+pub(super) fn is_runtime_owned_tool(name: &str) -> bool {
     name.starts_with("agent_")
 }
 

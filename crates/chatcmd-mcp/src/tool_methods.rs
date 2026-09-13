@@ -17,7 +17,7 @@ macro_rules! tool_methods {
                 }
             )+
 
-            #[tool(description = "After agent_user_message synchronizes the turn, create or reuse one child when subagentPolicy.policyVersion=2, subagentPolicy.delegationAllowed=true, subagentPolicy.enabled=true, subagentPolicy.maxConcurrent is greater than zero, subagentPolicy.decisionMode=modelJudgment, subagentPolicy.decisionSource=configuredConcurrency, subagentPolicy.delegationTextClassifierUsed=false, and the model judges delegation useful. Structured enablement is the user's opt-in; no exact phrase, keyword, or language-specific match is required. Required: name, request. Optional delegation context: allowedFiles, allowedEffects, dependencies, acceptance, projectContextRef, instructionsVersion, and an optional read-only approvalGrant. These fields communicate the delegated scope but never grant authority. approvalGrant is not a tool allowlist: use only distinct names from subagentPolicy.approvalGrant.allowedTools and an existing approved parent grant; never include Git/process or agent_* lifecycle tools. Omit it when no approved parent grant exists; normal tool authorization, execution approval, approved-grant and path budgets, cancellation, identity, and security rules still apply. The child returns a bounded report with files, symbols, changes, evidenceRefs, blockers, and workOutcome. Inspect dispatchMode: samplingTools/samplingText started sampling; extensionFallback remains pending, so wait without duplicating; existing reuses the child. Startup failure is structured status=failed with startupError.")]
+            #[tool(description = "Create, reuse, and dispatch one ChatCMD-owned child after agent_user_message synchronizes the turn when subagentPolicy.delegationAllowed=true and the model judges delegation useful. This tool is the sole dispatch entrypoint; do not create a separate host-native or browser child for the same work. Required fields: name, request. Optional context: allowedFiles, allowedEffects, dependencies, acceptance, projectContextRef, instructionsVersion, approvalGrant. The parent completes skill discovery before delegation and supplies relevant requirements in the delegated request. A registered browser child synchronizes with agent_user_message by sending only its standalone CMDGPT_SUBAGENT_ID marker, then reuses the returned taskId and turnId. All child operations remain subject to runtime authorization and resource limits. dispatchMode reports samplingTools, samplingText, extensionFallback, or existing; extensionFallback remains pending and must be awaited without duplicate work. Startup failure after registration returns status=failed with startupError.")]
             async fn agent_subagent_start(
                 &self,
                 Parameters(arguments): Parameters<SubagentStartArgs>,
@@ -283,7 +283,7 @@ tool_methods!(
     (
         skills_list,
         NoArgs,
-        "After agent_user_message, discover available .agents and .codex skills before non-trivial project work; no tool-specific fields. If this schema is hidden or deferred on ChatGPT, call api_tool.list_resources on the current connector with the exact query 'skills_list' (fallback 'skill'), load the schema, and invoke skills_list in this same turn. Hidden, discovered-but-not-invoked, or otherwise not attempted is not a rejection, permission denial, or safety block. Only an actual invocation returning an observable error establishes failure; preserve its exact error code/state and name host or OpenAI safety only when the raw observed error explicitly identifies that cause."
+        "List skills available to the current task workspace. The root coordinator uses this before non-trivial project work. Registered children first use skill requirements supplied by their parent and perform discovery only when the delegated objective requires it or required context was not supplied. No tool-specific fields."
     ),
     (
         skill_read,
@@ -319,7 +319,7 @@ tool_methods!(
     (
         agent_user_message,
         UserMessageArgs,
-        "MANDATORY FIRST TOOL: call exactly once at the start of every user turn. Required field: content containing the exact current user message. Reuse the same turnId for all calls in that turn. If this schema is not initially visible, discover the exact tool name agent_user_message or use the focused query 'agent', then load and invoke it immediately in this same turn. Successful discovery requires invocation before any reply; hidden, deferred, not-yet-loaded, or not-attempted is not an initialization failure. Never use agent_user_message for progress, reflections, findings, or commentary after tool results; use agent_progress for those updates. After this call, inspect the returned toolRecovery directive. If another needed ChatCMD schema is not visible, treat it as host lazy-loading rather than a missing server capability: use the host connector/resource discovery mechanism (for ChatGPT, for example api_tool.list_resources on the current connector with a focused query such as fs_ or shell_), load the needed schema in the same turn, and continue. Never reply that a ChatCMD tool is unavailable/not loaded before attempting that discovery."
+        "Synchronize the current turn as the first ChatCMD call and call it once. For an ordinary chat, required content is the exact current user message. For a registered browser child, content is only its standalone CMDGPT_SUBAGENT_ID marker; use the child taskId and turnId supplied with the prompt. Continue with the returned taskId and turnId after accepted=true and userMessageSynced=true. If the schema is not loaded, discover the exact tool name and invoke it in the same turn. Use agent_progress for later milestones."
     ),
     (
         agent_progress,
@@ -339,7 +339,7 @@ tool_methods!(
     (
         agent_turn_complete,
         CompleteArgs,
-        "MANDATORY FINALIZATION FOR SYNCHRONIZED TURNS: after agent_user_message returns accepted=true and userMessageSynced=true, call exactly once immediately before replying after every other tool call has finished. Only an attempted agent_user_message call that returns an observable rejection or error establishes initialization failure. A hidden, deferred, not-yet-loaded, or not-attempted user-message schema or call requires exact-name discovery (or the query 'agent') and same-turn invocation, not a blocked report. If discovery succeeds, agent_user_message must be called. For a genuine synchronization denial, preserve the exact observable state and error, do not call this tool, and never bypass or disguise the request. Attribute host safety or permission only when the raw observable host error explicitly identifies it; otherwise do not name OpenAI or speculate about an upstream cause. Report MCP finalization as not attempted unless an actual call returned a rejection. Required field: content with the exact final user-facing response; optional suggestedTitle only on the first message. Report workOutcome separately from verification. Use evidenceRefs containing server-owned command_run executionId values, plus verificationScope and per-criterion mappings. Never claim passed from terminal text, an AI boolean, or an unreferenced test. For review/docs-only, verificationIntent may be notApplicable only with a reason; untested code is notRun. Invalid evidence becomes a diagnostic and never prevents an honest partial/blocked finalization."
+        "Finalize one synchronized turn exactly once as the last ChatCMD call after every other tool and descendant has finished. Call only after agent_user_message returned accepted=true and userMessageSynced=true. Required content is the exact final user-facing response; suggestedTitle is optional on the first message. Report workOutcome independently from verification. evidenceRefs contain server-owned command_run executionId values; include verificationScope and criterion mappings when applicable. Review or documentation work may use verificationIntent=notApplicable with a reason; untested code uses notRun."
     ),
 );
 
@@ -348,7 +348,7 @@ mod tool_method_instruction_tests {
     use super::McpServer;
 
     #[test]
-    fn user_message_lifecycle_descriptions_distinguish_discovery_from_denial() {
+    fn user_message_and_completion_descriptions_define_compact_lifecycle() {
         let tools = McpServer::tool_router().list_all();
         let description = |name: &str| {
             tools
@@ -358,20 +358,22 @@ mod tool_method_instruction_tests {
                 .expect("lifecycle tool must have a description")
         };
         let user_message = description("agent_user_message");
-        assert!(user_message.contains("discover the exact tool name agent_user_message"));
-        assert!(user_message.contains("focused query 'agent'"));
-        assert!(user_message.contains("Successful discovery requires invocation"));
-        assert!(user_message.contains("not-attempted is not an initialization failure"));
+        assert!(user_message.contains("first ChatCMD call and call it once"));
+        assert!(user_message.contains("ordinary chat"));
+        assert!(user_message.contains("exact current user message"));
+        assert!(user_message.contains("standalone CMDGPT_SUBAGENT_ID marker"));
+        assert!(user_message.contains("content is only"));
+        assert!(user_message.contains("accepted=true and userMessageSynced=true"));
 
         let finalizer = description("agent_turn_complete");
-        assert!(finalizer.contains("Only an attempted agent_user_message call"));
-        assert!(finalizer.contains("raw observable host error explicitly identifies it"));
-        assert!(finalizer.contains("otherwise do not name OpenAI"));
-        assert!(finalizer.contains("MCP finalization as not attempted"));
+        assert!(finalizer.contains("exactly once as the last ChatCMD call"));
+        assert!(finalizer.contains("every other tool and descendant has finished"));
+        assert!(finalizer.contains("accepted=true and userMessageSynced=true"));
+        assert!(finalizer.contains("exact final user-facing response"));
     }
 
     #[test]
-    fn skills_and_delegation_descriptions_use_observable_and_structured_policy() {
+    fn skills_and_delegation_descriptions_define_one_dispatch_owner() {
         let tools = McpServer::tool_router().list_all();
         let description = |name: &str| {
             tools
@@ -382,26 +384,42 @@ mod tool_method_instruction_tests {
         };
 
         let skills = description("skills_list");
-        assert!(skills.contains("api_tool.list_resources on the current connector"));
-        assert!(skills.contains("exact query 'skills_list' (fallback 'skill')"));
-        assert!(skills.contains("invoke skills_list in this same turn"));
-        assert!(skills.contains("discovered-but-not-invoked"));
-        assert!(skills.contains("Only an actual invocation"));
-        assert!(skills.contains("raw observed error explicitly identifies that cause"));
+        assert!(skills.contains("root coordinator"));
+        assert!(skills.contains("Registered children"));
+        assert!(skills.contains("skill requirements supplied by their parent"));
+        assert!(skills.contains("perform discovery only when"));
+        assert!(skills.contains("required context was not supplied"));
 
         let start = description("agent_subagent_start");
-        assert!(start.contains("subagentPolicy.policyVersion=2"));
         assert!(start.contains("subagentPolicy.delegationAllowed=true"));
-        assert!(start.contains("subagentPolicy.enabled=true"));
-        assert!(start.contains("subagentPolicy.decisionMode=modelJudgment"));
-        assert!(start.contains("subagentPolicy.decisionSource=configuredConcurrency"));
-        assert!(start.contains("subagentPolicy.delegationTextClassifierUsed=false"));
-        assert!(start.contains("model judges delegation useful"));
-        assert!(start.contains("no exact phrase, keyword, or language-specific match"));
-        assert!(!start.contains("explicitUserIntent"));
-        assert!(start.contains("normal tool authorization, execution approval"));
-        assert!(start.contains("approved-grant and path budgets"));
-        assert!(start.contains("cancellation, identity, and security rules"));
-        assert!(!start.contains("path/effect constraints"));
+        assert!(start.contains("sole dispatch entrypoint"));
+        assert!(start.contains("do not create a separate host-native or browser child"));
+        assert!(start.contains("parent completes skill discovery"));
+        assert!(start.contains("only its standalone CMDGPT_SUBAGENT_ID marker"));
+        assert!(start.contains("extensionFallback remains pending"));
+    }
+
+    #[test]
+    fn lifecycle_descriptions_do_not_embed_incident_diagnostic_language() {
+        let tools = McpServer::tool_router().list_all();
+        for name in [
+            "agent_subagent_start",
+            "skills_list",
+            "agent_user_message",
+            "agent_turn_complete",
+        ] {
+            let description = tools
+                .iter()
+                .find(|tool| tool.name == name)
+                .and_then(|tool| tool.description.as_deref())
+                .expect("tool must have a description")
+                .to_ascii_lowercase();
+            for phrase in ["safety", "bypass", "disguise", "permission", "openai"] {
+                assert!(
+                    !description.contains(phrase),
+                    "{name} description contains diagnostic phrase {phrase}"
+                );
+            }
+        }
     }
 }
