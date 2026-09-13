@@ -1,10 +1,12 @@
 import type { ChatGptFileAttachmentPayload } from './chatgpt/pasteAttachments';
 import { tr } from './i18n';
+import { ChatGptBridgeTimeoutError } from './chatgpt/bridgeErrors';
 
 const REQUEST_TYPE = 'chatcmd-chatgpt-extension-request';
 const RESPONSE_TYPE = 'chatcmd-chatgpt-extension-response';
 
-export const REQUIRED_CHATGPT_EXTENSION_VERSION = '0.1.16';
+export const REQUIRED_CHATGPT_EXTENSION_VERSION = '0.1.17';
+
 
 type BridgeCommand =
   | { action: 'compact-resume'; nonce: string; jobId: string; taskId: string; localBaseUrl: string }
@@ -102,7 +104,7 @@ export async function resumeChatGptCompact(jobId: string, taskId: string) {
 
 function bridge(command: BridgeCommand, timeoutMs: number) {
   return new Promise<BridgeResponse>((resolve, reject) => {
-    const timer = window.setTimeout(() => finish(new Error(tr('ChatCMD ChatGPT Bridge did not respond in time.'))), timeoutMs);
+    const timer = window.setTimeout(() => finish(new ChatGptBridgeTimeoutError(tr('ChatCMD ChatGPT Bridge did not respond in time.'))), timeoutMs);
     const onMessage = (event: MessageEvent) => {
       if (event.source !== window || !isResponse(event.data) || event.data.nonce !== command.nonce) return;
       finish(event.data.ok ? undefined : new Error(event.data.error || tr('The extension could not complete the request.')), event.data);

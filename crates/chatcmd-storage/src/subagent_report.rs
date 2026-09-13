@@ -38,6 +38,10 @@ pub async fn report_page(
                      e.created_at_ms,e.event_id LIMIT 1
         )
         SELECT f.event_id,f.turn_id,f.created_at_ms,
+               EXISTS(SELECT 1 FROM timeline_events u WHERE u.task_id=f.task_id
+                      AND u.turn_id=f.turn_id AND u.actor='user' AND u.kind='message'
+                      AND json_extract(u.payload_json,'$.tool')='agent_user_message'
+                      AND COALESCE(json_extract(u.payload_json,'$.provider'),'')<>'chatgpt_web') AS mcp_user_synced,
                CASE WHEN json_extract(f.payload_json,'$.tool')='agent_turn_complete'
                     THEN 'mcpFinal' ELSE 'browserFinal' END AS source,
                length(json_extract(f.payload_json,'$.content')) AS total_chars,
@@ -100,6 +104,8 @@ pub async fn report_page(
         "eventId": row.get::<String, _>("event_id"),
         "turnId": row.get::<String, _>("turn_id"),
         "source": row.get::<String, _>("source"),
+        "mcpUserMessageSynced": row.get::<i64, _>("mcp_user_synced") != 0,
+        "mcpFinalizerReceived": row.get::<String, _>("source") == "mcpFinal",
         "createdAtMs": row.get::<i64, _>("created_at_ms"),
         "totalChars": total, "offset": offset,
         "truncated": next < total,

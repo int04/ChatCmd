@@ -9,6 +9,8 @@ use uuid::Uuid;
 
 use super::{RuntimeHost, invalid, now_ms, storage_error};
 
+#[path = "subagent_request_source.rs"]
+mod delegation_source;
 #[path = "user_message_intent.rs"]
 mod intent;
 #[path = "user_message_paths.rs"]
@@ -24,7 +26,8 @@ impl RuntimeHost {
         let task_id = required_task_id(context)?;
         let turn_id = required_turn_id(context)?;
         let found = sqlx::query_scalar::<_, i64>(
-            "SELECT EXISTS(SELECT 1 FROM timeline_events WHERE task_id=? AND turn_id=? AND actor='user' AND kind='message' LIMIT 1)",
+            // Browser observations do not acknowledge an MCP user-message synchronization.
+            "SELECT EXISTS(SELECT 1 FROM timeline_events WHERE task_id=? AND turn_id=? AND actor='user' AND kind='message' AND COALESCE(json_extract(payload_json,'$.provider'),'')<>'chatgpt_web' LIMIT 1)",
         )
         .bind(task_id.as_str())
         .bind(turn_id.as_str())
@@ -34,6 +37,8 @@ impl RuntimeHost {
         if found == 1 {
             Ok(())
         } else {
+            tracing::warn!(task_id = %task_id, turn_id = %turn_id, tool = %context.tool_name,
+                "MCP user message synchronization missing; upstream cause is unknown");
             Err(RuntimeError::new(
                 "user_message_sync_required",
                 "call agent_user_message first with the exact current user message and the same turnId before using any other ChatCMD tool",
@@ -72,15 +77,8 @@ impl RuntimeHost {
         .fetch_optional(self.repository.pool())
         .await
         .map_err(|_| RuntimeError::new("storage_error", "sub-agent root user message unavailable"))?;
-        let content = payload
-            .and_then(|payload| serde_json::from_str::<Value>(&payload).ok())
-            .and_then(|payload| {
-                payload
-                    .get("content")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-            })
-            .unwrap_or_default();
+        let content =
+            delegation_source::content(&self.repository, &root_task_id, payload.as_deref()).await?;
         Ok(is_explicit_multi_agent_request(&content))
     }
 

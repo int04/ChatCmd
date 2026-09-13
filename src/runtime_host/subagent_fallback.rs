@@ -25,7 +25,9 @@ pub(crate) fn browser_subagent_prompt(
          BROWSER CHILD MCP LIFECYCLE (not the runtime-owned sampling protocol):\n\
          Work only on the delegated objective above; this protocol grants no additional permissions.\n\
          Call agent_user_message first with this exact full message, taskId={child_task_id}, turnId=turn-{subagent_id}. Reuse the returned taskId and the same turnId for every tool in this delegated turn.\n\
-         BEFORE posting your final answer, you MUST call agent_turn_complete with the exact final report in content, including files inspected/changed, actual evidence, blockers and honest workOutcome. This also applies to read-only, partial, failed or blocked work.\n\
+         INITIALIZATION CHECK: continue with MCP tools only after agent_user_message returns accepted=true AND userMessageSynced=true.\n\
+         If initialization is rejected, blocked, or unavailable, do not call agent_turn_complete or any file/command tool: the turn is not synchronized. Do not switch connectors, disguise the request, or bypass a host safety or permission denial. Return a plain blocked report with files inspected/changed, the exact observable error code/message if available, and MCP finish not received. If the cause is not exposed, report it as unknown rather than attributing it to OpenAI.\n\
+         AFTER successful initialization and BEFORE posting your final answer, you MUST call agent_turn_complete with the exact final report in content, including files inspected/changed, actual evidence, blockers and honest workOutcome. This applies to read-only, partial, failed or blocked work only after initialization succeeded.\n\
          Wait for all tools and descendants before finishing. If completion is rejected as active_tools_running or subagents_still_running, wait for that work and retry completion in this same turn. Do not repeat completed work or open another conversation.\n\
          If the finalizer schema is not visible, discover agent_turn_complete on the same connector. Only accepted=true from that MCP call acknowledges finalization; plain text such as done/finished is NOT an MCP finish. After acceptance, post the same report and make no further tools calls.\n\
          If the MCP transport remains unavailable, report that limitation truthfully; never claim that MCP finish was received."
@@ -56,6 +58,14 @@ mod prompt_tests {
         assert!(initial.contains("MUST call agent_turn_complete"));
         assert!(initial.contains("accepted=true"));
         assert!(initial.contains("read-only, partial, failed or blocked"));
+        assert!(initial.contains("accepted=true AND userMessageSynced=true"));
+        assert!(initial.contains("do not call agent_turn_complete or any file/command tool"));
+        assert!(initial.contains("AFTER successful initialization"));
+        assert!(
+            initial.contains("do not switch connectors")
+                || initial.contains("Do not switch connectors")
+        );
+        assert!(initial.contains("report it as unknown rather than attributing it to OpenAI"));
     }
 }
 

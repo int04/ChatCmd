@@ -284,6 +284,8 @@ async fn browser_only_final_response_completes_child_and_saves_conversation() {
     .expect("persisted final report");
     assert_eq!(report["content"], stored_answer);
     assert_eq!(report["source"], "browserFinal");
+    assert_eq!(report["mcpUserMessageSynced"], false);
+    assert_eq!(report["mcpFinalizerReceived"], false);
     assert_eq!(report["workOutcome"], "unknown");
     assert_eq!(report["verification"], "unknown");
 }

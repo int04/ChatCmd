@@ -203,7 +203,7 @@ test('backend final response completes without a browser ping or retry', async (
 });
 
 test('background exposes browser completion and the known status contract', async () => {
-  assert.match(backgroundSource, /importScripts\('background-io\.js', 'background-tabs\.js', 'approval-bridge\.js', 'background-recovery\.js', 'background-capture\.js', 'background-clock\.js', 'background-subagent-heartbeat\.js', 'compact-protocol\.js', 'background-compact-destination\.js', 'background-compact\.js'\)/);
+  assert.match(backgroundSource, /importScripts\('background-io\.js', 'background-tabs\.js', 'approval-bridge\.js', 'background-recovery\.js', 'background-capture\.js', 'background-clock\.js', 'background-subagent-heartbeat\.js', 'background-subagent-failure\.js', 'compact-protocol\.js', 'background-compact-destination\.js', 'background-compact\.js'\)/);
   assert.match(backgroundIoSource, /stage === 'browser-completed'/);
   assert.match(backgroundIoSource, /\/browser-completed/);
   assert.match(backgroundTabsSource, /conversationReady: ready/);
@@ -270,7 +270,12 @@ test('content scripts load helpers before the request runner', () => {
 test('new project tabs wait for a stable ChatGPT composer before sending', () => {
   assert.match(backgroundIoSource, /async function waitForChatGptReady/);
   assert.match(backgroundTabsSource, /await waitForTab\(tab\.id\);\s*await waitForChatGptReady\(tab\.id\);\s*return tab;/);
-  assert.match(backgroundSource, /await waitForTab\(tab\.id\);\s*await waitForChatGptReady\(tab\.id\);\s*await sendToChatGpt\(tab\.id,/);
+  const startup = backgroundSource.slice(backgroundSource.indexOf('async function startSubagentRequestOnce'), backgroundSource.indexOf('const subagentClosures'));
+  assert.match(startup, /await waitForTab\(tab\.id\);\s*await waitForChatGptReady\(tab\.id\);/);
+  const ready = startup.indexOf('await waitForChatGptReady(tab.id)');
+  const recheck = startup.indexOf('const current = await postJson');
+  assert.ok(recheck > ready, 'recheck server attempt after composer readiness');
+  assert.ok(startup.indexOf('await sendToChatGpt(tab.id,') > recheck, 'submit only after the final state check');
 });
 
 test('all extension sources stay within the 500-line maintenance limit', () => {

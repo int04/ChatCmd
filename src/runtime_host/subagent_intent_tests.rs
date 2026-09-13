@@ -1,6 +1,37 @@
 use super::is_explicit_multi_agent_request as requested;
 
 #[test]
+fn subagent_intent_keeps_command_before_request_heading() {
+    for text in [
+        "Chia ra agent để thực hiện yêu cầu sau: đọc một file",
+        "Chia agent để thực hiện yêu cầu sau: đọc một file",
+        "Tách ra hai agent để thực hiện yêu cầu sau: đọc hai file",
+    ] {
+        assert!(requested(text), "request heading erased delegation: {text}");
+    }
+}
+
+#[test]
+fn subagent_intent_request_heading_allows_windows_path_in_body() {
+    assert!(requested(
+        "Sử dụng plugin @rust_test để thực hiện yêu cầu sau: chia ra agent đọc D:\\DEV\\Caplog\\Client"
+    ));
+}
+
+#[test]
+fn subagent_intent_request_heading_cannot_erase_explicit_refusal() {
+    assert!(!requested(
+        "Không chia agent để thực hiện yêu cầu sau: hãy chia agent đọc file"
+    ));
+}
+
+#[test]
+fn subagent_intent_literal_reported_phrase_is_recognized() {
+    assert!(requested("chia ra agent"));
+    assert!(requested("Chia ra agent đọc một file, không sửa file"));
+}
+
+#[test]
 fn subagent_intent_accepts_wrapped_and_multiline_requests() {
     for text in [
         "Sử dụng plugin @rust_test\n\nThư mục dự án: D:\\DEV\\CmdGPT\\ChatCmdClient\n\nđể thực hiện yêu cầu sau: Chia agent rà soát source",

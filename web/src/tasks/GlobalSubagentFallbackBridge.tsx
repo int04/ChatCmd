@@ -4,6 +4,7 @@ import { closeSubagentFallbackTab, dispatchSubagentFallback } from '../chatgptBr
 import { useRealtime } from '../realtime';
 import type { TimelineEvent } from '../types';
 import { canonicalProjectPath } from './workspaceProjects';
+import { ChatGptBridgeTimeoutError } from '../chatgpt/bridgeErrors';
 
 export function GlobalSubagentFallbackBridge() {
   const inFlight = useRef(new Set<string>());
@@ -30,6 +31,14 @@ export function GlobalSubagentFallbackBridge() {
         newConversationUrl,
       });
     } catch (error) {
+      if (error instanceof ChatGptBridgeTimeoutError) {
+        // Dispatch may already be running. An absent ACK is not a negative ACK.
+        // Keep the same attempt for reconciliation; server leases still bound its lifetime.
+        console.warn('[ChatCMD] Subagent dispatch acknowledgement missing', {
+          subagentId: fallback.subagentId, attempt: fallback.attempt, code: error.code,
+        });
+        return;
+      }
       try {
         await api.reportSubagentFallbackResult(fallback.subagentId, {
           attempt: fallback.attempt,

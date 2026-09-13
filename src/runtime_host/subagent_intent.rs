@@ -25,7 +25,14 @@ pub(super) fn is_explicit_request(content: &str) -> bool {
 }
 
 fn request_body(clause: &str) -> &str {
-    if let Some((heading, body)) = clause.rsplit_once(':') {
+    // A heading can itself contain the instruction or refusal. Never discard it.
+    let command = command_tail(clause.trim_start_matches(|c: char| c.is_ascii_digit() || c == ' '));
+    if is_negative(command) || is_delegation_command(command) {
+        return clause;
+    }
+    // Inspect request separators from the left: a later Windows drive colon is data.
+    for (at, _) in clause.match_indices(':') {
+        let (heading, body) = (&clause[..at], &clause[at + 1..]);
         // Only a request heading introduces a command after a colon. Labels/logs do not.
         if [
             "yeu cau sau",

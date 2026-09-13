@@ -8,7 +8,7 @@ const LOG_KEY = 'chatcmd-extension-logs';
 const MAX_LOGS = 200;
 const CHATGPT_HOME = 'https://chatgpt.com/';
 
-importScripts('background-io.js', 'background-tabs.js', 'approval-bridge.js', 'background-recovery.js', 'background-capture.js', 'background-clock.js', 'background-subagent-heartbeat.js', 'compact-protocol.js', 'background-compact-destination.js', 'background-compact.js');
+importScripts('background-io.js', 'background-tabs.js', 'approval-bridge.js', 'background-recovery.js', 'background-capture.js', 'background-clock.js', 'background-subagent-heartbeat.js', 'background-subagent-failure.js', 'compact-protocol.js', 'background-compact-destination.js', 'background-compact.js');
 setTimeout(() => void recoverContentScriptsOnStartup(), 200);
 void reconcileOpenChatGptIdentities();
 
@@ -52,14 +52,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.action === 'subagent-send') {
       try {
         const localBaseUrl = localOrigin(message.localBaseUrl);
+        if (!message.subagentId || !message.childTaskId || !message.submittedContent
+          || !Number.isInteger(Number(message.attempt)) || Number(message.attempt) < 1 || Number(message.attempt) > 3) {
+          throw new Error('Yêu cầu fallback sub-agent không hợp lệ.');
+        }
+        // Acknowledge transport admission, not tab readiness or successful child work.
+        // Startup can exceed the UI's 5s ACK deadline; report its failures via the API only.
         void startSubagentRequest({ ...message, localBaseUrl })
-          .then(() => sendResponse({ ok: true }))
-          .catch(async (error) => {
-            await reportSubagentFailure(message.subagentId, message.attempt, localBaseUrl, error);
-            sendResponse({ ok: false, error: errorMessage(error) });
-          });
+          .catch((error) => reportSubagentFailure(message.subagentId, message.attempt, localBaseUrl, error));
+        sendResponse({ ok: true, accepted: true });
       } catch (error) { sendResponse({ ok: false, error: errorMessage(error) }); }
-      return true;
+      return false;
     }
     if (message.action === 'subagent-close') {
       void closeSubagentRequest(message.subagentId)
@@ -223,6 +226,10 @@ async function startSubagentRequestOnce(message) {
   });
   await waitForTab(tab.id);
   await waitForChatGptReady(tab.id);
+  // Loading can outlive stop, claim or retry. Never submit work on a stale startup.
+  const current = await postJson(message.localBaseUrl, `/api/local/subagents/${encodeURIComponent(message.subagentId)}/fallback/heartbeat`, { attempt });
+  if (!current.active || current.status !== 'pending'
+    || (Number.isInteger(current.attempt) && current.attempt !== attempt)) return;
   await sendToChatGpt(tab.id, {
     type: 'chatcmd-chatgpt-run',
     requestId,
@@ -268,23 +275,7 @@ async function closeSubagentRequestOnce(subagentId, expectedAttempt) {
 }
 
 async function reportSubagentFailure(subagentId, attempt, localBaseUrl, error) {
-  if (!subagentId || !attempt || !localBaseUrl) return;
-  const key = `${SUBAGENT_PREFIX}${subagentId}`;
-  const stored = await chrome.storage.session.get(key);
-  const binding = stored[key];
-  const requestId = binding?.requestId || `subagent:${subagentId}:${Number(attempt)}`;
-  await releaseRequest(requestId);
-  await chrome.storage.session.remove(key);
-  if (binding?.tabId && await safeTab(binding.tabId)) {
-    try { await chrome.tabs.remove(binding.tabId); } catch { /* tab already closed */ }
-  }
-  try {
-    await postJson(localBaseUrl, `/api/local/subagents/${encodeURIComponent(subagentId)}/fallback/result`, {
-      attempt: Number(attempt),
-      status: 'failed',
-      errorMessage: errorMessage(error),
-    });
-  } catch { /* the local app may already be closed */ }
+  return settleSubagentStartupFailure(subagentId, attempt, localBaseUrl, error);
 }
 
 async function stopRequest(message) {

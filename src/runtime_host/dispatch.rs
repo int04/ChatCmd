@@ -468,7 +468,7 @@ impl RuntimeHost {
                 {
                     return Err(RuntimeError::new(
                         "subagent_explicit_user_intent_required",
-                        "The current root user turn did not explicitly request multi-agent delegation. Continue in the current conversation instead of opening a child.",
+                        "ChatCMD could not confirm delegation intent in the synchronized root user request. No child was created. Check the current taskId/turnId and original request; this is local intent validation, not a host safety decision. Continue in the current conversation.",
                     ));
                 }
                 let input: SubagentStartInput = parse(arguments)?;

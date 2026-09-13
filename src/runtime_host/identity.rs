@@ -389,5 +389,9 @@ mod regression_tests;
 mod routing_tests;
 
 #[cfg(test)]
+#[path = "identity_delegation_regression_tests.rs"]
+mod delegation_regression_tests;
+
+#[cfg(test)]
 #[path = "identity_routing_guard_tests.rs"]
 mod routing_guard_tests;
