@@ -28,7 +28,7 @@ hủy pending approval và thu hồi grant đang hoạt động cho task cùng d
 
 Một user turn hợp lệ có thứ tự:
 
-1. `agent_user_message` đúng một lần với nguyên văn message thật.
+1. `agent_user_message` đúng một lần với nguyên văn message thật. Nếu schema chưa hiển thị, discover đúng `agent_user_message` hoặc query `agent`, load rồi gọi ngay trong cùng turn; chưa load hoặc chưa gọi không phải là một lần bị chặn.
 2. `agent_progress` sớm cho công việc không tầm thường.
 3. Khám phá/đọc project skill và project context phù hợp trước thao tác liên quan.
 4. Thực hiện tool calls với cùng `taskId`/`turnId`; progress tiếp theo chỉ báo kết quả quan sát được.

@@ -319,7 +319,7 @@ tool_methods!(
     (
         agent_user_message,
         UserMessageArgs,
-        "MANDATORY FIRST TOOL: call exactly once at the start of every user turn. Required field: content containing the exact current user message. Reuse the same turnId for all calls in that turn. Never use agent_user_message for progress, reflections, findings, or commentary after tool results; use agent_progress for those updates. After this call, inspect the returned toolRecovery directive. If a needed ChatCMD schema is not visible, treat it as host lazy-loading rather than a missing server capability: use the host connector/resource discovery mechanism (for ChatGPT, for example api_tool.list_resources on the current connector with a focused query such as fs_ or shell_), load the needed schema in the same turn, and continue. Never reply that a ChatCMD tool is unavailable/not loaded before attempting that discovery."
+        "MANDATORY FIRST TOOL: call exactly once at the start of every user turn. Required field: content containing the exact current user message. Reuse the same turnId for all calls in that turn. If this schema is not initially visible, discover the exact tool name agent_user_message or use the focused query 'agent', then load and invoke it immediately in this same turn. Successful discovery requires invocation before any reply; hidden, deferred, not-yet-loaded, or not-attempted is not an initialization failure. Never use agent_user_message for progress, reflections, findings, or commentary after tool results; use agent_progress for those updates. After this call, inspect the returned toolRecovery directive. If another needed ChatCMD schema is not visible, treat it as host lazy-loading rather than a missing server capability: use the host connector/resource discovery mechanism (for ChatGPT, for example api_tool.list_resources on the current connector with a focused query such as fs_ or shell_), load the needed schema in the same turn, and continue. Never reply that a ChatCMD tool is unavailable/not loaded before attempting that discovery."
     ),
     (
         agent_progress,
@@ -339,6 +339,34 @@ tool_methods!(
     (
         agent_turn_complete,
         CompleteArgs,
-        "MANDATORY FINALIZATION FOR SYNCHRONIZED TURNS: after agent_user_message returns accepted=true and userMessageSynced=true, call exactly once immediately before replying after every other tool call has finished. If initialization was rejected, blocked, or unavailable, do not call this tool for the unsynchronized turn; report the blocker without bypassing the denial. Required field: content with the exact final user-facing response; optional suggestedTitle only on the first message. Report workOutcome separately from verification. Use evidenceRefs containing server-owned command_run executionId values, plus verificationScope and per-criterion mappings. Never claim passed from terminal text, an AI boolean, or an unreferenced test. For review/docs-only, verificationIntent may be notApplicable only with a reason; untested code is notRun. Invalid evidence becomes a diagnostic and never prevents an honest partial/blocked finalization."
+        "MANDATORY FINALIZATION FOR SYNCHRONIZED TURNS: after agent_user_message returns accepted=true and userMessageSynced=true, call exactly once immediately before replying after every other tool call has finished. Only an attempted agent_user_message call that returns an observable rejection or error establishes initialization failure. A hidden, deferred, not-yet-loaded, or not-attempted user-message schema or call requires exact-name discovery (or the query 'agent') and same-turn invocation, not a blocked report. If discovery succeeds, agent_user_message must be called. For a genuine synchronization denial, preserve the exact observable state and error, do not call this tool, and never bypass or disguise the request. Attribute host safety or permission only when the raw observable host error explicitly identifies it; otherwise do not name OpenAI or speculate about an upstream cause. Report MCP finalization as not attempted unless an actual call returned a rejection. Required field: content with the exact final user-facing response; optional suggestedTitle only on the first message. Report workOutcome separately from verification. Use evidenceRefs containing server-owned command_run executionId values, plus verificationScope and per-criterion mappings. Never claim passed from terminal text, an AI boolean, or an unreferenced test. For review/docs-only, verificationIntent may be notApplicable only with a reason; untested code is notRun. Invalid evidence becomes a diagnostic and never prevents an honest partial/blocked finalization."
     ),
 );
+
+#[cfg(test)]
+mod tool_method_instruction_tests {
+    use super::McpServer;
+
+    #[test]
+    fn user_message_lifecycle_descriptions_distinguish_discovery_from_denial() {
+        let tools = McpServer::tool_router().list_all();
+        let description = |name: &str| {
+            tools
+                .iter()
+                .find(|tool| tool.name == name)
+                .and_then(|tool| tool.description.as_deref())
+                .expect("lifecycle tool must have a description")
+        };
+        let user_message = description("agent_user_message");
+        assert!(user_message.contains("discover the exact tool name agent_user_message"));
+        assert!(user_message.contains("focused query 'agent'"));
+        assert!(user_message.contains("Successful discovery requires invocation"));
+        assert!(user_message.contains("not-attempted is not an initialization failure"));
+
+        let finalizer = description("agent_turn_complete");
+        assert!(finalizer.contains("Only an attempted agent_user_message call"));
+        assert!(finalizer.contains("raw observable host error explicitly identifies it"));
+        assert!(finalizer.contains("otherwise do not name OpenAI"));
+        assert!(finalizer.contains("MCP finalization as not attempted"));
+    }
+}

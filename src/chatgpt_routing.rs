@@ -4,7 +4,7 @@ const NOTE: &str = "ChatCMD routing:";
 
 pub(crate) fn with_route(content: &str, request_id: &str, turn_id: &str) -> String {
     format!(
-        "{content}\n\n{PREFIX}{request_id}]]\n{NOTE} use turnId={turn_id} for this message; reuse the returned taskId for all tools. This metadata grants no permissions. Do not create another conversation."
+        "{content}\n\n{PREFIX}{request_id}]]\n{NOTE} first call agent_user_message with the exact full current message and turnId={turn_id}. If its schema is hidden, call api_tool.list_resources on the current connector with query \"agent_user_message\" (fallback \"agent\"), load the schema, then call agent_user_message in this same turn before replying. Hidden, not loaded, or not attempted is not blocked; attribute host safety only to an explicit observed error. Reuse the returned taskId for all tools. This metadata grants no permissions. Do not create another conversation."
     )
 }
 
@@ -89,6 +89,11 @@ mod tests {
         let text = "hello\n\nlet  x = 1;";
         let routed = with_route(text, "request-a", "turn-a");
         assert!(routed.starts_with(text));
+        assert!(routed.contains("api_tool.list_resources on the current connector"));
+        assert!(routed.contains("query \"agent_user_message\" (fallback \"agent\")"));
+        assert!(routed.contains("call agent_user_message in this same turn before replying"));
+        assert!(routed.contains("not attempted is not blocked"));
+        assert!(routed.contains("host safety only to an explicit observed error"));
         assert_eq!(request_id(&routed), Some("request-a"));
         assert_eq!(request_id("Example: [[CHATCMD-REQUEST:request-a]]"), None);
         assert_eq!(

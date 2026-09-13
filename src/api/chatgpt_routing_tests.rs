@@ -33,10 +33,12 @@ async fn chatui_send_mcp_first_browser_callback_and_followup_keep_one_task() {
     let turn = created["turnId"].as_str().unwrap();
     assert!(created["taskId"].is_null());
     assert_eq!(created["userContent"], content);
-    assert_eq!(
-        crate::chatgpt_routing::request_id(created["submittedContent"].as_str().unwrap()),
-        Some(request)
-    );
+    let submitted = created["submittedContent"].as_str().unwrap();
+    assert_eq!(crate::chatgpt_routing::request_id(submitted), Some(request));
+    assert!(submitted.contains("api_tool.list_resources on the current connector"));
+    assert!(submitted.contains("query \"agent_user_message\" (fallback \"agent\")"));
+    assert!(submitted.contains("call agent_user_message in this same turn before replying"));
+    assert!(submitted.contains("not attempted is not blocked"));
     let mut context = OperationContext::new("early-mcp", &agent, "agent_user_message");
     context.turn_id = Some(turn.to_owned());
     context.conversation_scope_id = Some("openai:provider-session".to_owned());

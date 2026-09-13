@@ -20,12 +20,14 @@ Phần lớn method đều có các trường correlation chung do ChatCMD bổ 
 
 Luồng agent bắt buộc:
 
-1. `agent_user_message` phải là tool đầu tiên và chỉ gọi đúng một lần cho user turn thật.
+1. `agent_user_message` phải là tool đầu tiên và chỉ gọi đúng một lần cho user turn thật. Nếu host chưa hiển thị schema này, agent phải discover bằng đúng tên `agent_user_message` (hoặc query `agent`), load schema rồi gọi ngay trong cùng turn trước khi trả lời.
 2. Với mọi yêu cầu không-trivial, gọi `agent_progress` ngay sau đó để tóm tắt user yêu cầu gì và agent sẽ làm gì tiếp theo, trước `skills_list` hoặc tool substantive khác.
 3. Với công việc project không tầm thường, gọi `skills_list`; nếu có skill phù hợp thì đọc bằng `skill_read` trước khi thao tác liên quan.
 4. Trong lúc thực hiện, duy trì `agent_progress` theo checkpoint có ý nghĩa: thường sau khoảng 2–4 substantive operation hoặc sau một batch thao tác low-level liên quan chặt. Không cần callback theo từng tool; shell polling nhanh có thể gom cho đến khi trạng thái/output thay đổi đáng kể, còn lỗi/retry nên báo hướng xử lý trước khi đổi cách làm.
 5. Nếu có sub-agent thì phải chờ chúng hoàn tất bằng `agent_subagent_wait`.
 6. `agent_turn_complete` phải là tool cuối cùng, gọi đúng một lần ngay trước khi agent trả lời user.
+
+Schema đang bị ẩn, chưa load, discovery chưa đúng query, hoặc model chưa thực hiện tool call không phải là một lần tool bị từ chối. Chỉ được mô tả host/OpenAI safety là nguyên nhân khi có lỗi quan sát được từ chính lần gọi và lỗi đó nêu rõ nguyên nhân này; nếu không, phải báo đúng trạng thái chưa gọi hoặc lỗi thực tế mà không tự quy kết.
 
 ---
 
@@ -162,7 +164,7 @@ Git chạy với stdin/pager/credential prompt bị vô hiệu hóa; path luôn 
 
 | Method | Tham số chính | Ý nghĩa |
 |---|---|---|
-| `agent_user_message` | `content` | **Bắt buộc là MCP call đầu tiên và chỉ gọi đúng một lần trong mỗi user turn.** Đồng bộ nguyên văn user message lên ChatCMD và thiết lập/correlate `taskId` + `turnId`. `content` phải đúng nguyên văn message hiện tại. Không dùng method này cho progress/reflection/finding sau tool result; các cập nhật đó phải dùng `agent_progress`. |
+| `agent_user_message` | `content` | **Bắt buộc là MCP call đầu tiên và chỉ gọi đúng một lần trong mỗi user turn.** Nếu schema bị defer/ẩn, discover đúng tên `agent_user_message`, load rồi gọi ngay trong cùng turn; không được dừng sau discovery. Đồng bộ nguyên văn user message lên ChatCMD và thiết lập/correlate `taskId` + `turnId`. `content` phải đúng nguyên văn message hiện tại. Trạng thái chưa load/chưa gọi không phải rejection. Không dùng method này cho progress/reflection/finding sau tool result; các cập nhật đó phải dùng `agent_progress`. |
 | `agent_progress` | `message`, `suggestedTitle?` | **Rule phía AI cho mọi turn project không-trivial.** Ngay sau `agent_user_message` nên gửi progress tóm tắt yêu cầu + hành động kế tiếp. Sau các kết quả `fs_*` có ý nghĩa (đặc biệt `fs_find`, `fs_search`, `fs_read_text`, edit/write/delete), Git/process, `shell_read`/`shell_wait` còn pending, sub-agent wait chưa xong, hoặc failure/non-zero, AI nên gửi progress mô tả kết quả quan sát được và bước tiếp theo trước khi tiếp tục. Đây không phải runtime gate: server không reject tool chỉ vì thiếu progress; các thao tác low-level liên quan chặt có thể gom thành một checkpoint để tránh làm chậm tiến độ và tránh callback MCP không cần thiết. Không gửi private chain-of-thought. |
 | `agent_plan_question` | `question`, `options`, `questionKind?` | `questionKind` mặc định `clarification`; `executionConsent` dùng semantics consent do server định nghĩa. Lifecycle được audit durable; restart/disconnect/timeout/custom answer fail closed. Approved consent không đổi execution mode, không mint grant và mọi side effect vẫn qua C01 tool authorization. |
 | `agent_subagent_start` | `name`, `request` | Tạo hoặc reuse child. `samplingTools`/`samplingText` là worker sampling; `extensionFallback` là child pending để browser extension claim nên parent không làm trùng; `existing` không spawn lại. Startup lỗi sau registration trả structured `status=failed` + `startupError`. |
