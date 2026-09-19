@@ -52,6 +52,15 @@ fn has_query_token(query: &str) -> bool {
     })
 }
 
+fn authorization_error_status(error: &RuntimeError) -> StatusCode {
+    match error.code.as_str() {
+        "origin_denied" => StatusCode::FORBIDDEN,
+        "query_token_rejected" => StatusCode::BAD_REQUEST,
+        "origin_validation_failed" => StatusCode::INTERNAL_SERVER_ERROR,
+        _ => StatusCode::UNAUTHORIZED,
+    }
+}
+
 #[derive(Clone)]
 struct McpHttpState {
     security: HttpSecurity,
@@ -71,7 +80,7 @@ async fn mcp_handler(
         .await
     {
         Ok(agent_id) => agent_id,
-        Err(_) => return StatusCode::UNAUTHORIZED.into_response(),
+        Err(error) => return authorization_error_status(&error).into_response(),
     };
 
     if request.method() == http::Method::POST
@@ -167,13 +176,12 @@ async fn catalog_handler(
     headers: HeaderMap,
     uri: Uri,
 ) -> Response {
-    if state
+    if let Err(error) = state
         .security
         .authorize(&token, &headers, uri.query())
         .await
-        .is_err()
     {
-        return StatusCode::UNAUTHORIZED.into_response();
+        return authorization_error_status(&error).into_response();
     }
     Json(serde_json::json!({
         "metadata": catalog_metadata(),

@@ -374,3 +374,20 @@ async fn streamable_http_enforces_control_body_cap_without_content_length_header
     let response = router.oneshot(request).await.expect("oversized response");
     assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
 }
+
+#[tokio::test]
+async fn streamable_http_reports_denied_origin_as_forbidden() {
+    let security = HttpSecurity::new(Arc::new(TokenAuth), Arc::new(Accept));
+    let router = axum_router_with_host_validation(
+        McpServer::new(Arc::new(RecordingRuntime::default())),
+        security,
+        false,
+    );
+    let mut request = mcp_post("/mcp/agent-a", "{}", None);
+    request
+        .headers_mut()
+        .insert("origin", "https://denied.example".parse().expect("origin"));
+
+    let response = router.oneshot(request).await.expect("denied response");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
