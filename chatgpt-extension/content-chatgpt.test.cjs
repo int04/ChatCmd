@@ -236,6 +236,50 @@ test('Vietnamese stop controls are detected by the shared DOM helper', () => {
   }
 });
 
+test('send control follows the composer and accepts the current Vietnamese label', () => {
+  class FakeElement {
+    constructor() { this.parentElement = null; }
+    getBoundingClientRect() { return { width: 10, height: 10 }; }
+  }
+  const localSend = new FakeElement();
+  const otherSend = new FakeElement();
+  const form = new FakeElement();
+  form.querySelectorAll = (selector) => selector === 'button[aria-label="Gửi"]' ? [localSend] : [];
+  const composer = new FakeElement();
+  composer.parentElement = form;
+  composer.closest = (selector) => selector === 'form' ? form : null;
+  const context = {
+    Element: FakeElement,
+    getComputedStyle: () => ({ visibility: 'visible', display: 'block' }),
+    document: { querySelectorAll: (selector) => selector === 'button[data-testid="send-button"]' ? [otherSend] : [] },
+    composer,
+    localSend,
+  };
+  vm.createContext(context);
+  vm.runInContext(domSource, context, { filename: 'content-chatgpt-dom.js' });
+  assert.equal(vm.runInContext('ChatCmdConversationDom.findSendButton(composer) === localSend', context), true);
+});
+
+test('send control accepts an unnamed submit button in the composer form', () => {
+  class FakeElement {
+    getBoundingClientRect() { return { width: 10, height: 10 }; }
+  }
+  const submit = new FakeElement();
+  const form = new FakeElement();
+  form.querySelectorAll = (selector) => selector === 'button[type="submit"]' ? [submit] : [];
+  const composer = { closest: () => form, parentElement: form };
+  const context = {
+    Element: FakeElement,
+    getComputedStyle: () => ({ visibility: 'visible', display: 'block' }),
+    document: { querySelectorAll: () => [] },
+    composer,
+    submit,
+  };
+  vm.createContext(context);
+  vm.runInContext(domSource, context, { filename: 'content-chatgpt-dom.js' });
+  assert.equal(vm.runInContext('ChatCmdConversationDom.findSendButton(composer) === submit', context), true);
+});
+
 test('a stop-like button outside the unified composer does not mark ChatGPT as generating', () => {
   class FakeElement {
     constructor(label = '') { this.label = label; this.textContent = ''; }
@@ -373,7 +417,7 @@ test('submit reacquires the composer after an attachment rerender before clickin
       isConnected: true,
       disabled: false,
       getAttribute: () => null,
-      click() { globalThis.__clicks += 1; },
+      click() { globalThis.__clicks += 1; currentComposer.value = ''; },
     } : null;
     globalThis.__stopButton = null;
     delay = async (ms) => { globalThis.__now += ms; };
@@ -383,6 +427,37 @@ test('submit reacquires the composer after an attachment rerender before clickin
   assert.deepEqual(Array.from(context.__writes), ['first', 'replacement']);
   assert.equal(context.__clicks, 1);
   assert.equal(context.__blurs, 1);
+});
+
+test('submit retries through the composer form when the send click is ignored', async () => {
+  const context = loadBridge();
+  vm.runInContext(`
+    globalThis.__clicks = 0;
+    globalThis.__submits = 0;
+    const form = { requestSubmit() { globalThis.__submits += 1; composer.value = ''; } };
+    const composer = { value: '', closest: () => form, blur() {} };
+    findComposer = () => composer;
+    setComposerText = (_, text) => { composer.value = text; };
+    globalThis.__sendButton = {
+      isConnected: true,
+      disabled: false,
+      getAttribute: () => null,
+      click() { globalThis.__clicks += 1; },
+    };
+    delay = async () => {};
+    waitFor = async (predicate, _timeout, message) => {
+      if (message === 'ChatGPT chưa xác nhận cú bấm nút gửi.') throw new Error(message);
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const result = predicate();
+        if (result) return result;
+      }
+      throw new Error(message);
+    };
+  `, context);
+
+  await vm.runInContext("submitPrompt('PROMPT')", context);
+  assert.equal(context.__clicks, 1);
+  assert.equal(context.__submits, 1);
 });
 
 test('page render bridge runs in MAIN at document_start while capture stays isolated', () => {

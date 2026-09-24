@@ -41,11 +41,30 @@ function create(deps) {
         }
         return null;
       }
-      const candidate = findSendButton();
+      const candidate = findSendButton(composer);
       if (!candidate || candidate.isConnected === false || candidate.disabled || candidate.getAttribute('aria-disabled') === 'true' || findStopButton()) return null;
       return candidate;
     }, 20_000, 'ChatGPT chưa sẵn sàng gửi: nội dung nhập hoặc tệp đính kèm vẫn đang được đồng bộ.');
+    const userMessageCount = document.querySelectorAll('[data-message-author-role="user"]').length;
+    const submitted = () => {
+      const current = findComposer();
+      return !current || !composerTextMatches(current, expectedText) ||
+        document.querySelectorAll('[data-message-author-role="user"]').length > userMessageCount ||
+        Boolean(findStopButton());
+    };
     button.click();
+    const clickTimeout = 'ChatGPT chưa xác nhận cú bấm nút gửi.';
+    try {
+      await waitFor(submitted, 2_500, clickTimeout);
+    } catch (error) {
+      if (error?.message !== clickTimeout) throw error;
+      if (!submitted()) {
+        const form = findComposer()?.closest?.('form');
+        if (!form?.requestSubmit) throw error;
+        form.requestSubmit(button);
+        await waitFor(submitted, 5_000, 'ChatGPT không xác nhận đã gửi tin nhắn.');
+      }
+    }
     findComposer()?.blur?.();
   }
 

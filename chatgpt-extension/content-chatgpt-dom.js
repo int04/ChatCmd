@@ -69,12 +69,29 @@
     if (button) button.click();
   }
 
-  function findSendButton() {
-    return findVisible([
+  function findSendButton(composer) {
+    const selectors = [
       'button[data-testid="send-button"]',
       'button[aria-label="Send prompt"]',
       'button[aria-label="Send message"]',
-    ]);
+      'button[aria-label="Send"]',
+      'button[aria-label="Gửi"]',
+      'button[aria-label="Gửi tin nhắn"]',
+      'button[title="Send"]',
+      'button[title="Gửi"]',
+    ];
+    const scopes = [];
+    const form = composer?.closest?.('form');
+    if (form) scopes.push(form);
+    let parent = composer?.parentElement;
+    for (let depth = 0; parent && depth < 5; depth += 1, parent = parent.parentElement) {
+      if (!scopes.includes(parent)) scopes.push(parent);
+    }
+    for (const scope of scopes) {
+      const button = findVisibleWithin(scope, [...selectors, 'button[type="submit"]']);
+      if (button) return button;
+    }
+    return findVisible(selectors);
   }
 
   globalThis.ChatCmdConversationDom = Object.freeze({
