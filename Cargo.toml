@@ -65,10 +65,17 @@ tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
 
 [profile.release]
-# Prioritize build speed for packaged builds. ChatCMD is primarily I/O-bound,
-# so expensive whole-program optimization adds a lot of build time for little benefit.
+# Packaged builds favor the latency-sensitive desktop capture and UIA loop.
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+incremental = false
+strip = false
+
+[profile.release-fast]
+inherits = "release"
+# Use `cargo build --profile release-fast` when iterating on packaging.
 opt-level = 1
 lto = false
 codegen-units = 256
 incremental = true
-strip = false

@@ -12,7 +12,7 @@ use ::windows::Win32::{
 use std::{
     sync::{Arc, Mutex, atomic::AtomicBool},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio_util::sync::CancellationToken;
 use windows_capture::window::Window;
@@ -60,6 +60,17 @@ impl WindowSession {
         include_elements: bool,
         after_sequence: Option<u64>,
     ) -> RuntimeResult<NativeObservation> {
+        timed("observe_total", || {
+            self.observe_after_inner(include_screenshot, include_elements, after_sequence)
+        })
+    }
+
+    fn observe_after_inner(
+        &self,
+        include_screenshot: bool,
+        include_elements: bool,
+        after_sequence: Option<u64>,
+    ) -> RuntimeResult<NativeObservation> {
         validate_target(&self.window)?;
         if include_screenshot {
             // SAFETY: querying minimized state of a validated HWND has no side effects.
@@ -73,9 +84,9 @@ impl WindowSession {
 
         let (screenshot_png, element_result) = if include_screenshot && include_elements {
             thread::scope(|scope| {
-                let capture = scope.spawn(|| self.capture_png(after_sequence));
-                let elements = scope.spawn(|| self.uia.snapshot(self.window.handle));
-                let screenshot = capture.join().map_err(worker_panicked)??;
+                let elements =
+                    scope.spawn(|| timed("uia_snapshot", || self.uia.snapshot(self.window.handle)));
+                let screenshot = self.capture_png(after_sequence)?;
                 let elements = elements.join().map_err(worker_panicked)??;
                 Ok::<_, RuntimeError>((Some(screenshot), elements))
             })?
@@ -84,7 +95,7 @@ impl WindowSession {
                 .then(|| self.capture_png(after_sequence))
                 .transpose()?;
             let elements = if include_elements {
-                self.uia.snapshot(self.window.handle)?
+                timed("uia_snapshot", || self.uia.snapshot(self.window.handle))?
             } else {
                 (Vec::new(), false)
             };
@@ -102,8 +113,10 @@ impl WindowSession {
         element: &NativeElement,
         action: &DesktopElementAction,
     ) -> RuntimeResult<()> {
-        validate_target(&self.window)?;
-        self.uia.act(self.window.handle, element, action)
+        timed("element_action", || {
+            validate_target(&self.window)?;
+            self.uia.act(self.window.handle, element, action)
+        })
     }
 
     pub(super) fn input_act(
@@ -112,37 +125,48 @@ impl WindowSession {
         cancellation: &CancellationToken,
         actions: &[DesktopInputAction],
     ) -> RuntimeResult<NativeInputOutcome> {
-        validate_target(&self.window)?;
-        input::act(&self.window, cancelled, cancellation, actions, &self.uia)
+        timed("input_action", || {
+            validate_target(&self.window)?;
+            input::act(&self.window, cancelled, cancellation, actions, &self.uia)
+        })
     }
 
     pub(super) fn current_capture_sequence(&self) -> RuntimeResult<u64> {
-        self.prewarm_capture()?;
-        let capture = self.capture_lock()?;
-        let session = capture.as_ref().ok_or_else(|| {
-            RuntimeError::new(
-                "desktop_capture_start_failed",
-                "desktop capture session was not initialized",
-            )
-        })?;
-        session.wait_for_sequence(capture::CAPTURE_TIMEOUT)
+        timed("capture_sequence_before_action", || {
+            self.prewarm_capture()?;
+            let capture = self.capture_lock()?;
+            let session = capture.as_ref().ok_or_else(|| {
+                RuntimeError::new(
+                    "desktop_capture_start_failed",
+                    "desktop capture session was not initialized",
+                )
+            })?;
+            session.wait_for_sequence(capture::CAPTURE_TIMEOUT)
+        })
     }
 
     fn capture_png(&self, after_sequence: Option<u64>) -> RuntimeResult<Vec<u8>> {
-        self.prewarm_capture()?;
-        let capture = self.capture_lock()?;
-        let session = capture.as_ref().ok_or_else(|| {
-            RuntimeError::new(
-                "desktop_capture_start_failed",
-                "desktop capture session was not initialized",
-            )
-        })?;
-        let result = after_sequence.map_or_else(
-            || session.latest_png(capture::CAPTURE_TIMEOUT),
-            |sequence| session.png_after(sequence, POST_ACTION_FRAME_TIMEOUT),
-        );
-        let (_, png) = result?;
-        Ok(png)
+        let phase = if after_sequence.is_some() {
+            "post_action_frame_and_png"
+        } else {
+            "capture_png"
+        };
+        timed(phase, || {
+            self.prewarm_capture()?;
+            let capture = self.capture_lock()?;
+            let session = capture.as_ref().ok_or_else(|| {
+                RuntimeError::new(
+                    "desktop_capture_start_failed",
+                    "desktop capture session was not initialized",
+                )
+            })?;
+            let result = after_sequence.map_or_else(
+                || session.latest_png(capture::CAPTURE_TIMEOUT),
+                |sequence| session.png_after(sequence, POST_ACTION_FRAME_TIMEOUT),
+            );
+            let (_, png) = result?;
+            Ok(png)
+        })
     }
 
     fn capture_lock(
@@ -152,6 +176,24 @@ impl WindowSession {
             .lock()
             .map_err(|error| backend_error(error.to_string()))
     }
+}
+
+// Emit only fixed phase names, durations and outcome. Window titles, UI text and
+// image data must never be written to diagnostic logs.
+fn timed<T>(phase: &'static str, operation: impl FnOnce() -> RuntimeResult<T>) -> RuntimeResult<T> {
+    if !tracing::enabled!(target: "chatcmd_runtime::desktop::timing", tracing::Level::DEBUG) {
+        return operation();
+    }
+    let started = Instant::now();
+    let result = operation();
+    tracing::debug!(
+        target: "chatcmd_runtime::desktop::timing",
+        phase,
+        elapsed_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
+        success = result.is_ok(),
+        "desktop timing"
+    );
+    result
 }
 
 pub(super) fn list_windows() -> RuntimeResult<NativeWindowList> {

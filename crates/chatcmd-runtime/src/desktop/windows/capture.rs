@@ -2,7 +2,7 @@ use super::{backend_error, hwnd};
 use crate::{RuntimeError, RuntimeResult};
 use std::{
     io::Cursor,
-    sync::{Arc, Condvar, Mutex, MutexGuard},
+    sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock},
     time::{Duration, Instant},
 };
 use windows_capture::{
@@ -26,6 +26,7 @@ struct RgbaFrame {
     width: u32,
     height: u32,
     pixels: Arc<Vec<u8>>,
+    encoded_png: Arc<OnceLock<Vec<u8>>>,
 }
 
 #[derive(Default)]
@@ -55,6 +56,7 @@ impl FrameCache {
             width,
             height,
             pixels: Arc::new(pixels),
+            encoded_png: Arc::new(OnceLock::new()),
         });
         drop(state);
         self.changed.notify_all();
@@ -272,6 +274,9 @@ fn cache_frame(frame: &mut Frame, cache: &FrameCache, scratch: &mut Vec<u8>) -> 
 }
 
 fn encode_frame(frame: &RgbaFrame) -> RuntimeResult<Vec<u8>> {
+    if let Some(encoded) = frame.encoded_png.get() {
+        return Ok(encoded.clone());
+    }
     let mut output = Vec::new();
     {
         let cursor = Cursor::new(&mut output);
@@ -283,6 +288,7 @@ fn encode_frame(frame: &RgbaFrame) -> RuntimeResult<Vec<u8>> {
             .write_image_data(frame.pixels.as_slice())
             .map_err(backend_error)?;
     }
+    let _ = frame.encoded_png.set(output.clone());
     Ok(output)
 }
 
@@ -421,8 +427,10 @@ mod tests {
             width: 1,
             height: 1,
             pixels: Arc::new(vec![255, 0, 0, 255]),
+            encoded_png: Arc::new(OnceLock::new()),
         };
         let encoded = encode_frame(&frame).expect("PNG encoding");
         assert_eq!(&encoded[..8], b"\x89PNG\r\n\x1a\n");
+        assert_eq!(encode_frame(&frame).expect("cached PNG"), encoded);
     }
 }

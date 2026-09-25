@@ -51,7 +51,12 @@ fn desktop_input_schema_uses_structured_actions() {
         schema.pointer("/properties/actions/type"),
         Some(&Value::String("array".into()))
     );
-    for flag in ["observeAfter", "includeScreenshot", "includeElements"] {
+    for flag in [
+        "observeAfter",
+        "includeScreenshot",
+        "includeElements",
+        "knownScreenshotToken",
+    ] {
         assert!(
             schema.pointer(&format!("/properties/{flag}")).is_some(),
             "missing fast-loop flag {flag}"
@@ -71,6 +76,21 @@ fn desktop_input_schema_uses_structured_actions() {
 }
 
 #[test]
+fn desktop_observe_schema_accepts_opt_in_image_deduplication() {
+    let tool = McpServer::tool_router()
+        .list_all()
+        .into_iter()
+        .find(|tool| tool.name == "desktop_window_observe")
+        .expect("desktop observe tool");
+    let serialized = serde_json::to_value(tool).expect("serialize tool");
+    let schema = serialized
+        .get("inputSchema")
+        .or_else(|| serialized.get("input_schema"))
+        .expect("input schema");
+    assert!(schema.pointer("/properties/knownScreenshotToken").is_some());
+}
+
+#[test]
 fn desktop_element_action_deserializes_with_common_context() {
     let tools = McpServer::tool_router().list_all();
     let tool = tools
@@ -82,7 +102,12 @@ fn desktop_element_action_deserializes_with_common_context() {
         .get("inputSchema")
         .or_else(|| serialized.get("input_schema"))
         .expect("input schema");
-    for flag in ["observeAfter", "includeScreenshot", "includeElements"] {
+    for flag in [
+        "observeAfter",
+        "includeScreenshot",
+        "includeElements",
+        "knownScreenshotToken",
+    ] {
         assert!(
             schema.pointer(&format!("/properties/{flag}")).is_some(),
             "missing fast-loop flag {flag}"
@@ -158,7 +183,90 @@ fn nested_desktop_observation_screenshot_is_promoted_to_image_content() {
 }
 
 #[test]
-fn browser_desktop_flow_requires_real_action_time_approval_without_bypass_flag() {
+fn desktop_screenshot_token_omits_only_an_identical_image() {
+    let mut first = serde_json::json!({
+        "completed": true,
+        "observation": {"observationId": "first", "screenshotBase64": "aGVsbG8="}
+    });
+    deduplicate_desktop_screenshot(&mut first, None);
+    let token = first["screenshotToken"]
+        .as_str()
+        .expect("token for first image")
+        .to_owned();
+    assert_eq!(first["screenshotUnchanged"], false);
+    assert_eq!(
+        tool_result_with_image(first)
+            .content
+            .iter()
+            .filter(|content| content.as_image().is_some())
+            .count(),
+        1
+    );
+
+    let mut repeated = serde_json::json!({
+        "completed": true,
+        "observation": {"observationId": "second", "screenshotBase64": "aGVsbG8="}
+    });
+    deduplicate_desktop_screenshot(&mut repeated, Some(&token));
+    assert_eq!(repeated["screenshotToken"], token);
+    assert_eq!(repeated["screenshotUnchanged"], true);
+    assert!(repeated.pointer("/observation/screenshotBase64").is_none());
+    assert!(
+        tool_result_with_image(repeated)
+            .content
+            .iter()
+            .all(|content| content.as_image().is_none())
+    );
+
+    let mut changed = serde_json::json!({"screenshotBase64": "ZGlmZmVyZW50"});
+    deduplicate_desktop_screenshot(&mut changed, Some(&token));
+    assert_eq!(changed["screenshotUnchanged"], false);
+    assert_ne!(changed["screenshotToken"], token);
+    assert!(changed.get("screenshotBase64").is_some());
+
+    let mut without_image = serde_json::json!({"observationId": "metadata-only"});
+    deduplicate_desktop_screenshot(&mut without_image, Some(&token));
+    assert!(without_image.get("screenshotToken").is_none());
+    assert!(without_image.get("screenshotUnchanged").is_none());
+}
+
+#[test]
+fn screenshot_token_is_not_forwarded_to_runtime_arguments() {
+    let mut arguments = serde_json::json!({
+        "windowId": "window",
+        "knownScreenshotToken": "sha256:known"
+    });
+    assert_eq!(
+        desktop_known_screenshot_token("desktop_window_observe", &mut arguments).as_deref(),
+        Some("sha256:known")
+    );
+    assert!(arguments.get("knownScreenshotToken").is_none());
+    assert_eq!(arguments["windowId"], "window");
+}
+
+#[test]
+fn desktop_refusals_preserve_observed_reason_and_never_suggest_bypass() {
+    for (code, outcome, recovery) in [
+        ("approval_required", "notStarted", "requestApproval"),
+        ("approval_stale", "notStarted", "requestApprovalAgain"),
+        ("policy_denied", "notStarted", "stopAndReportPolicyDenied"),
+        ("desktop_target_denied", "notStarted", "stopAndReportDenied"),
+        (
+            "desktop_action_outcome_unknown",
+            "unknown",
+            "observeAgainWithoutRepeatingAction",
+        ),
+    ] {
+        let value = error_value(&RuntimeError::new(code, "observed reason"));
+        assert_eq!(value["error"]["code"], code);
+        assert_eq!(value["error"]["message"], "observed reason");
+        assert_eq!(value["error"]["outcome"], outcome);
+        assert_eq!(value["error"]["recovery"], recovery);
+    }
+}
+
+#[test]
+fn desktop_flow_respects_configured_action_time_policy_without_bypass_flag() {
     let tools = McpServer::tool_router().list_all();
     for name in ["desktop_element_act", "desktop_input_act"] {
         let tool = tools
@@ -166,7 +274,8 @@ fn browser_desktop_flow_requires_real_action_time_approval_without_bypass_flag()
             .find(|tool| tool.name == name)
             .expect("desktop action tool");
         let description = tool.description.as_deref().expect("tool description");
-        assert!(description.contains("action-time user approval"));
+        assert!(description.contains("configured execution policy"));
+        assert!(description.contains("action-time approval when required"));
         assert!(description.contains("isolated in its own call"));
         assert!(description.contains("hard-denied") || description.contains("hard denies"));
 
@@ -256,4 +365,13 @@ fn desktop_result_schemas_are_specific() {
     assert!(input_act.contains("completedActionCount"));
     assert!(input_act.contains("executionWarning"));
     assert!(input_act.contains("observeAgainWithoutRepeatingInput"));
+    for name in [
+        "desktop_window_observe",
+        "desktop_element_act",
+        "desktop_input_act",
+    ] {
+        let schema = schema_for(name);
+        assert!(schema.contains("screenshotToken"));
+        assert!(schema.contains("screenshotUnchanged"));
+    }
 }

@@ -172,7 +172,7 @@ fn path_fields(name: &str) -> Vec<PathFieldRole> {
 }
 
 fn result_schema(name: &str) -> Value {
-    let schema = match name {
+    let mut schema = match name {
         "fs_list_v2" => serde_json::to_value(schemars::schema_for!(
             chatcmd_runtime::ToolResultEnvelope<chatcmd_runtime::FsListPageData>
         )),
@@ -227,6 +227,20 @@ fn result_schema(name: &str) -> Value {
         _ => Ok(generic_result_schema()),
     }
     .expect("result schema must serialize");
+    if matches!(
+        name,
+        "desktop_window_observe" | "desktop_element_act" | "desktop_input_act"
+    ) && let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut)
+    {
+        properties.insert(
+            "screenshotToken".to_owned(),
+            serde_json::json!({"type": "string", "description": "Opaque equality token for the returned PNG image"}),
+        );
+        properties.insert(
+            "screenshotUnchanged".to_owned(),
+            serde_json::json!({"type": "boolean", "description": "True when knownScreenshotToken matched and the duplicate image was omitted"}),
+        );
+    }
     canonicalize_contract(schema)
 }
 

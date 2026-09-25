@@ -36,6 +36,7 @@ pub enum ComputerBrowser {
     #[default]
     Chrome,
     Edge,
+    Brave,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -147,4 +148,18 @@ pub struct ComputerObservation {
     pub height: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub screenshot_base64: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verification_warning: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_action_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution_warning: Option<ComputerExecutionWarning>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ComputerExecutionWarning {
+    pub completed_action_count: usize,
+    pub retry_action: bool,
+    pub message: String,
 }

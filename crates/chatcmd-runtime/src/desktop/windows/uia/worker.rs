@@ -1,7 +1,10 @@
 use super::{FocusedElementSafety, Reply, Request, Snapshot, focus};
 use crate::desktop::{DesktopElement, DesktopElementAction, DesktopRect};
 use crate::{RuntimeError, RuntimeResult};
-use std::{collections::VecDeque, sync::mpsc};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::mpsc,
+};
 use uiautomation::{
     UIAutomation, UIElement, UITreeWalker,
     core::UICacheRequest,
@@ -61,6 +64,8 @@ struct Worker {
     automation: UIAutomation,
     walker: UITreeWalker,
     element_cache: UICacheRequest,
+    last_snapshot_handle: Option<isize>,
+    last_snapshot_elements: HashMap<Vec<usize>, UIElement>,
 }
 
 impl Worker {
@@ -80,6 +85,8 @@ impl Worker {
                 automation,
                 walker,
                 element_cache,
+                last_snapshot_handle: None,
+                last_snapshot_elements: HashMap::with_capacity(MAX_ELEMENTS),
             })
         })();
         if result.is_err() {
@@ -98,6 +105,8 @@ fn shutdown(worker: Worker) {
 
 impl Worker {
     fn snapshot(&mut self, handle: isize) -> RuntimeResult<Snapshot> {
+        self.last_snapshot_handle = None;
+        self.last_snapshot_elements.clear();
         let root = self
             .automation
             .element_from_handle_build_cache(Handle::from(handle), &self.element_cache)
@@ -115,6 +124,8 @@ impl Worker {
                 }
                 visited += 1;
                 if let Some(description) = describe_cached_element(&element, path.clone()) {
+                    self.last_snapshot_elements
+                        .insert(path.clone(), element.clone());
                     elements.push(description);
                 }
             }
@@ -135,6 +146,7 @@ impl Worker {
                 queue.push_back((child, child_path));
             }
         }
+        self.last_snapshot_handle = Some(handle);
         Ok((elements, truncated))
     }
 
@@ -144,11 +156,21 @@ impl Worker {
         target: &NativeElement,
         action: &DesktopElementAction,
     ) -> RuntimeResult<()> {
-        let root = self
-            .automation
-            .element_from_handle(Handle::from(handle))
-            .map_err(backend_error)?;
-        let element = resolve_path(&self.walker, root, &target.path)?;
+        let cached = (self.last_snapshot_handle == Some(handle))
+            .then(|| self.last_snapshot_elements.get(&target.path).cloned())
+            .flatten();
+        self.last_snapshot_handle = None;
+        self.last_snapshot_elements.clear();
+        let element = match cached {
+            Some(element) => element,
+            None => {
+                let root = self
+                    .automation
+                    .element_from_handle(Handle::from(handle))
+                    .map_err(backend_error)?;
+                resolve_path(&self.walker, root, &target.path)?
+            }
+        };
         if current_signature(&element) != target.signature {
             return Err(stale_element());
         }

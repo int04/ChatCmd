@@ -9,8 +9,7 @@ use crate::{RuntimeError, RuntimeResult};
 const CDP_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_SCREENSHOT_BASE64_BYTES: usize = 12 * 1024 * 1024;
 
-pub(super) async fn prepare_session(web_socket_url: &str) -> RuntimeResult<()> {
-    let mut client = CdpClient::connect(web_socket_url).await?;
+pub(super) async fn prepare_session(client: &mut CdpClient) -> RuntimeResult<()> {
     client.command("Page.enable", json!({})).await?;
     client
         .command(
@@ -22,20 +21,26 @@ pub(super) async fn prepare_session(web_socket_url: &str) -> RuntimeResult<()> {
 }
 
 pub(super) async fn execute_actions(
-    web_socket_url: &str,
+    client: &mut CdpClient,
     actions: &[ComputerAction],
-) -> RuntimeResult<()> {
-    let mut client = CdpClient::connect(web_socket_url).await?;
-    client.command("Page.enable", json!({})).await?;
-    for action in actions {
-        execute_action(&mut client, action).await?;
+) -> Result<(), ActionFailure> {
+    for (completed_action_count, action) in actions.iter().enumerate() {
+        if let Err(error) = execute_action(client, action).await {
+            return Err(ActionFailure {
+                completed_action_count,
+                error,
+            });
+        }
     }
     Ok(())
 }
 
-pub(super) async fn capture(web_socket_url: &str) -> RuntimeResult<(String, String, String)> {
-    let mut client = CdpClient::connect(web_socket_url).await?;
-    client.command("Page.enable", json!({})).await?;
+pub(super) struct ActionFailure {
+    pub(super) completed_action_count: usize,
+    pub(super) error: RuntimeError,
+}
+
+pub(super) async fn capture(client: &mut CdpClient) -> RuntimeResult<(String, String, String)> {
     let page = client
         .command(
             "Runtime.evaluate",
@@ -311,43 +316,79 @@ pub(super) fn validate_navigation_url(url: &str) -> RuntimeResult<()> {
     Ok(())
 }
 
-struct CdpClient {
+pub(super) struct CdpClient {
     stream: tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >,
     next_id: u64,
+    broken: bool,
 }
 
 impl CdpClient {
-    async fn connect(web_socket_url: &str) -> RuntimeResult<Self> {
+    pub(super) async fn connect(web_socket_url: &str) -> RuntimeResult<Self> {
         let (stream, _) = tokio::time::timeout(CDP_TIMEOUT, connect_async(web_socket_url))
             .await
             .map_err(|_| cdp_error("timed out connecting to Chrome DevTools"))?
             .map_err(|error| {
                 cdp_error(&format!("failed to connect to Chrome DevTools: {error}"))
             })?;
-        Ok(Self { stream, next_id: 1 })
+        Ok(Self {
+            stream,
+            next_id: 1,
+            broken: false,
+        })
+    }
+
+    pub(super) const fn is_broken(&self) -> bool {
+        self.broken
+    }
+
+    #[cfg(test)]
+    pub(super) async fn break_connection_for_test(&mut self) -> RuntimeResult<()> {
+        self.stream
+            .close(None)
+            .await
+            .map_err(|error| cdp_error(&format!("failed to close test CDP socket: {error}")))?;
+        self.broken = true;
+        Ok(())
     }
 
     async fn command(&mut self, method: &str, params: Value) -> RuntimeResult<Value> {
         let id = self.next_id;
         self.next_id = self.next_id.saturating_add(1);
         let payload = json!({"id": id, "method": method, "params": params}).to_string();
-        self.stream
-            .send(Message::Text(payload.into()))
-            .await
-            .map_err(|error| cdp_error(&format!("failed to send Chrome command: {error}")))?;
+        if let Err(error) = self.stream.send(Message::Text(payload.into())).await {
+            self.broken = true;
+            return Err(cdp_error(&format!(
+                "failed to send Chrome command: {error}"
+            )));
+        }
         loop {
-            let message = tokio::time::timeout(CDP_TIMEOUT, self.stream.next())
-                .await
-                .map_err(|_| cdp_error("Chrome command timed out"))?
-                .ok_or_else(|| cdp_error("Chrome DevTools connection closed"))?
-                .map_err(|error| cdp_error(&format!("Chrome DevTools read failed: {error}")))?;
+            let message = match tokio::time::timeout(CDP_TIMEOUT, self.stream.next()).await {
+                Ok(Some(Ok(message))) => message,
+                Ok(Some(Err(error))) => {
+                    self.broken = true;
+                    return Err(cdp_error(&format!("Chrome DevTools read failed: {error}")));
+                }
+                Ok(None) => {
+                    self.broken = true;
+                    return Err(cdp_error("Chrome DevTools connection closed"));
+                }
+                Err(_) => {
+                    self.broken = true;
+                    return Err(cdp_error("Chrome command timed out"));
+                }
+            };
             let Message::Text(text) = message else {
                 continue;
             };
-            let response: Value = serde_json::from_str(&text)
-                .map_err(|_| cdp_error("Chrome returned an invalid DevTools response"))?;
+            let response: Value = match serde_json::from_str(&text) {
+                Ok(response) => response,
+                Err(_) => {
+                    self.broken = true;
+                    return Err(cdp_error("Chrome returned an invalid DevTools response"));
+                }
+            };
             if response.get("id").and_then(Value::as_u64) != Some(id) {
                 continue;
             }

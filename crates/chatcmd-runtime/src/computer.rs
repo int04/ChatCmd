@@ -1,22 +1,18 @@
 //! Isolated, pointer-free browser automation through the Chrome DevTools Protocol.
 
+mod browser_find;
 mod cdp;
 mod types;
 
 pub use types::*;
 
 use serde::Deserialize;
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-    process::Stdio,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashMap, path::Path, process::Stdio, sync::Arc, time::Duration};
 use tempfile::TempDir;
 use tokio::{process::Child, sync::Mutex};
 
 use crate::{OperationContext, RuntimeError, RuntimeResult};
+use browser_find::find_browser;
 
 const MAX_SESSIONS: usize = 4;
 const MAX_ACTIONS: usize = 32;
@@ -32,7 +28,7 @@ struct BrowserSession {
     width: u32,
     height: u32,
     web_socket_url: String,
-    action_gate: Arc<Mutex<()>>,
+    client: Arc<Mutex<cdp::CdpClient>>,
     child: Child,
     _profile: TempDir,
 }
@@ -104,15 +100,17 @@ impl ComputerControlService {
             .map_err(|error| backend_error(format!("failed to start browser: {error}")))?;
         let port = wait_for_devtools_port(profile.path(), &mut child, context).await?;
         let web_socket_url = find_page_target(port).await?;
-        cdp::prepare_session(&web_socket_url).await?;
+        let mut client = cdp::CdpClient::connect(&web_socket_url).await?;
+        cdp::prepare_session(&mut client).await?;
         if request.start_url != "about:blank" {
             cdp::execute_actions(
-                &web_socket_url,
+                &mut client,
                 &[ComputerAction::Navigate {
                     url: request.start_url,
                 }],
             )
-            .await?;
+            .await
+            .map_err(|failure| failure.error)?;
         }
 
         let session_id = uuid::Uuid::new_v4().to_string();
@@ -129,7 +127,7 @@ impl ComputerControlService {
             width: request.width,
             height: request.height,
             web_socket_url,
-            action_gate: Arc::new(Mutex::new(())),
+            client: Arc::new(Mutex::new(client)),
             child,
             _profile: profile,
         };
@@ -143,8 +141,8 @@ impl ComputerControlService {
         session_id: &str,
     ) -> RuntimeResult<ComputerObservation> {
         let session = self.session_access(context, session_id).await?;
-        let _guard = session.action_gate.lock().await;
-        observation(&session).await
+        let mut client = session.client.lock().await;
+        observation(&session, &mut client).await
     }
 
     pub async fn act(
@@ -160,25 +158,59 @@ impl ComputerControlService {
         }
         let session = self.session_access(context, &request.session_id).await?;
         validate_actions(&request.actions, session.width, session.height)?;
-        let _guard = session.action_gate.lock().await;
-        cdp::execute_actions(&session.web_socket_url, &request.actions).await?;
+        let mut client = session.client.lock().await;
+        let action_result = if client.is_broken() {
+            Err(cdp::ActionFailure {
+                completed_action_count: 0,
+                error: RuntimeError::new(
+                    "computer_session_connection_lost",
+                    "browser connection was lost; observe the session before sending more actions",
+                ),
+            })
+        } else {
+            cdp::execute_actions(&mut client, &request.actions).await
+        };
         let capture_after = request.screenshot_after
             || request
                 .actions
                 .iter()
-                .any(|action| matches!(action, ComputerAction::Screenshot));
-        if capture_after {
-            observation(&session).await
+                .any(|action| matches!(action, ComputerAction::Screenshot))
+            || action_result.is_err();
+        let mut result = if capture_after {
+            match observation(&session, &mut client).await {
+                Ok(observation) => observation,
+                Err(error) => {
+                    let mut observation = empty_observation(&session);
+                    observation.verification_warning = Some(format!(
+                        "browser action may already have occurred; observe again without replaying it: {error}"
+                    ));
+                    observation
+                }
+            }
         } else {
-            Ok(ComputerObservation {
-                session_id: request.session_id,
-                url: String::new(),
-                title: String::new(),
-                width: session.width,
-                height: session.height,
-                screenshot_base64: None,
-            })
-        }
+            empty_observation(&session)
+        };
+        result.completed_action_count = Some(match action_result {
+            Ok(()) => request.actions.len(),
+            Err(failure) => {
+                let message = if failure.error.code == "computer_session_connection_lost" {
+                    "no action was sent; the browser connection was lost; observe the session before continuing".to_owned()
+                } else {
+                    format!(
+                        "action {} may have partially executed; inspect the browser state before continuing: {}",
+                        failure.completed_action_count + 1,
+                        failure.error
+                    )
+                };
+                result.execution_warning = Some(ComputerExecutionWarning {
+                    completed_action_count: failure.completed_action_count,
+                    retry_action: false,
+                    message,
+                });
+                failure.completed_action_count
+            }
+        });
+        Ok(result)
     }
 
     pub async fn close(&self, context: &OperationContext, session_id: &str) -> RuntimeResult<()> {
@@ -228,7 +260,7 @@ impl ComputerControlService {
             width: session.width,
             height: session.height,
             web_socket_url: session.web_socket_url.clone(),
-            action_gate: session.action_gate.clone(),
+            client: session.client.clone(),
         })
     }
 }
@@ -238,11 +270,24 @@ struct SessionAccess {
     width: u32,
     height: u32,
     web_socket_url: String,
-    action_gate: Arc<Mutex<()>>,
+    client: Arc<Mutex<cdp::CdpClient>>,
 }
 
-async fn observation(session: &SessionAccess) -> RuntimeResult<ComputerObservation> {
-    let (url, title, screenshot_base64) = cdp::capture(&session.web_socket_url).await?;
+async fn observation(
+    session: &SessionAccess,
+    client: &mut cdp::CdpClient,
+) -> RuntimeResult<ComputerObservation> {
+    if client.is_broken() {
+        reconnect_browser_session(client, &session.web_socket_url).await?;
+    }
+    let (url, title, screenshot_base64) = match cdp::capture(client).await {
+        Ok(observation) => observation,
+        Err(_) if client.is_broken() => {
+            reconnect_browser_session(client, &session.web_socket_url).await?;
+            cdp::capture(client).await?
+        }
+        Err(error) => return Err(error),
+    };
     Ok(ComputerObservation {
         session_id: session.session_id.clone(),
         url,
@@ -250,7 +295,31 @@ async fn observation(session: &SessionAccess) -> RuntimeResult<ComputerObservati
         width: session.width,
         height: session.height,
         screenshot_base64: Some(screenshot_base64),
+        verification_warning: None,
+        completed_action_count: None,
+        execution_warning: None,
     })
+}
+
+async fn reconnect_browser_session(client: &mut cdp::CdpClient, url: &str) -> RuntimeResult<()> {
+    let mut replacement = cdp::CdpClient::connect(url).await?;
+    cdp::prepare_session(&mut replacement).await?;
+    *client = replacement;
+    Ok(())
+}
+
+fn empty_observation(session: &SessionAccess) -> ComputerObservation {
+    ComputerObservation {
+        session_id: session.session_id.clone(),
+        url: String::new(),
+        title: String::new(),
+        width: session.width,
+        height: session.height,
+        screenshot_base64: None,
+        verification_warning: None,
+        completed_action_count: None,
+        execution_warning: None,
+    }
 }
 
 fn owner(context: &OperationContext) -> SessionOwner {
@@ -418,66 +487,6 @@ async fn find_page_target(port: u16) -> RuntimeResult<String> {
         .find(|target| target.target_type == "page")
         .and_then(|target| target.web_socket_debugger_url)
         .ok_or_else(|| backend_error("Chrome exposed no page target"))
-}
-
-fn find_browser(browser: ComputerBrowser) -> RuntimeResult<PathBuf> {
-    let candidates = browser_candidates(browser);
-    candidates
-        .into_iter()
-        .find(|path| path.is_file())
-        .ok_or_else(|| {
-            RuntimeError::new(
-                "computer_browser_not_found",
-                format!("{} executable was not found", browser_name(browser)),
-            )
-        })
-}
-
-fn browser_name(browser: ComputerBrowser) -> &'static str {
-    match browser {
-        ComputerBrowser::Chrome => "Chrome",
-        ComputerBrowser::Edge => "Edge",
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn browser_candidates(browser: ComputerBrowser) -> Vec<PathBuf> {
-    let (vendor, executable) = match browser {
-        ComputerBrowser::Chrome => ("Google\\Chrome\\Application", "chrome.exe"),
-        ComputerBrowser::Edge => ("Microsoft\\Edge\\Application", "msedge.exe"),
-    };
-    [
-        std::env::var_os("PROGRAMFILES"),
-        std::env::var_os("PROGRAMFILES(X86)"),
-        std::env::var_os("LOCALAPPDATA"),
-    ]
-    .into_iter()
-    .flatten()
-    .map(PathBuf::from)
-    .map(|base| base.join(vendor).join(executable))
-    .collect()
-}
-
-#[cfg(target_os = "macos")]
-fn browser_candidates(browser: ComputerBrowser) -> Vec<PathBuf> {
-    let path = match browser {
-        ComputerBrowser::Chrome => "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-        ComputerBrowser::Edge => "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-    };
-    vec![PathBuf::from(path)]
-}
-
-#[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]
-fn browser_candidates(browser: ComputerBrowser) -> Vec<PathBuf> {
-    let names: &[&str] = match browser {
-        ComputerBrowser::Chrome => &[
-            "/usr/bin/google-chrome",
-            "/usr/bin/chromium",
-            "/usr/bin/chromium-browser",
-        ],
-        ComputerBrowser::Edge => &["/usr/bin/microsoft-edge", "/usr/bin/microsoft-edge-stable"],
-    };
-    names.iter().map(PathBuf::from).collect()
 }
 
 fn backend_error(message: impl Into<String>) -> RuntimeError {

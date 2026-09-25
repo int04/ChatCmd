@@ -29,6 +29,9 @@ cd ..
 cargo check --workspace --all-targets
 ```
 
+Packaged `--release` builds use the performance profile for desktop capture and UI Automation.
+For a faster local packaging iteration, run `cargo build --profile release-fast --features embedded-web`.
+
 No `.env` file or hosted account is required. Avoid committing machine-specific environment configuration.
 
 ## Project guidance discovery

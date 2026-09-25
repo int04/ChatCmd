@@ -4,7 +4,7 @@
 
 ChatCMD exposes two complementary Computer Use backends:
 
-- The browser backend starts a separate headless Chrome or Edge process with a temporary profile and
+- The browser backend starts a separate headless Chrome, Edge, or Brave process with a temporary profile and
   controls the page through Chrome DevTools Protocol (CDP). It never calls desktop-wide mouse or
   keyboard injection, so the user's pointer, keyboard focus, and visible applications remain
   available while the agent works.
@@ -17,7 +17,7 @@ ChatCMD exposes two complementary Computer Use backends:
 Model
   -> ChatCMD MCP tool schema
   -> authenticated task/agent identity + allowlist + execution approval
-  -> browser: ComputerControlService -> localhost-only CDP -> isolated Chrome/Edge
+  -> browser: ComputerControlService -> localhost-only CDP -> isolated Chrome/Edge/Brave
   -> desktop: DesktopControlService -> UI Automation + Windows Graphics Capture
                               \-> explicit takeover -> SendInput + visible stop overlay
   -> PNG screenshot as native MCP image content
@@ -32,7 +32,7 @@ existing `command_run`/shell tools remain the separate code-execution capability
 
 | Tool | Purpose | Policy class |
 |---|---|---|
-| `computer_session_start` | Start Chrome/Edge headless with a new temporary profile | Process execution |
+| `computer_session_start` | Start Chrome/Edge/Brave headless with a new temporary profile | Process execution |
 | `computer_observe` | Return URL/title/viewport metadata plus a PNG MCP image | Content read |
 | `computer_act` | Run a bounded batch of structured browser actions | Mutation |
 | `computer_session_close` | Kill the browser and delete its temporary profile | Cleanup |
@@ -133,6 +133,11 @@ not reusable.
 - Browser UI is headless; CDP actions do not use Windows `SendInput`.
 - Each session has a random ID and is bound to the authenticated agent plus task.
 - Each session gets a fresh temporary browser profile; user cookies/history are not reused.
+- The CDP WebSocket stays open for the session, avoiding reconnects between actions and observations.
+- A read-only observation may reconnect a dropped CDP socket once. Action batches are never replayed
+  after a connection failure. `completedActionCount` reports the confirmed prefix, and
+  `executionWarning.retryAction=false` marks an uncertain action outcome. If a completed action
+  cannot be verified with a screenshot, `verificationWarning` asks for a fresh observation.
 - DevTools binds to `127.0.0.1` with an ephemeral port.
 - Browser downloads are denied through CDP.
 - Explicit navigation accepts only `http`, `https`, and `about:blank`; `file:`, `javascript:`, and
@@ -190,8 +195,15 @@ Browser smoke tests are ignored by default because they require an installed bro
 ```powershell
 cargo test -p chatcmd-runtime --lib isolated_chrome_can_capture_without_desktop_input -- --ignored
 cargo test -p chatcmd-runtime --lib isolated_chrome_executes_pointer_free_actions -- --ignored
+cargo test -p chatcmd-runtime --lib isolated_brave_can_capture_without_desktop_input -- --ignored
 cargo test -p chatcmd-runtime --test desktop_contract desktop_window_binding_smoke_does_not_require_foreground_input -- --ignored --exact
 ```
+
+Để đo vòng lặp desktop trên một cửa sổ an toàn đang mở, đặt `CHATCMD_DESKTOP_BENCH_APP`
+bằng tên executable (ví dụ `notepad.exe`) rồi chạy
+`cargo test -p chatcmd-runtime --test desktop_observe_perf -- --ignored --nocapture`.
+Đặt `RUST_LOG=chatcmd_runtime::desktop::timing=debug` khi chạy app để xem thời gian
+capture, UIA, action và observe sau action; log không chứa tiêu đề cửa sổ, text UI hay ảnh.
 
 The second browser test serves a local page, starts isolated Chrome, clicks an input, types text,
 verifies the screenshot changed, and closes the session. The desktop smoke test only enumerates and

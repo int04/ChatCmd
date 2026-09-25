@@ -62,7 +62,9 @@ tool_args!(DesktopObserveArgs {
     #[serde(default = "default_true")]
     include_screenshot: bool,
     #[serde(default = "default_true")]
-    include_elements: bool
+    include_elements: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    known_screenshot_token: Option<String>
 });
 
 #[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
@@ -78,6 +80,8 @@ struct DesktopElementActArgs {
     include_screenshot: bool,
     #[serde(default)]
     include_elements: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    known_screenshot_token: Option<String>,
     #[serde(flatten)]
     action: chatcmd_runtime::DesktopElementAction,
 }
@@ -91,7 +95,9 @@ tool_args!(DesktopInputActArgs {
     #[serde(default = "default_true")]
     include_screenshot: bool,
     #[serde(default)]
-    include_elements: bool
+    include_elements: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    known_screenshot_token: Option<String>
 });
 tool_args!(DesktopInputEndArgs {
     input_session_id: String

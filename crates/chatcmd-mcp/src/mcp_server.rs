@@ -51,9 +51,15 @@ impl McpServer {
         else {
             return missing_authenticated_context();
         };
-        let (context, value) = self.prepare_call(tool_name, arguments, authenticated);
+        let (context, mut value) = self.prepare_call(tool_name, arguments, authenticated);
+        let known_screenshot_token = desktop_known_screenshot_token(tool_name, &mut value);
         match self.runtime.call(tool_name, context, value).await {
-            Ok(value) => tool_result_with_image(value),
+            Ok(mut value) => {
+                if is_desktop_screenshot_tool(tool_name) {
+                    deduplicate_desktop_screenshot(&mut value, known_screenshot_token.as_deref());
+                }
+                tool_result_with_image(value)
+            }
             Err(error) => CallToolResult::structured_error(error_value(&error)),
         }
     }
@@ -142,6 +148,51 @@ fn tool_result_with_image(mut value: Value) -> CallToolResult {
         result.content.push(ContentBlock::image(data, "image/png"));
     }
     result
+}
+
+fn is_desktop_screenshot_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "desktop_window_observe" | "desktop_element_act" | "desktop_input_act"
+    )
+}
+
+fn desktop_known_screenshot_token(tool_name: &str, arguments: &mut Value) -> Option<String> {
+    if !is_desktop_screenshot_tool(tool_name) {
+        return None;
+    }
+    arguments
+        .as_object_mut()?
+        .remove("knownScreenshotToken")?
+        .as_str()
+        .map(str::to_owned)
+}
+
+fn deduplicate_desktop_screenshot(value: &mut Value, known_token: Option<&str>) {
+    use sha2::{Digest, Sha256};
+
+    let Some(image) = value
+        .get("screenshotBase64")
+        .or_else(|| value.pointer("/observation/screenshotBase64"))
+        .and_then(Value::as_str)
+    else {
+        return;
+    };
+    // The token is a digest of the canonical Base64 PNG representation. It is
+    // only an equality hint; authorization is checked before every observation.
+    let token = format!("sha256:{:x}", Sha256::digest(image.as_bytes()));
+    let unchanged = known_token == Some(token.as_str());
+    if unchanged {
+        if let Some(object) = value.get_mut("observation").and_then(Value::as_object_mut) {
+            object.remove("screenshotBase64");
+        } else if let Some(object) = value.as_object_mut() {
+            object.remove("screenshotBase64");
+        }
+    }
+    if let Some(object) = value.as_object_mut() {
+        object.insert("screenshotToken".to_owned(), Value::String(token));
+        object.insert("screenshotUnchanged".to_owned(), Value::Bool(unchanged));
+    }
 }
 
 fn take_screenshot_images(value: &mut Value, screenshots: &mut Vec<String>) {

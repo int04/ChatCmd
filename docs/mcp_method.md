@@ -42,14 +42,14 @@ Quy tắc bằng chứng này áp dụng cho mọi ChatCMD tool: schema đang b�
 
 ## 2. Computer Use methods
 
-Computer Use có hai backend. Backend browser điều khiển một Chrome/Edge headless riêng qua Chrome
+Computer Use có hai backend. Backend browser điều khiển một Chrome/Edge/Brave headless riêng qua Chrome
 DevTools Protocol (CDP). Mỗi session dùng profile tạm độc lập, DevTools chỉ bind `127.0.0.1`, không
 gửi input qua chuột hoặc bàn phím vật lý và không giành focus của ứng dụng user đang dùng. Session
 thuộc đúng agent + task; task khác cố dùng cùng `sessionId` sẽ nhận như session không tồn tại.
 
 | Method | Tham số chính | Ý nghĩa |
 |---|---|---|
-| `computer_session_start` | `browser?`, `startUrl?`, `width?`, `height?` | Khởi chạy browser headless cô lập. `browser` là `chrome` hoặc `edge`; URL chỉ nhận `http`, `https` hoặc `about:blank`; viewport giới hạn 640×480 đến 1920×1080. |
+| `computer_session_start` | `browser?`, `startUrl?`, `width?`, `height?` | Khởi chạy browser headless cô lập. `browser` là `chrome`, `edge` hoặc `brave`; URL chỉ nhận `http`, `https` hoặc `about:blank`; viewport giới hạn 640×480 đến 1920×1080. |
 | `computer_observe` | `sessionId` | Chụp viewport hiện tại, trả metadata URL/title/kích thước và một MCP `image` content PNG để model có thể quan sát trực tiếp. |
 | `computer_act` | `sessionId`, `actions[]`, `screenshotAfter?` | Thực thi tuần tự tối đa 32 action: `click`, `double_click`, `move`, `drag`, `scroll`, `keypress`, `type`, `navigate`, `wait`, `screenshot`. Mặc định chụp lại màn hình sau batch. |
 | `computer_session_close` | `sessionId` | Dừng browser process và xóa profile tạm. |
@@ -58,6 +58,10 @@ Luồng khuyến nghị: `start → observe → act → observe/act ... → clos
 của viewport trả bởi `computer_observe`. Start/observe/act đều đi qua execution policy và approval;
 close là cleanup được phép để luôn có thể dừng session. Screenshot base64 không được lưu nguyên vào
 timeline/database; timeline chỉ giữ metadata kích thước, còn MCP response dùng image content native.
+`computer_act` trả `completedActionCount`; khi một batch có kết quả chưa chắc chắn, nó trả thêm
+`executionWarning.retryAction=false` để agent quan sát lại trước khi tiếp tục, không phát lại batch.
+Nếu action đã hoàn tất nhưng chụp ảnh xác minh thất bại, `verificationWarning` cũng yêu cầu chỉ
+quan sát lại. `computer_observe` có thể nối lại một CDP WebSocket bị rớt đúng một lần.
 
 Backend Windows desktop điều khiển một cửa sổ native đã mở. Mặc định nó dùng Windows UI Automation
 để thao tác semantic ở background và Windows Graphics Capture để chụp riêng cửa sổ, kể cả khi cửa
@@ -66,10 +70,10 @@ sổ bị app khác che. Nó không tự động fallback sang `SendInput`.
 | Method | Tham số chính | Ý nghĩa |
 |---|---|---|
 | `desktop_window_list` | Không có tham số riêng | Liệt kê top-level window được phép điều khiển, trả opaque `windowId`; không lộ native handle. |
-| `desktop_window_observe` | `windowId`, `includeScreenshot?`, `includeElements?` | Chụp riêng cửa sổ và/hoặc đọc cây UI Automation; trả `observationId`, `elementId` và MCP `image` PNG khi yêu cầu screenshot. |
-| `desktop_element_act` | `observationId`, `elementId`, `action`, `observeAfter?`, `includeScreenshot?`, `includeElements?`, dữ liệu action nếu có | Thực hiện đúng một action semantic: `invoke`, `set_value`, `toggle`, `select`, `expand` hoặc `collapse`, không giành chuột/focus; mặc định trả luôn observation mới để xác minh. |
+| `desktop_window_observe` | `windowId`, `includeScreenshot?`, `includeElements?`, `knownScreenshotToken?` | Chụp riêng cửa sổ và/hoặc đọc cây UI Automation; trả `observationId`, `elementId` và MCP `image` PNG khi yêu cầu screenshot. |
+| `desktop_element_act` | `observationId`, `elementId`, `action`, `observeAfter?`, `includeScreenshot?`, `includeElements?`, `knownScreenshotToken?`, dữ liệu action nếu có | Thực hiện đúng một action semantic: `invoke`, `set_value`, `toggle`, `select`, `expand` hoặc `collapse`, không giành chuột/focus; mặc định trả luôn observation mới để xác minh. |
 | `desktop_input_begin` | `windowId` | Bắt đầu chế độ takeover tường minh, đưa đúng target lên foreground và hiển thị viền/banner cảnh báo. |
-| `desktop_input_act` | `inputSessionId`, `actions[]`, `observeAfter?`, `includeScreenshot?`, `includeElements?` | Thực thi tối đa batch action input đã giới hạn và mặc định trả luôn observation mới: `click`, `double_click`, `move`, `drag`, `scroll`, `keypress`, `type`, `wait`. |
+| `desktop_input_act` | `inputSessionId`, `actions[]`, `observeAfter?`, `includeScreenshot?`, `includeElements?`, `knownScreenshotToken?` | Thực thi tối đa batch 32 action input đã giới hạn và mặc định trả luôn observation mới: `click`, `double_click`, `move`, `drag`, `scroll`, `keypress`, `type`, `wait`. |
 | `desktop_input_end` | `inputSessionId` | Dừng takeover và gỡ overlay. |
 
 Luồng ưu tiên là `window_list → window_observe → element_act → window_observe ...`. Mỗi
@@ -82,6 +86,12 @@ Fast loop không cần call observe riêng sau mỗi action: `observeAfter` mặ
 `observation` chứa state sau thao tác và screenshot được promote thành MCP image native. Bật
 `includeElements=true` khi quyết định kế tiếp cần element ID mới, hoặc đặt `observeAfter=false` cho
 action trung gian không cần đọc state. Đây chỉ là tối ưu round-trip, không thay đổi approval/policy.
+Khi đã nhận screenshot, caller có thể gửi `screenshotToken` vừa nhận thành
+`knownScreenshotToken` ở lần observe/action desktop tiếp theo. Nếu PNG giống hệt, kết quả trả
+`screenshotUnchanged=true`, giữ `screenshotToken` và bỏ MCP image trùng; caller dùng lại ảnh đã có.
+Nếu ảnh khác, `screenshotUnchanged=false` và ảnh mới được trả như cũ. Đây là opt-in để giảm dữ liệu
+truyền và xử lý ảnh phía model; hiện tại runtime vẫn phải tạo PNG để so sánh nên không tiết kiệm chi
+phí capture/encode. Các flag cũ và hành vi mặc định được giữ nguyên.
 Nếu action đã thành công nhưng bước observe gộp bị lỗi, result vẫn trả `completed=true` hoặc
 `active=true`, `observation` rỗng và `verificationWarning.retryAction=false` với recovery
 `observeAgainWithoutRepeatingAction`. Caller chỉ observe lại, không được retry click/type/invoke/Send;
@@ -92,6 +102,10 @@ khi input có thể đã xảy ra, result trả active status cùng prefix chắ
 `partialInputExecution`, `retryAction=false`, recovery `observeAgainWithoutRepeatingInput`. Caller
 phải observe state hiện tại và không phát lại batch, đặc biệt với click Send hay action không
 idempotent. Lỗi được phát hiện chắc chắn trước khi input đầu tiên chạy vẫn có thể là tool error.
+Chỉ gom các bước đã biết trước tọa độ/phím và không cần nhìn kết quả trung gian; tối đa 32 action.
+Tách thao tác cuối mang tính gửi/xác nhận bên ngoài thành một call riêng để execution policy và
+approval (nếu cấu hình yêu cầu) áp dụng đúng thời điểm, đồng thời lỗi từng phần không khiến agent
+phát lại thao tác đó.
 
 Chỉ dùng `desktop_input_begin → desktop_input_act → desktop_input_end` khi app không expose UI
 Automation pattern phù hợp và takeover đã qua authorization/approval. Takeover có thể giành chuột và
@@ -107,12 +121,19 @@ frame mới và sẽ fail rõ ràng thay vì tự restore làm ảnh hưởng de
 cần cam kết tuyệt đối không tranh chấp input, phải chạy trong Windows session hoặc VM riêng; virtual
 desktop không phải isolation boundary.
 
-Browser app như Brave/Chrome có thể được điều khiển sau khi user tự hoàn tất login/auth. Agent được
-phép điều hướng và soạn nội dung theo yêu cầu, nhưng action cuối gửi email/tin nhắn/form hoặc giao
-tiếp đại diện user phải được tách thành call riêng và đi qua approval đúng thời điểm action. Schema
-không có và không được thêm cờ `userConfirmed` do model tự khai để bypass. Dialog đăng nhập,
-password/OTP, password manager và màn hình security/privacy vẫn là hard deny; approval không mở
-khóa các target này.
+Với mọi app desktop, agent có thể điều hướng và soạn nội dung theo yêu cầu sau khi user tự hoàn tất
+login/auth. Action cuối gửi email/tin nhắn/form hoặc giao tiếp đại diện user phải được tách thành
+call riêng và đi qua execution policy/approval theo chế độ đang cấu hình. Chế độ Allow cho phép
+thực thi, Approval xin duyệt, Deny từ chối; không tự tạo cờ `userConfirmed` để vượt qua cơ chế này.
+Dialog đăng nhập, password/OTP, password manager và màn hình
+security/privacy vẫn là hard deny; approval không mở khóa các target này.
+
+Nếu invocation thực sự trả `approval_required`, caller đi theo cơ chế approval đang có; nếu trả
+`policy_denied` hoặc `desktop_*_denied`, dừng nhánh thao tác đó và báo đúng code/lý do quan sát
+được. `desktop_action_outcome_unknown` nghĩa là action có thể đã chạy: observe lại, tuyệt đối không
+tự phát lại. Lỗi từ nền tảng/host ngoài MCP cũng phải được báo theo raw observed error; không đổi
+tên tool, đổi kênh hay ngụy trang action để vượt qua từ chối. Không được quy lỗi cho host/policy khi
+chưa có invocation và nguyên nhân tương ứng trong kết quả thực tế.
 
 ---
 

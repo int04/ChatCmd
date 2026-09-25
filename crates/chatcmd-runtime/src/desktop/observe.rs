@@ -115,40 +115,68 @@ impl DesktopControlService {
         include_elements: bool,
         after_sequence: Option<u64>,
     ) -> RuntimeResult<DesktopObservation> {
-        let session = target.session.clone();
-        let observed = tokio::task::spawn_blocking(move || match after_sequence {
-            Some(sequence) => {
-                session.observe_after(include_screenshot, include_elements, Some(sequence))
+        let started = tracing::enabled!(
+            target: "chatcmd_runtime::desktop::timing",
+            tracing::Level::DEBUG
+        )
+        .then(Instant::now);
+        let result = async {
+            let session = target.session.clone();
+            let observed = tokio::task::spawn_blocking(move || match after_sequence {
+                Some(sequence) => {
+                    session.observe_after(include_screenshot, include_elements, Some(sequence))
+                }
+                None => session.observe(include_screenshot, include_elements),
+            })
+            .await
+            .map_err(join_error)??;
+            let observation_id = uuid::Uuid::new_v4().to_string();
+            let mut public_elements = Vec::with_capacity(observed.elements.len());
+            let mut native_elements = HashMap::with_capacity(observed.elements.len());
+            for (element, native) in observed.elements {
+                native_elements.insert(element.element_id.clone(), native);
+                public_elements.push(element);
             }
-            None => session.observe(include_screenshot, include_elements),
-        })
-        .await
-        .map_err(join_error)??;
-        let observation_id = uuid::Uuid::new_v4().to_string();
-        let mut public_elements = Vec::with_capacity(observed.elements.len());
-        let mut native_elements = HashMap::with_capacity(observed.elements.len());
-        for (element, native) in observed.elements {
-            native_elements.insert(element.element_id.clone(), native);
-            public_elements.push(element);
+            let encoding_started = started.map(|_| Instant::now());
+            let screenshot_base64 = observed.screenshot_png.map(|bytes| STANDARD.encode(bytes));
+            if let Some(encoding_started) = encoding_started {
+                tracing::debug!(
+                    target: "chatcmd_runtime::desktop::timing",
+                    phase = "screenshot_base64",
+                    elapsed_us = u64::try_from(encoding_started.elapsed().as_micros())
+                        .unwrap_or(u64::MAX),
+                    "desktop timing"
+                );
+            }
+            let mut state = self.state.lock().await;
+            prune_observations(&mut state);
+            state.observations.insert(
+                observation_id.clone(),
+                ObservationRecord {
+                    owner: owner(context),
+                    target: target.clone(),
+                    created_at: Instant::now(),
+                    elements: native_elements,
+                },
+            );
+            Ok(DesktopObservation {
+                observation_id,
+                window: target.info,
+                elements: public_elements,
+                elements_truncated: observed.elements_truncated,
+                screenshot_base64,
+            })
         }
-        let screenshot_base64 = observed.screenshot_png.map(|bytes| STANDARD.encode(bytes));
-        let mut state = self.state.lock().await;
-        prune_observations(&mut state);
-        state.observations.insert(
-            observation_id.clone(),
-            ObservationRecord {
-                owner: owner(context),
-                target: target.clone(),
-                created_at: Instant::now(),
-                elements: native_elements,
-            },
-        );
-        Ok(DesktopObservation {
-            observation_id,
-            window: target.info,
-            elements: public_elements,
-            elements_truncated: observed.elements_truncated,
-            screenshot_base64,
-        })
+        .await;
+        if let Some(started) = started {
+            tracing::debug!(
+                target: "chatcmd_runtime::desktop::timing",
+                phase = "observe_service_total",
+                elapsed_us = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
+                success = result.is_ok(),
+                "desktop timing"
+            );
+        }
+        result
     }
 }

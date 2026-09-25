@@ -90,6 +90,13 @@ pub(super) fn error_value(error: &RuntimeError) -> Value {
 fn error_recovery(error: &RuntimeError) -> (&'static str, &'static str) {
     match error.code.as_str() {
         "approval_required" => ("notStarted", "requestApproval"),
+        "approval_stale" => ("notStarted", "requestApprovalAgain"),
+        "policy_denied" => ("notStarted", "stopAndReportPolicyDenied"),
+        "desktop_target_denied"
+        | "desktop_sensitive_input_denied"
+        | "desktop_password_input_denied"
+        | "desktop_key_denied" => ("notStarted", "stopAndReportDenied"),
+        "desktop_action_outcome_unknown" => ("unknown", "observeAgainWithoutRepeatingAction"),
         "git_scope_conflict"
         | "commit_scope_required"
         | "invalid_commit_scope"

@@ -11,6 +11,18 @@ fn dimensions_are_bounded() {
 }
 
 #[test]
+fn brave_is_accepted_by_browser_session_contract() {
+    let request: ComputerSessionStartRequest = serde_json::from_value(serde_json::json!({
+        "browser": "brave",
+        "startUrl": "about:blank"
+    }))
+    .expect("deserialize Brave session request");
+    assert!(matches!(request.browser, ComputerBrowser::Brave));
+    let encoded = serde_json::to_value(request.browser).expect("serialize Brave browser");
+    assert_eq!(encoded, "brave");
+}
+
+#[test]
 fn session_owner_is_task_scoped() {
     let mut first = OperationContext::new("one", "agent", "computer_observe");
     first.task_id = Some("task-one".into());
@@ -104,6 +116,77 @@ async fn isolated_chrome_can_capture_without_desktop_input() {
 
 #[cfg(target_os = "windows")]
 #[tokio::test]
+#[ignore = "requires an installed Brave browser"]
+async fn isolated_brave_can_capture_without_desktop_input() {
+    let service = ComputerControlService::new();
+    let context = OperationContext::new("brave-smoke", "test-agent", "computer_session_start");
+    let info = service
+        .start(
+            &context,
+            ComputerSessionStartRequest {
+                browser: ComputerBrowser::Brave,
+                start_url: "about:blank".into(),
+                width: 800,
+                height: 600,
+            },
+        )
+        .await
+        .expect("start isolated Brave");
+    assert!(info.headless && info.isolated_profile);
+    let observation = service
+        .observe(&context, &info.session_id)
+        .await
+        .expect("capture Brave screenshot");
+    assert_eq!(observation.url, "about:blank");
+    assert!(observation.screenshot_base64.is_some());
+    let session = service
+        .session_access(&context, &info.session_id)
+        .await
+        .expect("access Brave session");
+    session
+        .client
+        .lock()
+        .await
+        .break_connection_for_test()
+        .await
+        .expect("break CDP connection");
+    let recovered = service
+        .observe(&context, &info.session_id)
+        .await
+        .expect("reconnect read-only Brave observation");
+    assert_eq!(recovered.url, "about:blank");
+    session
+        .client
+        .lock()
+        .await
+        .break_connection_for_test()
+        .await
+        .expect("break CDP connection again");
+    let stopped = service
+        .act(
+            &context,
+            ComputerActRequest {
+                session_id: info.session_id.clone(),
+                actions: vec![ComputerAction::Screenshot],
+                screenshot_after: true,
+            },
+        )
+        .await
+        .expect("report action outcome without replay");
+    assert_eq!(stopped.completed_action_count, Some(0));
+    assert!(
+        stopped
+            .execution_warning
+            .is_some_and(|warning| !warning.retry_action)
+    );
+    service
+        .close(&context, &info.session_id)
+        .await
+        .expect("close isolated Brave");
+}
+
+#[cfg(target_os = "windows")]
+#[tokio::test]
 #[ignore = "requires an installed Chrome browser"]
 async fn isolated_chrome_executes_pointer_free_actions() {
     let (url, server) = serve_test_page().await;
@@ -149,6 +232,8 @@ async fn isolated_chrome_executes_pointer_free_actions() {
         .expect("execute actions");
     assert_eq!(after.url, url);
     assert_ne!(after.screenshot_base64, before.screenshot_base64);
+    assert_eq!(after.completed_action_count, Some(3));
+    assert!(after.execution_warning.is_none());
     service
         .close(&context, &info.session_id)
         .await
