@@ -8,6 +8,7 @@ import {
 import { PageHeading } from '../components';
 import { useAppLanguage } from '../i18n';
 import { extensionCopy } from './copy';
+import { isExtensionVersionOutdated } from './version';
 
 type SupportedBrowser = 'chrome' | 'edge' | 'brave';
 type BraveNavigator = Navigator & { brave?: { isBrave?: () => Promise<boolean> } };
@@ -45,7 +46,7 @@ export function ExtensionSetupPage() {
 
   useEffect(() => { void check(); }, [check]);
 
-  const compatible = status?.ready === true && status.extensionVersion === REQUIRED_CHATGPT_EXTENSION_VERSION;
+  const compatible = status?.ready === true && !isExtensionVersionOutdated(status.extensionVersion, REQUIRED_CHATGPT_EXTENSION_VERSION);
   const statusLabel = compatible ? copy.connected : status?.ready ? copy.outdated : copy.missing;
   const statusClass = compatible ? 'good' : 'warn';
 

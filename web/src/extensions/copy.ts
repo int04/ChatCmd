@@ -4,7 +4,7 @@ const en = {
   popupMissingTitle: 'ChatGPT extension is not installed',
   popupMissingDescription: 'Install the ChatCMD browser extension to communicate with ChatGPT directly from this UI.',
   popupOutdatedTitle: 'ChatGPT extension needs an update',
-  popupOutdatedDescription: 'The connected extension does not match the version required by this ChatCMD build.',
+  popupOutdatedDescription: 'The connected extension is older than the minimum version required by this ChatCMD build.',
   goSetup: 'Open installation guide',
   close: 'Close',
   pageEyebrow: 'CHATGPT EXTENSION',
@@ -12,9 +12,9 @@ const en = {
   pageBody: 'ChatCMD ships the unpacked browser extension beside the application so you can load it directly in a Chromium-based browser.',
   connected: 'Extension ready',
   missing: 'Extension not detected',
-  outdated: 'Extension version mismatch',
+  outdated: 'Extension update required',
   currentVersion: 'Detected version',
-  requiredVersion: 'Required version',
+  requiredVersion: 'Minimum version',
   notDetected: 'Not detected',
   checkAgain: 'Check again',
   checking: 'Checking…',
@@ -31,7 +31,7 @@ const en = {
   step3Title: 'Load the packaged extension',
   step3Body: 'Choose Load unpacked, then select the chatgpt-extension folder that ships beside ChatCMD.',
   step4Title: 'Reload ChatCMD and verify',
-  step4Body: 'Return to ChatCMD, reload the page, then use Check again. ChatCMD currently requires extension version 0.1.20.',
+  step4Body: 'Return to ChatCMD, reload the page, then use Check again. ChatCMD currently requires extension version 0.1.20 or newer.',
 };
 
 type ExtensionCopy = { [K in keyof typeof en]: string };
@@ -40,7 +40,7 @@ const vi: ExtensionCopy = {
   popupMissingTitle: 'Bạn chưa cài tiện ích ChatGPT cho ChatCMD',
   popupMissingDescription: 'Cài tiện ích trình duyệt của ChatCMD để giao tiếp với ChatGPT trực tiếp ngay trên UI này.',
   popupOutdatedTitle: 'Tiện ích ChatGPT cần được cập nhật',
-  popupOutdatedDescription: 'Phiên bản tiện ích đang kết nối không khớp với phiên bản mà bản ChatCMD này yêu cầu.',
+  popupOutdatedDescription: 'Phiên bản tiện ích đang kết nối thấp hơn mức tối thiểu mà bản ChatCMD này yêu cầu.',
   goSetup: 'Mở hướng dẫn cài đặt',
   close: 'Đóng',
   pageEyebrow: 'TIỆN ÍCH CHATGPT',
@@ -48,9 +48,9 @@ const vi: ExtensionCopy = {
   pageBody: 'ChatCMD đính kèm sẵn extension dạng unpacked bên cạnh ứng dụng để bạn có thể nạp trực tiếp vào trình duyệt Chromium.',
   connected: 'Tiện ích đã sẵn sàng',
   missing: 'Chưa phát hiện tiện ích',
-  outdated: 'Sai phiên bản tiện ích',
+  outdated: 'Cần cập nhật tiện ích',
   currentVersion: 'Phiên bản phát hiện được',
-  requiredVersion: 'Phiên bản yêu cầu',
+  requiredVersion: 'Phiên bản tối thiểu',
   notDetected: 'Chưa phát hiện',
   checkAgain: 'Kiểm tra lại',
   checking: 'Đang kiểm tra…',
@@ -67,7 +67,7 @@ const vi: ExtensionCopy = {
   step3Title: 'Nạp extension đi kèm ChatCMD',
   step3Body: 'Chọn Load unpacked, sau đó chọn thư mục chatgpt-extension nằm cạnh bản cài ChatCMD.',
   step4Title: 'Reload ChatCMD và kiểm tra',
-  step4Body: 'Quay lại ChatCMD, reload trang rồi bấm Kiểm tra lại. ChatCMD hiện yêu cầu extension phiên bản 0.1.20.',
+  step4Body: 'Quay lại ChatCMD, reload trang rồi bấm Kiểm tra lại. ChatCMD hiện yêu cầu extension phiên bản 0.1.20 trở lên.',
 };
 
 export function extensionCopy(language: AppLanguage) {

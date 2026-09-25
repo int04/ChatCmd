@@ -9,6 +9,7 @@ import {
 } from '../chatgptBridge';
 import { useAppLanguage } from '../i18n';
 import { extensionCopy } from './copy';
+import { isExtensionVersionOutdated } from './version';
 import './extensionSetup.css';
 
 let startupExtensionCheck: Promise<ChatGptExtensionStatus> | undefined;
@@ -50,7 +51,7 @@ export function GlobalChatGptExtensionPrompt() {
   if (!status || dismissed || location.pathname === '/extension/setup') return null;
 
   const missing = !status.ready;
-  const outdated = status.ready && status.extensionVersion !== REQUIRED_CHATGPT_EXTENSION_VERSION;
+  const outdated = status.ready && isExtensionVersionOutdated(status.extensionVersion, REQUIRED_CHATGPT_EXTENSION_VERSION);
   if (!missing && !outdated) return null;
 
   const title = missing ? copy.popupMissingTitle : copy.popupOutdatedTitle;
