@@ -289,8 +289,6 @@ async function selectModel(model) {
   option.click();
   await delay(200);
 }
-
-
 function findModelSwitcherButton() {
   const selectors = [
     'button[data-testid="model-switcher-dropdown-button"]',
@@ -310,8 +308,6 @@ function findModelSwitcherButton() {
     return looksLikeModelLabel(cleanModelLabel(button.textContent || button.getAttribute('aria-label') || ''));
   }) || null;
 }
-
-
 function looksLikeModelLabel(value) {
   const text = String(value || '').trim();
   if (!text) return false;
@@ -458,7 +454,6 @@ async function progress(payload) {
 function renderReturnToChatCmd(enabled) {
   globalThis.ChatCmdConversationUi?.renderReturnToChatCmd(enabled);
 }
-
 function delay(ms) { return globalThis.ChatCmdCaptureClock?.sleep(ms) ?? new Promise((resolve) => setTimeout(resolve, ms)); }
 function errorMessage(error) { return error instanceof Error ? error.message : String(error || 'Lỗi khi thao tác ChatGPT.'); }
 
@@ -467,14 +462,20 @@ async function adoptObservedRequest(request, user = null) {
   const owner = { id: request.id, stopRequested: request.status === 'stop_requested',
     resultReported: false, retryCount: 0, startedAt: Date.now() };
   activeRequest = owner;
+  const currentUser = user || globalThis.ChatCmdTranscript.latestUser();
   owner.observer = globalThis.ChatCmdObserver.create(request.id, request.submittedContent, {
-    resumed: !user || Boolean(globalThis.ChatCmdObserver.restore(request.id)), user, current: () => activeRequest === owner && globalThis.ChatCmdRuntime.current(CONTENT_CONTEXT),
+    resumed: globalThis.ChatCmdObserver.matchesCheckpoint(request.id, currentUser),
+    user: currentUser, current: () => activeRequest === owner && globalThis.ChatCmdRuntime.current(CONTENT_CONTEXT),
   });
   try {
     document.documentElement.dataset.chatcmdRequestId = request.id;
     await owner.observer?.bind();
     const result = await waitForAssistant(0, request.id, request.submittedContent);
     if (requestObservationLost(owner)) return;
+    if (request.status === 'completed' && request.hasFinalResponse) {
+      await owner.observer?.flush(true);
+      return;
+    }
     const identity = currentConversationIdentity();
     await reportRequestResult({ requestId: request.id, status: owner.stopRequested ? 'stopped' : 'completed',
       conversationId: identity?.conversationId, conversationUrl: identity?.conversationUrl, assistantContent: result });

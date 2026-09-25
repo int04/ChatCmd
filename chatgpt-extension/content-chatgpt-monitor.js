@@ -17,14 +17,13 @@ globalThis.ChatCmdMonitor = Object.freeze({ create(api) {
     if (!api.activeRequest || api.activeRequest.id !== requestId || api.activeRequest.resultReported) return latestMessageText('assistant');
     const now = Date.now();
     const nodes = assistantNodes();
-    const latest = nodes.at(-1);
     const recorder = api.activeRequest.observer;
     if (recorder) {
       recorder.scan();
       if (!recorder.active) return recorder.answer;
       void recorder.flush(false, false);
     }
-    const text = recorder ? recorder.answer : (latest?.innerText?.trim() || latest?.textContent?.trim() || '');
+    const text = recorder ? recorder.answer : latestMessageText('assistant');
     const stopButton = findStopButton();
     const threadError = findThreadError();
 

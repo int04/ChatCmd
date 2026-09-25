@@ -14,6 +14,21 @@ async function handleNativeTurn(message, sender) {
   const bindings = await conversationBindings();
   const binding = bindings[conversationKey(id)];
   const localBaseUrl = localOrigin(binding?.localBaseUrl || approvalBaseUrl);
+  const marker = String(message.content || '').match(/\[\[CHATCMD-REQUEST:([a-f\d-]{36})\]\]/i)?.[1];
+  if (marker) {
+    let existing;
+    try { existing = await getJson(localBaseUrl, `/api/local/chatgpt/requests/${encodeURIComponent(marker)}`); }
+    catch { /* A native message may contain an unrelated marker. */ }
+    if (existing?.id === marker && existing.submittedContent?.includes(`[[CHATCMD-REQUEST:${marker}]]`)
+      && (!existing.conversationId || existing.conversationId === id || isProvisionalConversationId(existing.conversationId))) {
+      // The content script can lose its in-memory owner after a reload. Resume that
+      // request instead of enrolling the same browser turn as a second request.
+      if (!['running', 'queued', 'completed'].includes(existing.status)) return { ignored: true };
+      await chrome.storage.session.set({ [requestKey(marker)]: { tabId, localBaseUrl, conversationUrl: tab.url } });
+      await bindConversationTab(id, tabId, { requestId: marker, localBaseUrl });
+      return { request: existing, chatCmdTurn: true };
+    }
+  }
   const last = captureCapabilities.get(localBaseUrl) || 0;
   if (Date.now() - last > 30000) {
     let capabilities;

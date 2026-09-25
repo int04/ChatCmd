@@ -5,7 +5,7 @@ import { ChatGptBridgeTimeoutError } from './chatgpt/bridgeErrors';
 const REQUEST_TYPE = 'chatcmd-chatgpt-extension-request';
 const RESPONSE_TYPE = 'chatcmd-chatgpt-extension-response';
 
-export const REQUIRED_CHATGPT_EXTENSION_VERSION = '0.1.19';
+export const REQUIRED_CHATGPT_EXTENSION_VERSION = '0.1.20';
 
 
 type BridgeCommand =

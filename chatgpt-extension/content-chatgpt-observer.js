@@ -13,6 +13,8 @@
     let visibleAnswer = null;
     const prior = resumed ? restore(requestId) : null;
     const baseline = dom.latestUser()?.id;
+    const requestMarker = `[[CHATCMD-REQUEST:${requestId}]]`;
+    const ownsMarkedTurn = submittedContent.includes(requestMarker);
     let userId = prior?.userId || user?.id || null;
     let conversationId = prior?.conversationId || (user ? dom.conversationId() : '');
     let messages = Array.isArray(prior?.messages) ? prior.messages : [];
@@ -46,7 +48,9 @@
       const user = dom.latestUser();
       if (!user) return;
       if (!userId) {
-        if ((!resumed && user.id === baseline) || user.text !== dom.normalize(submittedContent)) return;
+        if ((!resumed && user.id === baseline)
+          || (user.text !== dom.normalize(submittedContent)
+            && !(ownsMarkedTurn && user.content.includes(requestMarker)))) return;
         userId = user.id;
         checkpoint();
       }
@@ -161,5 +165,9 @@
       get active() { return !stopped && current(); },
     };
   }
-  globalThis.ChatCmdObserver = Object.freeze({ create, restore });
+  function matchesCheckpoint(requestId, user) {
+    const saved = restore(requestId);
+    return Boolean(saved && user && saved.userId === user.id && saved.conversationId === globalThis.ChatCmdTranscript.conversationId());
+  }
+  globalThis.ChatCmdObserver = Object.freeze({ create, restore, matchesCheckpoint });
 })();

@@ -1,7 +1,7 @@
 // Read only ChatGPT's public rendered transcript. Never inspect private model/reasoning state.
 (() => {
-  const USERS = '[data-message-author-role="user"],[data-turn="user"]';
-  const TURNS = '[data-testid^="conversation-turn"], [data-turn="assistant"]';
+  const USERS = '[data-message-author-role="user"],[data-turn="user"],[data-chatgpt-search-unit-key$=":user"]';
+  const TURNS = '[data-testid^="conversation-turn"], [data-turn="assistant"], [data-chatgpt-search-unit-key$=":assistant"]';
   const EXCLUDED = 'button,svg,script,style,.sr-only,.visually-hidden,[hidden],[aria-hidden="true"],[role="alert"],'
     + '[data-chatcmd-ui],.chatcmd-return-button,.chatcmd-approval-panel,.clf-stream,.clf-stage,'
     + '[data-testid*="tool-call"],[data-tool-call-id],span[class*="tool-message"],'
@@ -18,8 +18,9 @@
     return /^(P|DIV|SECTION|LI|BR|PRE)$/.test(node.tagName) ? '\n' + text + '\n' : text;
   }
   function userText(node) {
-    const body = node.matches('[data-message-author-role="user"]') ? node
-      : node.querySelector('[data-message-author-role="user"]') || node;
+    const body = node.querySelector('[data-user-message-bubble]')
+      || (node.matches('[data-message-author-role="user"]') ? node
+        : node.querySelector('[data-message-author-role="user"]') || node);
     const parts = [...body.querySelectorAll('.whitespace-pre-wrap')]
       .filter((part) => !part.parentElement?.closest('.whitespace-pre-wrap'));
     return (parts.length ? parts.map(plainText).join('\n') : plainText(body)).trim();
@@ -36,6 +37,7 @@
     if (!node) return null;
     const content = userText(node);
     const id = node.getAttribute('data-message-id') || node.querySelector('[data-message-id]')?.getAttribute('data-message-id')
+      || node.getAttribute('data-chatgpt-search-message-ids')?.split(/\s+/)[0]
       || 'dom-user:' + (node.getAttribute('data-turn-id') || node.getAttribute('data-testid') || users.length - 1) + ':' + fingerprint(content);
     return { node, id, text: normalize(content), content };
   }
@@ -79,7 +81,7 @@
       .filter((node) => !node.matches('[data-turn="user"]') && !node.querySelector(USERS));
     const candidates = new Set();
     for (const root of roots) {
-      const blocks = [...root.querySelectorAll('.markdown,[data-interrupted]')];
+      const blocks = [...root.querySelectorAll('.markdown,[data-markdown-text-style="assistant-message"],[data-interrupted]')];
       if (root.matches('.markdown')) blocks.unshift(root);
       if (!blocks.length && root.matches('[data-message-author-role="assistant"]')) blocks.push(root);
       for (const block of blocks) {
@@ -88,7 +90,8 @@
         const tool = block.closest('[data-testid*="tool-call"],[data-tool-call-id],span[class*="tool-message"]');
         if (tool) continue;
         if (block.matches('[data-interrupted]') && block.querySelector('.markdown')) continue;
-        if (block.matches('.markdown') && block.parentElement?.closest('.markdown')) continue;
+        if (block.matches('.markdown,[data-markdown-text-style="assistant-message"]')
+          && block.parentElement?.closest('.markdown,[data-markdown-text-style="assistant-message"]')) continue;
         if (block.matches('[data-interrupted]') && block.parentElement?.closest('[data-interrupted]')) continue;
         candidates.add(block);
       }
@@ -96,7 +99,9 @@
     return [...candidates].sort((a, b) => a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1)
       .map((node) => ({ node, kind: node.closest('[data-interrupted]') ? 'commentary' : 'answer',
         content: markdown(node).replace(/\n{3,}/g, '\n\n').trim(),
-        messageId: node.closest('[data-message-id]')?.getAttribute('data-message-id') || '' }))
+        messageId: node.closest('[data-message-id]')?.getAttribute('data-message-id')
+          || node.closest('[data-chatgpt-selection-message-id]')?.getAttribute('data-chatgpt-selection-message-id')
+          || node.closest('[data-chatgpt-search-unit-key]')?.getAttribute('data-chatgpt-search-message-ids')?.split(/\s+/)[0] || '' }))
       .filter((part) => part.content);
   }
   globalThis.ChatCmdTranscript = Object.freeze({ latestUser, userText, readParts, normalize, conversationId });

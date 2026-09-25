@@ -171,7 +171,17 @@ async function bridgeRequestState(requestId, tabId) {
 
 async function handleProgress(message, tabId) {
   if (!message.requestId) throw new Error('ChatGPT progress thiếu request ID.');
-  const context = await requestContext(message.requestId);
+  let context = await requestContext(message.requestId);
+  if (!context && message.stage === 'observation' && tabId) {
+    const binding = (await conversationBindings())[conversationKey(message.conversationId)];
+    if (binding?.tabId === tabId && binding.requestId === message.requestId && binding.localBaseUrl) {
+      const request = await getJson(binding.localBaseUrl, `/api/local/chatgpt/requests/${encodeURIComponent(message.requestId)}`);
+      if (request?.id === message.requestId && request.conversationId === message.conversationId) {
+        context = { tabId, localBaseUrl: binding.localBaseUrl, conversationUrl: request.conversationUrl };
+        await chrome.storage.session.set({ [requestKey(message.requestId)]: context });
+      }
+    }
+  }
   if (!context) throw new Error('Không tìm thấy ChatCMD request context.');
   if (tabId && context.tabId !== tabId) throw new Error('ChatGPT progress đến từ tab không khớp.');
   if (message.stage === 'observation') {

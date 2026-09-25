@@ -22,13 +22,26 @@
   }
 
   function assistantNodes() {
-    return [...document.querySelectorAll('[data-message-author-role="assistant"]')].filter(isVisible);
+    return [...document.querySelectorAll('[data-message-author-role="assistant"],[data-chatgpt-search-unit-key$=":assistant"]')].filter(isVisible);
   }
 
   function latestMessageText(role) {
-    const nodes = [...document.querySelectorAll(`[data-message-author-role="${role}"]`)].filter(isVisible);
+    if (role === 'user') {
+      const current = globalThis.ChatCmdTranscript?.latestUser();
+      if (current) return current.content;
+    }
+    if (role === 'assistant') {
+      const user = globalThis.ChatCmdTranscript?.latestUser();
+      const answer = user && globalThis.ChatCmdTranscript.readParts(user).filter((part) => part.kind === 'answer').at(-1);
+      if (answer) return answer.content;
+    }
+    const selector = role === 'assistant'
+      ? '[data-message-author-role="assistant"],[data-chatgpt-search-unit-key$=":assistant"]'
+      : `[data-message-author-role="${role}"],[data-chatgpt-search-unit-key$=":${role}"]`;
+    const nodes = [...document.querySelectorAll(selector)].filter(isVisible);
     const latest = nodes.at(-1);
-    return latest?.innerText?.trim() || latest?.textContent?.trim() || '';
+    const body = role === 'assistant' ? latest?.querySelector('[data-markdown-text-style="assistant-message"]') || latest : latest?.querySelector('[data-user-message-bubble]') || latest;
+    return body?.innerText?.trim() || body?.textContent?.trim() || '';
   }
 
   function findThreadError() {
