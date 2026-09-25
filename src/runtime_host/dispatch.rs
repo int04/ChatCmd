@@ -5,6 +5,8 @@ use std::{
 
 mod artifact_tools;
 mod command_tools;
+mod computer_tools;
+mod desktop_tools;
 mod filesystem_tools;
 mod helpers;
 mod path_scopes;
@@ -87,6 +89,12 @@ impl RuntimeHost {
             return self
                 .dispatch_filesystem_tool(tool, &context, arguments, workspace)
                 .await;
+        }
+        if computer_tools::is_computer_tool(tool) {
+            return self.dispatch_computer_tool(tool, &context, arguments).await;
+        }
+        if desktop_tools::is_desktop_tool(tool) {
+            return self.dispatch_desktop_tool(tool, &context, arguments).await;
         }
 
         match tool {

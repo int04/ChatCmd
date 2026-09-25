@@ -41,6 +41,61 @@ tool_args!(SkillArgs {
     skill_id: String
 });
 tool_args!(ProcessArgs { process_id: u32 });
+tool_args!(ComputerSessionStartArgs {
+    #[serde(default)]
+    browser: chatcmd_runtime::ComputerBrowser,
+    #[serde(default = "default_computer_start_url")]
+    start_url: String,
+    #[serde(default = "default_computer_width")]
+    width: u32,
+    #[serde(default = "default_computer_height")]
+    height: u32
+});
+tool_args!(ComputerActArgs {
+    session_id: String,
+    actions: Vec<chatcmd_runtime::ComputerAction>,
+    #[serde(default = "default_true")]
+    screenshot_after: bool
+});
+tool_args!(DesktopObserveArgs {
+    window_id: String,
+    #[serde(default = "default_true")]
+    include_screenshot: bool,
+    #[serde(default = "default_true")]
+    include_elements: bool
+});
+
+#[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct DesktopElementActArgs {
+    #[serde(flatten)]
+    common: CommonToolArgs,
+    observation_id: String,
+    element_id: String,
+    #[serde(flatten)]
+    action: chatcmd_runtime::DesktopElementAction,
+}
+
+tool_args!(DesktopInputBeginArgs { window_id: String });
+tool_args!(DesktopInputActArgs {
+    input_session_id: String,
+    actions: Vec<chatcmd_runtime::DesktopInputAction>
+});
+tool_args!(DesktopInputEndArgs {
+    input_session_id: String
+});
+
+fn default_computer_start_url() -> String {
+    "about:blank".to_owned()
+}
+
+const fn default_computer_width() -> u32 {
+    1280
+}
+
+const fn default_computer_height() -> u32 {
+    800
+}
 tool_args!(ArtifactArgs {
     artifact_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

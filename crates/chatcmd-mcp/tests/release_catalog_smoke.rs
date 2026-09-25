@@ -108,7 +108,17 @@ async fn packaged_process_advertises_exact_manifest_contract_deterministically()
     assert!(names.iter().any(|name| name == "fs_replace_text"));
     assert!(names.iter().any(|name| name == "fs_apply_edits"));
     assert!(names.iter().any(|name| name == "project_context"));
-    assert_eq!(first_metadata.catalog_version, 8);
+    assert!(names.iter().any(|name| name == "computer_session_start"));
+    assert!(names.iter().any(|name| name == "computer_observe"));
+    assert!(names.iter().any(|name| name == "computer_act"));
+    assert!(names.iter().any(|name| name == "computer_session_close"));
+    assert!(names.iter().any(|name| name == "desktop_window_list"));
+    assert!(names.iter().any(|name| name == "desktop_window_observe"));
+    assert!(names.iter().any(|name| name == "desktop_element_act"));
+    assert!(names.iter().any(|name| name == "desktop_input_begin"));
+    assert!(names.iter().any(|name| name == "desktop_input_act"));
+    assert!(names.iter().any(|name| name == "desktop_input_end"));
+    assert_eq!(first_metadata.catalog_version, 10);
     let project_context = first
         .iter()
         .find(|tool| tool["name"] == "project_context")

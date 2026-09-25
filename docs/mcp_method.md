@@ -40,7 +40,60 @@ Quy tắc bằng chứng này áp dụng cho mọi ChatCMD tool: schema đang b�
 
 ---
 
-## 2. Shell / PTY methods
+## 2. Computer Use methods
+
+Computer Use có hai backend. Backend browser điều khiển một Chrome/Edge headless riêng qua Chrome
+DevTools Protocol (CDP). Mỗi session dùng profile tạm độc lập, DevTools chỉ bind `127.0.0.1`, không
+gửi input qua chuột hoặc bàn phím vật lý và không giành focus của ứng dụng user đang dùng. Session
+thuộc đúng agent + task; task khác cố dùng cùng `sessionId` sẽ nhận như session không tồn tại.
+
+| Method | Tham số chính | Ý nghĩa |
+|---|---|---|
+| `computer_session_start` | `browser?`, `startUrl?`, `width?`, `height?` | Khởi chạy browser headless cô lập. `browser` là `chrome` hoặc `edge`; URL chỉ nhận `http`, `https` hoặc `about:blank`; viewport giới hạn 640×480 đến 1920×1080. |
+| `computer_observe` | `sessionId` | Chụp viewport hiện tại, trả metadata URL/title/kích thước và một MCP `image` content PNG để model có thể quan sát trực tiếp. |
+| `computer_act` | `sessionId`, `actions[]`, `screenshotAfter?` | Thực thi tuần tự tối đa 32 action: `click`, `double_click`, `move`, `drag`, `scroll`, `keypress`, `type`, `navigate`, `wait`, `screenshot`. Mặc định chụp lại màn hình sau batch. |
+| `computer_session_close` | `sessionId` | Dừng browser process và xóa profile tạm. |
+
+Luồng khuyến nghị: `start → observe → act → observe/act ... → close`. Tọa độ action dùng pixel
+của viewport trả bởi `computer_observe`. Start/observe/act đều đi qua execution policy và approval;
+close là cleanup được phép để luôn có thể dừng session. Screenshot base64 không được lưu nguyên vào
+timeline/database; timeline chỉ giữ metadata kích thước, còn MCP response dùng image content native.
+
+Backend Windows desktop điều khiển một cửa sổ native đã mở. Mặc định nó dùng Windows UI Automation
+để thao tác semantic ở background và Windows Graphics Capture để chụp riêng cửa sổ, kể cả khi cửa
+sổ bị app khác che. Nó không tự động fallback sang `SendInput`.
+
+| Method | Tham số chính | Ý nghĩa |
+|---|---|---|
+| `desktop_window_list` | Không có tham số riêng | Liệt kê top-level window được phép điều khiển, trả opaque `windowId`; không lộ native handle. |
+| `desktop_window_observe` | `windowId`, `includeScreenshot?`, `includeElements?` | Chụp riêng cửa sổ và/hoặc đọc cây UI Automation; trả `observationId`, `elementId` và MCP `image` PNG khi yêu cầu screenshot. |
+| `desktop_element_act` | `observationId`, `elementId`, `action`, dữ liệu action nếu có | Thực hiện đúng một action semantic: `invoke`, `set_value`, `toggle`, `select`, `expand` hoặc `collapse`, không giành chuột/focus. |
+| `desktop_input_begin` | `windowId` | Bắt đầu chế độ takeover tường minh, đưa đúng target lên foreground và hiển thị viền/banner cảnh báo. |
+| `desktop_input_act` | `inputSessionId`, `actions[]` | Thực thi tối đa batch action input đã giới hạn: `click`, `double_click`, `move`, `drag`, `scroll`, `keypress`, `type`, `wait`. |
+| `desktop_input_end` | `inputSessionId` | Dừng takeover và gỡ overlay. |
+
+Luồng ưu tiên là `window_list → window_observe → element_act → window_observe ...`. Mỗi
+`observationId` và các `elementId` bên trong chỉ hợp lệ cho snapshot đã sinh ra chúng. Sau một action,
+thay đổi layout/modal, user tương tác xen kẽ, lỗi hoặc retry, caller phải observe lại; runtime từ chối
+observation stale để tránh tác động nhầm control.
+
+Chỉ dùng `desktop_input_begin → desktop_input_act → desktop_input_end` khi app không expose UI
+Automation pattern phù hợp và takeover đã qua authorization/approval. Takeover có thể giành chuột và
+bàn phím nên trong suốt session ChatCMD hiển thị viền nhấp nháy, click-through, luôn ở trên quanh
+target và banner **Computer control active — Press ESC to stop**. ESC hoạt động như global emergency
+stop. Nếu user chuyển focus khỏi đúng target window, runtime fail closed và hủy session trước input kế tiếp,
+không tiếp tục gõ vào app mới. Chỉ cho phép một takeover đồng thời; phím Windows/Meta bị từ chối.
+
+Các window/session/observation ID đều opaque và bound theo agent + task. Target filter loại terminal,
+Windows Run, đăng nhập/credential, password manager, Windows Security/anti-malware và chính
+ChatGPT/Codex/ChatCMD. Password field không được đọc hoặc điền. Cửa sổ minimized có thể không có
+frame mới và sẽ fail rõ ràng thay vì tự restore làm ảnh hưởng desktop user. Với app legacy/canvas mà
+cần cam kết tuyệt đối không tranh chấp input, phải chạy trong Windows session hoặc VM riêng; virtual
+desktop không phải isolation boundary.
+
+---
+
+## 3. Shell / PTY methods
 
 Các method này quản lý terminal session dạng PTY chạy lâu dài, dùng được đa nền tảng.
 
@@ -68,7 +121,7 @@ trong process runtime, nên restart làm evidence ref cũ thành unresolved/unkn
 
 ---
 
-## 3. Workspace và filesystem methods
+## 4. Workspace và filesystem methods
 
 Các method `fs_*` thao tác trực tiếp trong canonical workspace scope và tuân theo policy/path grant của ChatCMD.
 
@@ -103,7 +156,7 @@ Các method `fs_*` thao tác trực tiếp trong canonical workspace scope và t
 
 ---
 
-## 4. Git methods
+## 5. Git methods
 
 Các Git method được thiết kế để tránh shell interpolation và truyền argument có kiểm soát.
 
@@ -127,7 +180,7 @@ Git chạy với stdin/pager/credential prompt bị vô hiệu hóa; path luôn 
 
 ---
 
-## 5. Process methods
+## 6. Process methods
 
 | Method | Tham số chính | Ý nghĩa |
 |---|---|---|
@@ -137,7 +190,7 @@ Git chạy với stdin/pager/credential prompt bị vô hiệu hóa; path luôn 
 
 ---
 
-## 6. Skill methods
+## 7. Skill methods
 
 | Method | Tham số chính | Ý nghĩa |
 |---|---|---|
@@ -146,7 +199,7 @@ Git chạy với stdin/pager/credential prompt bị vô hiệu hóa; path luôn 
 
 ---
 
-## 7. Task methods
+## 8. Task methods
 
 | Method | Tham số chính | Ý nghĩa |
 |---|---|---|
@@ -158,7 +211,7 @@ Git chạy với stdin/pager/credential prompt bị vô hiệu hóa; path luôn 
 
 ---
 
-## 8. Agent lifecycle / orchestration methods
+## 9. Agent lifecycle / orchestration methods
 
 Đây là nhóm method điều phối vòng đời một turn giữa ChatGPT/agent và ChatCMD server.
 
@@ -175,7 +228,7 @@ Lưu ý: `fs_find`, `fs_search`, `fs_read_text`, các tool sửa file, shell, Gi
 
 ---
 
-## 9. Generated catalog, version và cache invalidation
+## 10. Generated catalog, version và cache invalidation
 
 `TOOL_NAMES` được sinh từ chính `McpServer::tool_router().list_all()` và sort deterministic. Không copy danh sách tool sang connector, UI, release script hoặc tài liệu.
 
@@ -196,7 +249,7 @@ Release gate cho catalog là `cargo test -p chatcmd-mcp --test release_catalog_s
 
 ---
 
-## 10. Luồng gọi mẫu
+## 11. Luồng gọi mẫu
 
 Một turn sửa code thông thường có thể có flow:
 
@@ -264,7 +317,7 @@ Nếu command/tool trả lỗi hoặc exit code khác 0, `agent_progress` phải
 
 ---
 
-## 11. Lưu ý khi bổ sung MCP method mới
+## 12. Lưu ý khi bổ sung MCP method mới
 
 Khi thêm/xóa/đổi tên MCP tool, cần đồng bộ ít nhất:
 

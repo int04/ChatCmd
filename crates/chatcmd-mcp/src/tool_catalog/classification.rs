@@ -11,10 +11,23 @@ fn operation_class(name: &str) -> ToolOperationClass {
         | "task_get"
         | "task_list"
         | "task_artifact_list"
-        | "blob_status" => ToolOperationClass::MetadataRead,
-        "fs_list" | "fs_list_v2" | "fs_stat" | "fs_batch_stat" | "fs_read_text"
-        | "fs_read_text_v2" | "fs_batch_read" | "fs_find" | "fs_search" | "task_artifact_read"
-        | "skill_read" | "skills_list" | "project_context" => ToolOperationClass::ContentRead,
+        | "blob_status"
+        | "desktop_window_list" => ToolOperationClass::MetadataRead,
+        "fs_list"
+        | "fs_list_v2"
+        | "fs_stat"
+        | "fs_batch_stat"
+        | "fs_read_text"
+        | "fs_read_text_v2"
+        | "fs_batch_read"
+        | "fs_find"
+        | "fs_search"
+        | "task_artifact_read"
+        | "skill_read"
+        | "skills_list"
+        | "project_context"
+        | "computer_observe"
+        | "desktop_window_observe" => ToolOperationClass::ContentRead,
         "fs_create_directory"
         | "fs_write_text"
         | "fs_write_raw"
@@ -33,9 +46,19 @@ fn operation_class(name: &str) -> ToolOperationClass {
         | "shell_write"
         | "shell_resize"
         | "task_artifact_create"
-        | "process_kill" => ToolOperationClass::Mutation,
-        "command_run" | "shell_create" | "git_status" | "git_diff" | "git_log" | "git_branch"
-        | "git_show" => ToolOperationClass::ProcessExecution,
+        | "process_kill"
+        | "computer_act"
+        | "desktop_element_act"
+        | "desktop_input_act" => ToolOperationClass::Mutation,
+        "command_run"
+        | "shell_create"
+        | "git_status"
+        | "git_diff"
+        | "git_log"
+        | "git_branch"
+        | "git_show"
+        | "computer_session_start"
+        | "desktop_input_begin" => ToolOperationClass::ProcessExecution,
         "task_set_execution_mode" => ToolOperationClass::PermissionChange,
         "agent_user_message"
         | "agent_progress"
@@ -45,7 +68,11 @@ fn operation_class(name: &str) -> ToolOperationClass {
         | "agent_turn_complete"
         | "shell_wait"
         | "shell_read" => ToolOperationClass::Lifecycle,
-        "blob_abort" | "shell_close" | "shell_signal" => ToolOperationClass::StopCleanup,
+        "blob_abort"
+        | "shell_close"
+        | "shell_signal"
+        | "computer_session_close"
+        | "desktop_input_end" => ToolOperationClass::StopCleanup,
         // A newly introduced tool must fail closed until it receives an
         // explicit semantic classification and catalog regression coverage.
         _ => ToolOperationClass::PermissionChange,
@@ -69,9 +96,16 @@ fn risk_class(name: &str) -> ToolRiskClass {
         | "task_get"
         | "task_list"
         | "task_artifact_list"
-        | "blob_status" => ToolRiskClass::MetadataRead,
-        "fs_read_text" | "fs_read_text_v2" | "fs_batch_read" | "task_artifact_read"
-        | "skill_read" | "shell_read" => ToolRiskClass::ContentRead,
+        | "blob_status"
+        | "desktop_window_list" => ToolRiskClass::MetadataRead,
+        "fs_read_text"
+        | "fs_read_text_v2"
+        | "fs_batch_read"
+        | "task_artifact_read"
+        | "skill_read"
+        | "shell_read"
+        | "computer_observe"
+        | "desktop_window_observe" => ToolRiskClass::ContentRead,
         "fs_find" | "fs_search" | "skills_list" | "project_context" => ToolRiskClass::ComputeRead,
         "fs_create_directory" | "blob_begin" | "blob_write_chunk" | "blob_seal" => {
             ToolRiskClass::Create
@@ -83,15 +117,30 @@ fn risk_class(name: &str) -> ToolRiskClass {
         | "workspace_index_rebuild"
         | "shell_write"
         | "shell_resize"
-        | "task_artifact_create" => ToolRiskClass::Modify,
+        | "task_artifact_create"
+        | "computer_act"
+        | "desktop_element_act"
+        | "desktop_input_act"
+        | "desktop_input_end" => ToolRiskClass::Modify,
         "fs_copy" | "fs_move" | "fs_restore_quarantine" => ToolRiskClass::MoveCopy,
-        "fs_delete" | "fs_quarantine_gc" | "process_kill" | "blob_abort" | "shell_close" => {
-            ToolRiskClass::Destructive
-        }
-        "command_run" | "shell_create" | "shell_wait" | "shell_signal" | "git_status"
-        | "git_diff" | "git_log" | "git_branch" | "git_show" | "git_commit" => {
-            ToolRiskClass::ProcessExecution
-        }
+        "fs_delete"
+        | "fs_quarantine_gc"
+        | "process_kill"
+        | "blob_abort"
+        | "shell_close"
+        | "computer_session_close" => ToolRiskClass::Destructive,
+        "command_run"
+        | "shell_create"
+        | "shell_wait"
+        | "shell_signal"
+        | "git_status"
+        | "git_diff"
+        | "git_log"
+        | "git_branch"
+        | "git_show"
+        | "git_commit"
+        | "computer_session_start"
+        | "desktop_input_begin" => ToolRiskClass::ProcessExecution,
         "task_set_execution_mode"
         | "agent_user_message"
         | "agent_progress"
@@ -150,6 +199,24 @@ fn result_schema(name: &str) -> Value {
         }
         "command_run" => serde_json::to_value(schemars::schema_for!(
             chatcmd_runtime::CommandExecutionResult
+        )),
+        "computer_session_start" => {
+            serde_json::to_value(schemars::schema_for!(chatcmd_runtime::ComputerSessionInfo))
+        }
+        "computer_observe" | "computer_act" => {
+            serde_json::to_value(schemars::schema_for!(chatcmd_runtime::ComputerObservation))
+        }
+        "desktop_window_list" => {
+            serde_json::to_value(schemars::schema_for!(chatcmd_runtime::DesktopWindowList))
+        }
+        "desktop_window_observe" => {
+            serde_json::to_value(schemars::schema_for!(chatcmd_runtime::DesktopObservation))
+        }
+        "desktop_element_act" => {
+            serde_json::to_value(schemars::schema_for!(chatcmd_runtime::DesktopActionResult))
+        }
+        "desktop_input_begin" | "desktop_input_act" => serde_json::to_value(schemars::schema_for!(
+            chatcmd_runtime::DesktopInputSessionInfo
         )),
         "project_context" => {
             serde_json::to_value(schemars::schema_for!(chatcmd_runtime::ProjectContextBundle))
@@ -213,6 +280,11 @@ fn is_mutating(name: &str) -> bool {
                 | "git_commit"
                 | "command_run"
                 | "process_kill"
+                | "computer_session_start"
+                | "computer_act"
+                | "desktop_element_act"
+                | "desktop_input_begin"
+                | "desktop_input_act"
         )
         || name.starts_with("shell_write")
         || name.starts_with("shell_signal")

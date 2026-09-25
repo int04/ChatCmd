@@ -23,7 +23,7 @@ use chatcmd_runtime::{
 use rmcp::{
     Peer, RoleServer,
     handler::server::wrapper::Parameters,
-    model::CallToolResult,
+    model::{CallToolResult, ContentBlock},
     schemars,
     service::RequestContext,
     tool, tool_router,
@@ -109,3 +109,8 @@ mod lib_tests;
 
 #[cfg(test)]
 mod c07_tests;
+
+#[cfg(test)]
+mod computer_contract_tests;
+#[cfg(test)]
+mod desktop_contract_tests;

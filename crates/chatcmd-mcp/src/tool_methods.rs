@@ -46,6 +46,56 @@ tool_methods!(
         "Inspect one execution device. Required field: deviceId."
     ),
     (
+        computer_session_start,
+        ComputerSessionStartArgs,
+        "Start an isolated headless Chrome or Edge session controlled through Chrome DevTools Protocol without moving the user's physical pointer or taking keyboard focus. Optional browser=chrome|edge, startUrl=http(s)|about:blank, width, and height. The browser uses a temporary profile and localhost-only DevTools endpoint. Returns sessionId."
+    ),
+    (
+        computer_observe,
+        SessionArgs,
+        "Capture the current viewport of an owned computer session as native MCP image content plus structured URL/title/viewport metadata. Required field: sessionId. This can expose sensitive page content and remains execution-policy controlled."
+    ),
+    (
+        computer_act,
+        ComputerActArgs,
+        "Execute 1-32 ordered actions in an owned isolated browser session, then return an updated screenshot by default. Required sessionId and actions. Supported action types: click, double_click, move, drag, scroll, keypress, type, navigate, wait, screenshot. Coordinates use the viewport pixels reported by computer_observe."
+    ),
+    (
+        computer_session_close,
+        SessionArgs,
+        "Stop an owned isolated computer session, terminate its browser process, and delete its temporary profile. Required field: sessionId."
+    ),
+    (
+        desktop_window_list,
+        NoArgs,
+        "List eligible top-level Windows application windows without taking focus. Returns opaque owner-scoped windowId values. Security, authentication, terminal, password-manager, ChatGPT, Codex, and ChatCMD windows are excluded."
+    ),
+    (
+        desktop_window_observe,
+        DesktopObserveArgs,
+        "Observe one eligible Windows application window by opaque windowId. By default returns a Windows.Graphics.Capture screenshot as native MCP image content plus structured UI Automation elements and an observationId. Optional includeScreenshot and includeElements can disable either channel. Capture does not move the pointer or take keyboard focus; minimized windows must be restored by the user."
+    ),
+    (
+        desktop_element_act,
+        DesktopElementActArgs,
+        "Perform one background UI Automation action against an element from a fresh desktop_window_observe snapshot without moving the pointer or taking focus. Required observationId, elementId, and action. Supported actions: invoke, set_value, toggle, select, expand, collapse. Every attempt invalidates the observation; observe again before the next action. This tool never silently falls back to physical input."
+    ),
+    (
+        desktop_input_begin,
+        DesktopInputBeginArgs,
+        "Begin an explicit interactive desktop takeover for one eligible window when UI Automation cannot complete the task. Required windowId. This takes foreground keyboard/mouse control, displays a blinking click-through border and the banner 'Computer control active - Press ESC to stop', and installs global ESC cancellation. Only one takeover may be active."
+    ),
+    (
+        desktop_input_act,
+        DesktopInputActArgs,
+        "Execute 1-32 ordered physical mouse/keyboard actions in an active desktop takeover. Required inputSessionId and actions. Supported types: click, double_click, move, drag, scroll, keypress, type, wait. Coordinates are relative to the target window. The session cancels instead of typing if ESC is pressed, the target closes, or another app receives focus."
+    ),
+    (
+        desktop_input_end,
+        DesktopInputEndArgs,
+        "End an owned interactive desktop takeover and remove its blinking border, banner, global ESC hotkey, and input lease. Required inputSessionId."
+    ),
+    (
         shell_create,
         ShellCreateArgs,
         "Create a persistent cross-platform PTY session. Canonical working-directory field is workingDirectory; cwd and initialWorkingDirectory are accepted compatibility aliases."

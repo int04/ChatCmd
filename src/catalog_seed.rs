@@ -9,12 +9,13 @@ pub(super) async fn seed_catalog(
 ) -> Result<(), chatcmd_core::StorageError> {
     let groups = vec![
         tool_group("group-device", "device", "Device", 10),
-        tool_group("group-terminal", "terminal", "Terminal", 20),
-        tool_group("group-files", "files", "Files & workspace", 30),
-        tool_group("group-git", "git", "Git", 40),
-        tool_group("group-process", "process", "Processes", 50),
-        tool_group("group-skills", "skills", "Skills", 60),
-        tool_group("group-tasks", "tasks", "Tasks & agent lifecycle", 70),
+        tool_group("group-computer", "computer", "Computer Use", 20),
+        tool_group("group-terminal", "terminal", "Terminal", 30),
+        tool_group("group-files", "files", "Files & workspace", 40),
+        tool_group("group-git", "git", "Git", 50),
+        tool_group("group-process", "process", "Processes", 60),
+        tool_group("group-skills", "skills", "Skills", 70),
+        tool_group("group-tasks", "tasks", "Tasks & agent lifecycle", 80),
     ];
     let tools = chatcmd_mcp::TOOL_NAMES
         .iter()
@@ -25,12 +26,24 @@ pub(super) async fn seed_catalog(
             title: name.replace('_', " "),
             description: format!("Local {name} operation"),
             input_schema_json: "{}".to_owned(),
-            capabilities: if [
+            capabilities: if name == "computer_session_start" {
+                vec![ToolCapability::Execute, ToolCapability::Network]
+            } else if name == "desktop_input_begin" {
+                vec![ToolCapability::Execute]
+            } else if name == "computer_act" {
+                vec![ToolCapability::Write, ToolCapability::Network]
+            } else if matches!(
+                name.as_str(),
+                "desktop_element_act" | "desktop_input_act" | "desktop_input_end"
+            ) {
+                vec![ToolCapability::Write]
+            } else if [
                 "fs_delete",
                 "fs_move",
                 "git_commit",
                 "process_kill",
                 "shell_close",
+                "computer_session_close",
             ]
             .contains(&name.as_str())
             {
@@ -97,6 +110,8 @@ fn tool_group(id: &str, key: &str, display_name: &str, sort_order: i32) -> ToolG
 fn tool_group_id(name: &str) -> &'static str {
     if name.starts_with("device_") {
         "group-device"
+    } else if name.starts_with("computer_") || name.starts_with("desktop_") {
+        "group-computer"
     } else if name.starts_with("shell_") {
         "group-terminal"
     } else if name.starts_with("fs_") || name.starts_with("blob_") || name == "workspace_roots" {

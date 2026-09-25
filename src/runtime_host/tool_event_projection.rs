@@ -168,7 +168,7 @@ fn redaction_for_key(tool: &str, key: &str) -> Option<RedactionKind> {
     match normalized.as_str() {
         "content" | "database64" | "replacement" | "before" | "after" | "diff" | "patch"
         | "submittedcontent" => Some(RedactionKind::Content),
-        "base64" | "bytes" | "binary" => Some(RedactionKind::Binary),
+        "base64" | "screenshotbase64" | "bytes" | "binary" => Some(RedactionKind::Binary),
         "token" | "accesstoken" | "refreshtoken" | "authorization" | "bearertoken" | "password"
         | "secret" | "apikey" | "pathtoken" | "encryptionkey" => Some(RedactionKind::Credential),
         "environment" | "env" => Some(RedactionKind::Environment),
@@ -355,5 +355,17 @@ mod tests {
         );
         assert!(!input.public_summary.to_string().contains(marker));
         assert!(!output.public_summary.to_string().contains(marker));
+    }
+
+    #[test]
+    fn computer_screenshot_bytes_are_redacted_from_timeline_projection() {
+        let marker = "PNG-BASE64-MARKER";
+        let projection = project(
+            "computer_observe",
+            &json!({"sessionId":"session", "screenshotBase64":marker}),
+            EventLimits::default(),
+        );
+        assert!(!projection.public_summary.to_string().contains(marker));
+        assert!(projection.redactions.contains(&RedactionKind::Binary));
     }
 }

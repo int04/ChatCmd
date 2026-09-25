@@ -7,6 +7,7 @@ This directory contains technical and operational documentation for the open-sou
 - [Plugin and ChatGPT setup](PLUGIN_SETUP.md)
 - [Troubleshooting](TROUBLESHOOTING.md)
 - [MCP method reference](mcp_method.md)
+- [Computer Use architecture and rollout](computer-use.md)
 - [Diagnostic logs](logs.md)
 - [Local transport protocol](ENCRYPTION_PROTOCOL.md)
 - [Workspace path safety and traversal policy](workspace-path-safety.md)

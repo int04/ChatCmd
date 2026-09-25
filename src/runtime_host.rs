@@ -48,12 +48,10 @@ use chatcmd_runtime::{
 use chatcmd_storage::{PersistedWorkspaceIndex, PersistedWorkspaceIndexEntry, SqliteRepository};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use std::{
-    path::Path,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+use std::path::Path;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
 };
 use tokio::sync::{Mutex, broadcast};
 
@@ -76,6 +74,8 @@ pub(crate) struct RuntimeHost {
     git: GitService,
     command: CommandExecutionService,
     process: ProcessService,
+    computer: chatcmd_runtime::ComputerControlService,
+    desktop: chatcmd_runtime::DesktopControlService,
     skills: SkillService,
     events: broadcast::Sender<AppEvent>,
     activities: ActivityRegistry,
@@ -112,6 +112,8 @@ impl RuntimeHost {
             git,
             command,
             process,
+            computer: chatcmd_runtime::ComputerControlService::new(),
+            desktop: chatcmd_runtime::DesktopControlService::new(),
             skills,
             events,
             activities: ActivityRegistry::default(),
@@ -492,7 +494,6 @@ pub(super) fn storage_error(error: chatcmd_core::StorageError) -> RuntimeError {
 pub(super) fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| {
-            i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
-        })
+        .map(|duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
+        .unwrap_or(0)
 }

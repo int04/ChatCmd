@@ -53,7 +53,7 @@ impl McpServer {
         };
         let (context, value) = self.prepare_call(tool_name, arguments, authenticated);
         match self.runtime.call(tool_name, context, value).await {
-            Ok(value) => CallToolResult::structured(value),
+            Ok(value) => tool_result_with_image(value),
             Err(error) => CallToolResult::structured_error(error_value(&error)),
         }
     }
@@ -132,6 +132,18 @@ impl McpServer {
             }
         }
     }
+}
+
+fn tool_result_with_image(mut value: Value) -> CallToolResult {
+    let screenshot = value
+        .as_object_mut()
+        .and_then(|object| object.remove("screenshotBase64"))
+        .and_then(|value| value.as_str().map(str::to_owned));
+    let mut result = CallToolResult::structured(value);
+    if let Some(data) = screenshot {
+        result.content.push(ContentBlock::image(data, "image/png"));
+    }
+    result
 }
 
 fn missing_authenticated_context() -> CallToolResult {

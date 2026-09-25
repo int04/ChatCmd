@@ -11,6 +11,8 @@ mod command_execution_journal;
 mod command_execution_registry;
 mod command_runner;
 mod command_source_state;
+mod computer;
+mod desktop;
 mod filesystem;
 mod git_parser;
 mod git_service;
@@ -28,6 +30,8 @@ mod workspace_ignore;
 pub use blob_store::*;
 pub use budget::*;
 pub use command_runner::*;
+pub use computer::*;
+pub use desktop::*;
 pub use filesystem::{
     FileVersion, MutationFaultInjector, MutationJournalSink, SearchProgress, WorkspaceService,
 };
