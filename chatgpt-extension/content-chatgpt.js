@@ -85,7 +85,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (message?.type === 'chatcmd-chatgpt-identity-probe') {
     const identity = currentConversationIdentity();
-    sendResponse({ ok: true, requestId: document.documentElement?.dataset?.chatcmdRequestId, conversationId: identity?.conversationId, conversationUrl: identity?.conversationUrl, userText: latestMessageText('user') });
+    const requestMarkers = [...(document.body?.innerText || '').matchAll(/\[\[CHATCMD-REQUEST:([a-f\d-]{36})\]\]/gi)].map((match) => match[1]);
+    sendResponse({ ok: true, requestId: document.documentElement?.dataset?.chatcmdRequestId, requestMarkers, conversationId: identity?.conversationId, conversationUrl: identity?.conversationUrl, userText: globalThis.ChatCmdTranscript?.latestUser()?.content || latestMessageText('user') });
     return false;
   }
   return false;
@@ -109,9 +110,8 @@ async function runRequest(message) {
     if (owner) owner.observer = globalThis.ChatCmdObserver?.create(message.requestId, message.submittedContent, {
       current: () => activeRequest === owner && globalThis.ChatCmdRuntime.current(CONTENT_CONTEXT),
     });
-    await attachTextFiles(composer, message.attachments);
-    setComposerText(composer, message.submittedContent);
-    await submitPrompt(composer);
+    await attachFiles(composer, message.attachments);
+    await submitPrompt(message.submittedContent);
     ({ conversationId, conversationUrl } = await waitForConversationIdentity());
     started = true;
     await progress({
@@ -193,8 +193,13 @@ async function reportRequestResult(payload) {
     if (activeRequest.resultReported) return;
     await activeRequest.observer?.flush(payload.status === 'completed');
   }
-  await progress({ requestId: payload.requestId, stage: 'result', ...payload });
-  if (activeRequest?.id === payload.requestId) activeRequest.resultReported = true;
+  const reply = await progress({ requestId: payload.requestId, stage: 'result', ...payload });
+  if (payload.requestId.startsWith('subagent:') && reply?.completed !== true && reply?.terminalAcknowledged !== true) return false;
+  if (activeRequest?.id === payload.requestId) {
+    activeRequest.resultReported = true;
+    activeRequest.observer?.acknowledgeCompletion?.();
+  }
+  return true;
 }
 
 async function waitForComposer() {
@@ -284,8 +289,6 @@ async function selectModel(model) {
   option.click();
   await delay(200);
 }
-
-
 function findModelSwitcherButton() {
   const selectors = [
     'button[data-testid="model-switcher-dropdown-button"]',
@@ -305,8 +308,6 @@ function findModelSwitcherButton() {
     return looksLikeModelLabel(cleanModelLabel(button.textContent || button.getAttribute('aria-label') || ''));
   }) || null;
 }
-
-
 function looksLikeModelLabel(value) {
   const text = String(value || '').trim();
   if (!text) return false;
@@ -346,80 +347,16 @@ function setComposerText(composer, text) {
   composer.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: text }));
 }
 
-async function attachTextFiles(composer, rawAttachments) {
-  const attachments = normalizeTextFileAttachments(rawAttachments);
-  if (!attachments.length) return;
-  const files = attachments.map((attachment) => new File([attachment.content], attachment.name, {
-    type: attachment.mimeType,
-    lastModified: Date.now(),
-  }));
-  const input = findComposerFileInput(composer);
-  if (input) assignFilesToInput(input, files);
-  else pasteFilesIntoComposer(composer, files);
-  await waitFor(
-    () => files.every((file) => document.body?.textContent?.includes(file.name)) ? true : null,
-    12_000,
-    `ChatGPT không xác nhận tệp đính kèm ${files.map((file) => file.name).join(', ')}.`,
-  );
-}
-
-function normalizeTextFileAttachments(rawAttachments) {
-  if (!Array.isArray(rawAttachments)) return [];
-  return rawAttachments.flatMap((attachment, index) => {
-    if (!attachment || typeof attachment !== 'object' || typeof attachment.content !== 'string' || !attachment.content) return [];
-    const rawName = String(attachment.name || `pasted-text-${index + 1}.txt`).split(/[\\/]/).pop().trim();
-    const name = rawName.toLowerCase().endsWith('.txt') ? rawName : `${rawName || `pasted-text-${index + 1}`}.txt`;
-    return [{ name, content: attachment.content, mimeType: 'text/plain;charset=utf-8' }];
-  });
-}
-
-function findComposerFileInput(composer) {
-  const form = composer.closest('form');
-  const composerScope = composer.closest('[data-type="unified-composer"], [data-testid*="composer" i]');
-  const scoped = [
-    ...(form ? form.querySelectorAll('input[type="file"]') : []),
-    ...(composerScope && composerScope !== form ? composerScope.querySelectorAll('input[type="file"]') : []),
-  ].filter((input, index, items) => input instanceof HTMLInputElement && !input.disabled && items.indexOf(input) === index);
-  const compatibleScoped = scoped.filter((input) => fileInputScore(input) > 0);
-  if (compatibleScoped.length) return compatibleScoped.sort((left, right) => fileInputScore(right) - fileInputScore(left))[0];
-  const explicit = [...document.querySelectorAll('input[type="file"][data-testid*="composer" i], input[type="file"][data-testid*="upload" i]')]
-    .filter((input) => input instanceof HTMLInputElement && !input.disabled && fileInputScore(input) > 0);
-  return explicit.sort((left, right) => fileInputScore(right) - fileInputScore(left))[0] || null;
-}
-
-function fileInputScore(input) {
-  const accept = String(input.accept || '').toLowerCase();
-  if (!accept || accept.includes('text') || accept.includes('.txt') || accept.includes('*/*')) return 3 + (input.multiple ? 1 : 0);
-  return 0;
-}
-
-function assignFilesToInput(input, files) {
-  const transfer = new DataTransfer();
-  for (const existing of input.files || []) transfer.items.add(existing);
-  for (const file of files) transfer.items.add(file);
-  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'files')?.set;
-  if (setter) setter.call(input, transfer.files); else input.files = transfer.files;
-  input.dispatchEvent(new Event('input', { bubbles: true }));
-  input.dispatchEvent(new Event('change', { bubbles: true }));
-}
-
-function pasteFilesIntoComposer(composer, files) {
-  const transfer = new DataTransfer();
-  for (const file of files) transfer.items.add(file);
-  const event = new ClipboardEvent('paste', { bubbles: true, cancelable: true, composed: true, clipboardData: transfer });
-  composer.dispatchEvent(event);
-}
-
-async function submitPrompt(composer) {
-  await delay(100);
-  const button = await waitFor(findSendButton, 5_000, 'Không tìm thấy nút gửi của ChatGPT.');
-  if (button.disabled || button.getAttribute('aria-disabled') === 'true') {
-    await waitFor(() => !button.disabled && button.getAttribute('aria-disabled') !== 'true' ? button : null, 20_000, 'Nút gửi ChatGPT đang bị vô hiệu hóa hoặc tệp đính kèm chưa tải xong.');
-  }
-  button.click();
-  composer.blur();
-}
-
+const composerBridge = globalThis.ChatCmdComposerBridge.create({
+  findComposer: (...args) => findComposer(...args),
+  findSendButton: (...args) => findSendButton(...args),
+  findStopButton: (...args) => findStopButton(...args),
+  setComposerText: (...args) => setComposerText(...args),
+  waitFor: (...args) => waitFor(...args),
+  delay: (...args) => delay(...args),
+});
+const attachFiles = (...args) => composerBridge.attachFiles(...args);
+let submitPrompt = (...args) => composerBridge.submitPrompt(...args);
 async function waitForConversationIdentity() {
   return waitFor(currentConversationIdentity, 15_000, 'ChatGPT chưa tạo conversation ID trên URL.');
 }
@@ -434,7 +371,7 @@ function currentConversationIdentity() {
 }
 
 function isProvisionalConversationId(value) {
-  return /^WEB:/i.test(String(value || ''));
+  return /^(?:WEB:|local-chatgpt:)/i.test(String(value || ''));
 }
 
 async function requestState(requestId) {
@@ -454,21 +391,30 @@ async function requestState(requestId) {
   }
 }
 
-async function reportBrowserCompletion(requestId, assistantContent) {
+async function reportBrowserCompletion(requestId, assistantContent, completionEvidence) {
   const recorder = activeRequest?.id === requestId ? activeRequest.observer : null;
   if (recorder && !await recorder.flush(true)) return false;
+  if (requestId.startsWith('subagent:') && recorder) {
+    recorder.scan();
+    if (!recorder.active || recorder.answer !== assistantContent
+      || recorder.completionEvidence?.assistantMessageId !== completionEvidence?.assistantMessageId) return false;
+  }
   if (!globalThis.ChatCmdRuntime.current(CONTENT_CONTEXT)) return false; const identity = currentConversationIdentity();
   try {
     const response = await globalThis.ChatCmdRuntime.sendMessage({
       type: 'chatcmd-chatgpt-progress',
       stage: 'browser-completed',
       requestId,
+      completionEvidence,
       conversationId: identity?.conversationId,
       conversationUrl: identity?.conversationUrl || window.location.href,
       assistantContent,
     });
     if (response?.ok !== true || response.browserCompleted !== true || response.hasFinalResponse !== true) return false;
-    if (activeRequest?.id === requestId) activeRequest.resultReported = true;
+    if (activeRequest?.id === requestId) {
+      activeRequest.resultReported = true;
+      activeRequest.observer?.acknowledgeCompletion?.();
+    }
     return true;
   } catch (error) {
     if (!globalThis.ChatCmdRuntime.invalidated(error)) console.warn('[ChatCMD bridge] Không thể xác nhận raw bubble với backend.', error);
@@ -477,10 +423,9 @@ async function reportBrowserCompletion(requestId, assistantContent) {
 }
 
 async function retryPrompt(requestId, content, reason, continuesPreviousProgress) {
-  const composer = await waitForComposer();
+  await waitForComposer();
   const retryCount = (activeRequest?.retryCount || 0) + 1;
-  setComposerText(composer, content);
-  await submitPrompt(composer);
+  await submitPrompt(content);
   if (activeRequest?.id === requestId) activeRequest.retryCount = retryCount;
   await progress({ requestId, stage: 'retrying', retryCount, reason, continuesPreviousProgress });
 }
@@ -509,7 +454,6 @@ async function progress(payload) {
 function renderReturnToChatCmd(enabled) {
   globalThis.ChatCmdConversationUi?.renderReturnToChatCmd(enabled);
 }
-
 function delay(ms) { return globalThis.ChatCmdCaptureClock?.sleep(ms) ?? new Promise((resolve) => setTimeout(resolve, ms)); }
 function errorMessage(error) { return error instanceof Error ? error.message : String(error || 'Lỗi khi thao tác ChatGPT.'); }
 
@@ -518,14 +462,20 @@ async function adoptObservedRequest(request, user = null) {
   const owner = { id: request.id, stopRequested: request.status === 'stop_requested',
     resultReported: false, retryCount: 0, startedAt: Date.now() };
   activeRequest = owner;
+  const currentUser = user || globalThis.ChatCmdTranscript.latestUser();
   owner.observer = globalThis.ChatCmdObserver.create(request.id, request.submittedContent, {
-    resumed: !user || Boolean(globalThis.ChatCmdObserver.restore(request.id)), user, current: () => activeRequest === owner && globalThis.ChatCmdRuntime.current(CONTENT_CONTEXT),
+    resumed: globalThis.ChatCmdObserver.matchesCheckpoint(request.id, currentUser),
+    user: currentUser, current: () => activeRequest === owner && globalThis.ChatCmdRuntime.current(CONTENT_CONTEXT),
   });
   try {
     document.documentElement.dataset.chatcmdRequestId = request.id;
     await owner.observer?.bind();
     const result = await waitForAssistant(0, request.id, request.submittedContent);
     if (requestObservationLost(owner)) return;
+    if (request.status === 'completed' && request.hasFinalResponse) {
+      await owner.observer?.flush(true);
+      return;
+    }
     const identity = currentConversationIdentity();
     await reportRequestResult({ requestId: request.id, status: owner.stopRequested ? 'stopped' : 'completed',
       conversationId: identity?.conversationId, conversationUrl: identity?.conversationUrl, assistantContent: result });

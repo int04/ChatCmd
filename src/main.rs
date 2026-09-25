@@ -9,6 +9,7 @@ mod api;
 mod catalog_seed;
 mod chatgpt_message;
 mod chatgpt_queue;
+mod chatgpt_routing;
 mod chatgpt_transcript;
 #[cfg(all(not(debug_assertions), any(target_os = "windows", target_os = "macos")))]
 mod desktop_tray;
@@ -16,6 +17,7 @@ mod desktop_tray;
 mod embedded_web;
 mod gui_auth;
 mod log_helper;
+mod mcp_origin_policy;
 mod mutation_journal_bridge;
 mod runtime_host;
 mod updater;
@@ -32,7 +34,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use axum::{Router, routing::get};
 use chatcmd_core::PolicyLookup;
-use chatcmd_mcp::{AuthProvider, HttpSecurity, McpServer, OriginPolicy};
+use chatcmd_mcp::{AuthProvider, HttpSecurity, McpServer};
 use chatcmd_runtime::{
     ApprovalDecision, BoxFuture, CommandExecutionService, EventSink, ExecutionPolicy, GitService,
     PolicyDecision, PolicyEngine, ProcessService, RuntimeConfig, RuntimeError, RuntimeResult,
@@ -46,6 +48,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 
 use catalog_seed::seed_catalog;
+use mcp_origin_policy::ConfiguredOrigins;
 use tracing::info;
 
 use runtime_host::RuntimeHost;
@@ -257,10 +260,11 @@ async fn run_server(ready: Option<std::sync::mpsc::Sender<()>>) -> Result<()> {
     let _finalization_watchdog = runtime.start_finalization_watchdog();
     let security = HttpSecurity::new(
         Arc::new(DatabaseAuth(repository.clone())),
-        Arc::new(LocalOrigins {
+        Arc::new(ConfiguredOrigins::new(
+            repository.clone(),
             port,
-            allow_missing: ip.is_loopback(),
-        }),
+            ip.is_loopback(),
+        )),
     );
     let mcp = chatcmd_mcp::axum_router_with_host_validation(
         McpServer::new(runtime.clone()),
@@ -371,34 +375,6 @@ impl AuthProvider for DatabaseAuth {
     }
 }
 
-struct LocalOrigins {
-    port: u16,
-    allow_missing: bool,
-}
-impl OriginPolicy for LocalOrigins {
-    fn authorize<'a>(&'a self, origin: &'a str) -> BoxFuture<'a, RuntimeResult<()>> {
-        Box::pin(async move {
-            let allowed = if origin.is_empty() {
-                self.allow_missing
-            } else {
-                [
-                    format!("http://localhost:{}", self.port),
-                    format!("http://127.0.0.1:{}", self.port),
-                    format!("https://localhost:{}", self.port),
-                    format!("https://127.0.0.1:{}", self.port),
-                ]
-                .iter()
-                .any(|candidate| candidate == origin)
-            };
-            if allowed {
-                Ok(())
-            } else {
-                Err(RuntimeError::new("origin_denied", "origin is not allowed"))
-            }
-        })
-    }
-}
-
 struct RejectApproval;
 impl ApprovalDecision for RejectApproval {
     fn request<'a>(
@@ -459,22 +435,6 @@ fn resolve_workspace_root() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[tokio::test]
-    async fn missing_origin_only_allowed_on_loopback() {
-        let local = LocalOrigins {
-            port: 8080,
-            allow_missing: true,
-        };
-        assert!(local.authorize("").await.is_ok());
-        let remote = LocalOrigins {
-            port: 8080,
-            allow_missing: false,
-        };
-        assert!(remote.authorize("").await.is_err());
-        assert!(local.authorize("http://localhost:8080").await.is_ok());
-        assert!(local.authorize("http://evil.example").await.is_err());
-    }
-
     #[test]
     fn trace_route_never_logs_mcp_tokens() {
         assert_eq!(trace_route("/mcp/super-secret-token"), "/mcp/{token}");

@@ -22,7 +22,7 @@ pub(crate) mod plan_prompt_persistence;
 mod queued_messages;
 mod subagent_concurrency;
 mod subagent_contract;
-mod subagent_fallback;
+pub(crate) mod subagent_fallback;
 #[cfg(test)]
 mod subagent_tests;
 mod subagents;

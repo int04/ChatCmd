@@ -1,5 +1,7 @@
 use chatcmd_mcp::catalog_hash;
-use chatcmd_runtime::{OperationContext, ShellCreateRequest};
+use chatcmd_runtime::OperationContext;
+#[cfg(unix)]
+use chatcmd_runtime::ShellCreateRequest;
 use serde_json::{Value, json};
 use sqlx::Row as _;
 use tempfile::TempDir;
@@ -8,6 +10,9 @@ use tokio::time::{Duration, timeout};
 use super::{
     RuntimeHost, inputs::SubagentApprovalGrantInput, now_ms, user_message_tests::test_host,
 };
+
+#[path = "subagent_startup_tests.rs"]
+mod startup;
 
 const PARENT_TASK_ID: &str = "task-subagent-parent";
 const PARENT_TURN_ID: &str = "turn-subagent-parent";
@@ -254,3 +259,4 @@ async fn extension_fallback_stays_pending_and_parent_wait_remains_active() {
 }
 
 mod regression;
+mod sync_authority;

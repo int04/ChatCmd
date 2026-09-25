@@ -8,6 +8,7 @@ const extensionRoot = __dirname;
 // Unit harness exposes runner locals; integration tests load its real IIFE through the manifest.
 const source = readFileSync(join(extensionRoot, 'content-chatgpt.js'), 'utf8').replace(/^\(\(\) => \{\r?\n/, '').replace(/\}\)\(\);\s*$/, '').replace('const waitForAssistant =', 'let waitForAssistant =');
 const monitorSource = readFileSync(join(extensionRoot, 'content-chatgpt-monitor.js'), 'utf8');
+const composeSource = readFileSync(join(extensionRoot, 'content-chatgpt-compose.js'), 'utf8');
 const runtimeSource = readFileSync(join(extensionRoot, 'content-runtime.js'), 'utf8');
 const recoverySource = readFileSync(join(extensionRoot, 'background-recovery.js'), 'utf8');
 const chatCmdSource = readFileSync(join(extensionRoot, 'content-chatcmd.js'), 'utf8');
@@ -51,7 +52,7 @@ function loadBridge(statusHandler = () => Promise.resolve({ ok: true, known: tru
   context.ChatCmdConversationDom = {
     assistantNodes: () => context.__assistantNodes,
     clickStopButton() {},
-    findSendButton: () => context.__sendButton,
+    findSendButton: () => typeof context.__sendButton === 'function' ? context.__sendButton() : context.__sendButton,
     findStopButton: () => typeof context.__stopButton === 'function' ? context.__stopButton() : context.__stopButton,
     findThreadError: () => context.__threadError || null,
     findVisible: () => null,
@@ -62,6 +63,7 @@ function loadBridge(statusHandler = () => Promise.resolve({ ok: true, known: tru
   vm.createContext(context);
   vm.runInContext(runtimeSource, context, { filename: 'content-runtime.js' });
   vm.runInContext(monitorSource, context, { filename: 'content-chatgpt-monitor.js' });
+  vm.runInContext(composeSource, context, { filename: 'content-chatgpt-compose.js' });
   vm.runInContext(source, context, { filename: 'content-chatgpt.js' });
   return context;
 }
@@ -201,7 +203,7 @@ test('backend final response completes without a browser ping or retry', async (
 });
 
 test('background exposes browser completion and the known status contract', async () => {
-  assert.match(backgroundSource, /importScripts\('background-io\.js', 'background-tabs\.js', 'approval-bridge\.js', 'background-recovery\.js', 'background-capture\.js', 'background-clock\.js', 'background-subagent-heartbeat\.js', 'compact-protocol\.js', 'background-compact-destination\.js', 'background-compact\.js'\)/);
+  assert.match(backgroundSource, /importScripts\('background-io\.js', 'background-tabs\.js', 'approval-bridge\.js', 'background-recovery\.js', 'background-capture\.js', 'background-clock\.js', 'background-subagent-heartbeat\.js', 'background-subagent-failure\.js', 'compact-protocol\.js', 'background-compact-destination\.js', 'background-compact\.js'\)/);
   assert.match(backgroundIoSource, /stage === 'browser-completed'/);
   assert.match(backgroundIoSource, /\/browser-completed/);
   assert.match(backgroundTabsSource, /conversationReady: ready/);
@@ -234,6 +236,50 @@ test('Vietnamese stop controls are detected by the shared DOM helper', () => {
   }
 });
 
+test('send control follows the composer and accepts the current Vietnamese label', () => {
+  class FakeElement {
+    constructor() { this.parentElement = null; }
+    getBoundingClientRect() { return { width: 10, height: 10 }; }
+  }
+  const localSend = new FakeElement();
+  const otherSend = new FakeElement();
+  const form = new FakeElement();
+  form.querySelectorAll = (selector) => selector === 'button[aria-label="Gửi"]' ? [localSend] : [];
+  const composer = new FakeElement();
+  composer.parentElement = form;
+  composer.closest = (selector) => selector === 'form' ? form : null;
+  const context = {
+    Element: FakeElement,
+    getComputedStyle: () => ({ visibility: 'visible', display: 'block' }),
+    document: { querySelectorAll: (selector) => selector === 'button[data-testid="send-button"]' ? [otherSend] : [] },
+    composer,
+    localSend,
+  };
+  vm.createContext(context);
+  vm.runInContext(domSource, context, { filename: 'content-chatgpt-dom.js' });
+  assert.equal(vm.runInContext('ChatCmdConversationDom.findSendButton(composer) === localSend', context), true);
+});
+
+test('send control accepts an unnamed submit button in the composer form', () => {
+  class FakeElement {
+    getBoundingClientRect() { return { width: 10, height: 10 }; }
+  }
+  const submit = new FakeElement();
+  const form = new FakeElement();
+  form.querySelectorAll = (selector) => selector === 'button[type="submit"]' ? [submit] : [];
+  const composer = { closest: () => form, parentElement: form };
+  const context = {
+    Element: FakeElement,
+    getComputedStyle: () => ({ visibility: 'visible', display: 'block' }),
+    document: { querySelectorAll: () => [] },
+    composer,
+    submit,
+  };
+  vm.createContext(context);
+  vm.runInContext(domSource, context, { filename: 'content-chatgpt-dom.js' });
+  assert.equal(vm.runInContext('ChatCmdConversationDom.findSendButton(composer) === submit', context), true);
+});
+
 test('a stop-like button outside the unified composer does not mark ChatGPT as generating', () => {
   class FakeElement {
     constructor(label = '') { this.label = label; this.textContent = ''; }
@@ -262,13 +308,18 @@ test('a stop-like button outside the unified composer does not mark ChatGPT as g
 
 test('content scripts load helpers before the request runner', () => {
   const entry = manifest.content_scripts.find((item) => item.matches.includes('https://chatgpt.com/*'));
-  assert.deepEqual(entry.js, ['content-runtime.js', 'content-chatgpt-clock.js', 'content-chatgpt-render.js', 'content-chatgpt-ui.js', 'content-chatgpt-dom.js', 'content-chatgpt-transcript.js', 'content-chatgpt-observer.js', 'content-chatgpt-approval-ui.js', 'content-chatgpt-monitor.js', 'content-chatgpt.js', 'compact-protocol.js', 'content-chatgpt-compact.js', 'content-chatgpt-resume.js', 'content-chatgpt-native.js']);
+  assert.deepEqual(entry.js, ['content-runtime.js', 'content-chatgpt-clock.js', 'content-chatgpt-render.js', 'content-chatgpt-ui.js', 'content-chatgpt-dom.js', 'content-chatgpt-transcript.js', 'content-chatgpt-observer.js', 'content-chatgpt-approval-ui.js', 'content-chatgpt-monitor.js', 'content-chatgpt-compose.js', 'content-chatgpt.js', 'compact-protocol.js', 'content-chatgpt-compact.js', 'content-chatgpt-resume.js', 'content-chatgpt-native.js']);
 });
 
 test('new project tabs wait for a stable ChatGPT composer before sending', () => {
   assert.match(backgroundIoSource, /async function waitForChatGptReady/);
   assert.match(backgroundTabsSource, /await waitForTab\(tab\.id\);\s*await waitForChatGptReady\(tab\.id\);\s*return tab;/);
-  assert.match(backgroundSource, /await waitForTab\(tab\.id\);\s*await waitForChatGptReady\(tab\.id\);\s*await sendToChatGpt\(tab\.id,/);
+  const startup = backgroundSource.slice(backgroundSource.indexOf('async function startSubagentRequestOnce'), backgroundSource.indexOf('const subagentClosures'));
+  assert.match(startup, /await waitForTab\(tab\.id\);\s*await waitForChatGptReady\(tab\.id\);/);
+  const ready = startup.indexOf('await waitForChatGptReady(tab.id)');
+  const recheck = startup.indexOf('const current = await postJson');
+  assert.ok(recheck > ready, 'recheck server attempt after composer readiness');
+  assert.ok(startup.indexOf('await sendToChatGpt(tab.id,') > recheck, 'submit only after the final state check');
 });
 
 test('all extension sources stay within the 500-line maintenance limit', () => {
@@ -276,8 +327,8 @@ test('all extension sources stay within the 500-line maintenance limit', () => {
   for (const [name, value] of Object.entries({
     'background.js': backgroundSource, 'background-io.js': backgroundIoSource,
     'background-tabs.js': backgroundTabsSource,
-    'content-chatgpt.js': source, 'content-chatgpt-dom.js': domSource,
-    'content-chatgpt-ui.js': uiHelperSource,
+    'content-chatgpt.js': source, 'content-chatgpt-compose.js': composeSource,
+    'content-chatgpt-dom.js': domSource, 'content-chatgpt-ui.js': uiHelperSource,
   })) assert.ok(lineCount(value) <= 500, `${name} has ${lineCount(value)} lines`);
 });
 
@@ -296,6 +347,44 @@ test('identity recovery binds by request id before falling back to prompt text',
   assert.match(backgroundSource, /rememberRecoveryRequest\(message\.requestId/);
   assert.match(recoverySource, /probe\.requestId === requestId/);
   assert.match(recoverySource, /chrome\.storage\.local\.set/);
+});
+
+test('local-chatgpt URLs remain provisional until ChatGPT assigns a real ID', () => {
+  const background = { URL };
+  vm.createContext(background);
+  vm.runInContext(backgroundIoSource, background, { filename: 'background-io.js' });
+  assert.equal(vm.runInContext("isProvisionalConversationId('local-chatgpt:temporary')", background), true);
+  const content = loadBridge();
+  assert.equal(vm.runInContext("isProvisionalConversationId('local-chatgpt:temporary')", content), true);
+});
+
+test('identity probe reads the current user turn from the new transcript layout', () => {
+  const context = loadBridge();
+  context.ChatCmdTranscript = { latestUser: () => ({ content: 'hello [[CHATCMD-REQUEST:request-1]]' }) };
+  context.document.body = { innerText: 'hello [[CHATCMD-REQUEST:11111111-1111-1111-1111-111111111111]]' };
+  let response;
+  context.__messageListener({ type: 'chatcmd-chatgpt-identity-probe' }, null, (value) => { response = value; });
+  assert.equal(response.userText, 'hello [[CHATCMD-REQUEST:request-1]]');
+  assert.equal(response.conversationId, 'test-conversation');
+  assert.equal(response.requestMarkers[0], '11111111-1111-1111-1111-111111111111');
+});
+
+test('identity recovery recognizes the request marker after a ChatGPT tab reload', async () => {
+  const recovery = recoverySource.slice(recoverySource.indexOf('async function recoverRequestIdentity'), recoverySource.indexOf('async function recoverIdentityFromTab'));
+  const context = {
+    localOrigin: () => 'http://127.0.0.1:8080',
+    normalizeIdentityText: (value) => String(value || '').replace(/\s+/g, ' ').trim(),
+    recoveryRequestContext: async () => null,
+    chatGptTabs: async () => [{ id: 12, url: 'https://chatgpt.com/c/real-id' }],
+    conversationIdFromUrl: () => 'real-id',
+    sendToChatGpt: async () => ({ conversationId: 'real-id', conversationUrl: 'https://chatgpt.com/c/real-id', requestMarkers: ['request-1'], userText: '' }),
+    persistRecoveredIdentity: async () => ({ recovered: true }),
+    logExtension: async () => {},
+  };
+  vm.createContext(context);
+  vm.runInContext(recovery, context);
+  const result = await vm.runInContext("recoverRequestIdentity({ requestId: 'request-1', submittedContent: 'Hello [[CHATCMD-REQUEST:request-1]] routing footer' })", context);
+  assert.equal(result.recovered, true);
 });
 
 test('terminal bridge paths release durable recovery state', () => {
@@ -343,6 +432,70 @@ test('runner never completes a stale observation under the next conversation ide
   `, context);
   await vm.runInContext("runRequest({ requestId: 'request-1', submittedContent: 'Hello' })", context);
   assert.equal(context.__results.length, 0);
+});
+
+test('submit reacquires the composer after an attachment rerender before clicking send', async () => {
+  const context = loadBridge();
+  vm.runInContext(`
+    globalThis.__now = 0;
+    globalThis.__writes = [];
+    globalThis.__clicks = 0;
+    globalThis.__blurs = 0;
+    Date.now = () => globalThis.__now;
+    const firstComposer = { value: '', blur() { globalThis.__blurs += 1; } };
+    const replacementComposer = { value: '', blur() { globalThis.__blurs += 1; } };
+    let currentComposer = firstComposer;
+    findComposer = () => currentComposer;
+    setComposerText = (composer, text) => {
+      globalThis.__writes.push(composer === firstComposer ? 'first' : 'replacement');
+      composer.value = text;
+      if (composer === firstComposer) currentComposer = replacementComposer;
+    };
+    globalThis.__sendButton = () => currentComposer.value === 'PROMPT' ? {
+      isConnected: true,
+      disabled: false,
+      getAttribute: () => null,
+      click() { globalThis.__clicks += 1; currentComposer.value = ''; },
+    } : null;
+    globalThis.__stopButton = null;
+    delay = async (ms) => { globalThis.__now += ms; };
+  `, context);
+
+  await vm.runInContext("submitPrompt('PROMPT')", context);
+  assert.deepEqual(Array.from(context.__writes), ['first', 'replacement']);
+  assert.equal(context.__clicks, 1);
+  assert.equal(context.__blurs, 1);
+});
+
+test('submit retries through the composer form when the send click is ignored', async () => {
+  const context = loadBridge();
+  vm.runInContext(`
+    globalThis.__clicks = 0;
+    globalThis.__submits = 0;
+    const form = { requestSubmit() { globalThis.__submits += 1; composer.value = ''; } };
+    const composer = { value: '', closest: () => form, blur() {} };
+    findComposer = () => composer;
+    setComposerText = (_, text) => { composer.value = text; };
+    globalThis.__sendButton = {
+      isConnected: true,
+      disabled: false,
+      getAttribute: () => null,
+      click() { globalThis.__clicks += 1; },
+    };
+    delay = async () => {};
+    waitFor = async (predicate, _timeout, message) => {
+      if (message === 'ChatGPT chưa xác nhận cú bấm nút gửi.') throw new Error(message);
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const result = predicate();
+        if (result) return result;
+      }
+      throw new Error(message);
+    };
+  `, context);
+
+  await vm.runInContext("submitPrompt('PROMPT')", context);
+  assert.equal(context.__clicks, 1);
+  assert.equal(context.__submits, 1);
 });
 
 test('page render bridge runs in MAIN at document_start while capture stays isolated', () => {

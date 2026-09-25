@@ -18,7 +18,11 @@ pub(crate) async fn request_for_turn(
     let row = sqlx::query("SELECT id,turn_id,submitted_content FROM chatgpt_bridge_requests WHERE task_id=? ORDER BY created_at_ms DESC,rowid DESC LIMIT 1")
         .bind(task_id).fetch_optional(repository.pool()).await?;
     let Some(row) = row else { return Ok(None) };
-    if !crate::chatgpt_message::equivalent(&row.get::<String, _>("submitted_content"), content) {
+    let routed = row.get::<String, _>("turn_id") == turn_id
+        || crate::chatgpt_routing::request_id(content) == Some(row.get::<String, _>("id").as_str());
+    if !routed
+        && !crate::chatgpt_message::equivalent(&row.get::<String, _>("submitted_content"), content)
+    {
         return Ok(None);
     }
     let request_id = row.get::<String, _>("id");

@@ -13,10 +13,10 @@ use crate::websocket::AppState;
 
 use super::{
     Problem, agents::*, auth::*, chatgpt::*, chatgpt_compact::*, chatgpt_completion::*,
-    chatgpt_native::*, chatgpt_observation::*, chatgpt_queue::*, chatgpt_result::*, custom_fonts::*, data::*,
-    folders::*, overview::*, plan_questions::*, sessions::*, settings::*, skills::*,
-    subagent_fallback::*, system::*, task_controls::*, task_delete::*, task_execution_mode::*,
-    task_views::*, tunnels::*, updates::*, workspaces::*,
+    chatgpt_native::*, chatgpt_observation::*, chatgpt_queue::*, chatgpt_result::*,
+    custom_fonts::*, data::*, folders::*, overview::*, plan_questions::*, sessions::*, settings::*,
+    skills::*, subagent_fallback::*, system::*, task_controls::*, task_delete::*,
+    task_execution_mode::*, task_views::*, tunnels::*, updates::*, workspaces::*,
 };
 
 pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
@@ -41,6 +41,7 @@ pub(crate) fn router(state: Arc<AppState>) -> Router<Arc<AppState>> {
             post(copy_plugin_link),
         )
         .route("/system/folder-picker", post(pick_project_folder))
+        .route("/system/file-picker", post(pick_file_path))
         .route(
             "/system/chatgpt-extension-folder/open",
             post(open_chatgpt_extension_folder),

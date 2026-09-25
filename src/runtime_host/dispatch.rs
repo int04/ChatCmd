@@ -462,15 +462,11 @@ impl RuntimeHost {
                 .await
             }
             "agent_subagent_start" => {
-                if !self
-                    .subagent_delegation_explicitly_requested(&context)
-                    .await?
-                {
-                    return Err(RuntimeError::new(
-                        "subagent_explicit_user_intent_required",
-                        "The current root user turn did not explicitly request multi-agent delegation. Continue in the current conversation instead of opening a child.",
-                    ));
-                }
+                // call_persisted already authenticated the agent/task and synchronized this
+                // exact turn. Repeat the sync guard here so direct internal dispatch cannot
+                // bypass the structured authorization boundary. Delegation eligibility is a
+                // runtime capability decision; never classify natural-language user content.
+                self.ensure_user_message_synced(&context).await?;
                 let input: SubagentStartInput = parse(arguments)?;
                 super::subagent_contract::validate_delegation_contract(&input)?;
                 self.register_subagent(

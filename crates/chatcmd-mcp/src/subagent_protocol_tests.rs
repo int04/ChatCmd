@@ -1,6 +1,6 @@
 use super::{
-    TextAction, child_completion_arguments, child_system_prompt, parse_text_action,
-    text_protocol_tool_names, tool_result_text,
+    TextAction, child_completion_arguments, child_system_prompt, is_runtime_owned_tool,
+    parse_text_action, text_protocol_tool_names, tool_result_text,
 };
 use rmcp::model::Tool;
 use serde_json::{Map, Value, json};
@@ -92,6 +92,49 @@ fn tool_result_truncation_remains_valid_and_explicit() {
     let value: Value = serde_json::from_str(&encoded).expect("envelope");
     assert_eq!(value["truncated"], true);
     assert!(value["continuation"].is_string());
+}
+
+#[test]
+fn child_tool_result_omits_parent_lifecycle_metadata() {
+    let encoded = tool_result_text(
+        Ok(json!({
+            "content": "file contents",
+            "taskId": "child-task",
+            "turnId": "child-turn",
+            "requiresFinalization": true,
+            "finalizer": "agent_turn_complete",
+            "completed": true,
+            "continuationInstruction": "finish the parent turn"
+        })),
+        10_000,
+    );
+    let envelope: Value = serde_json::from_str(&encoded).expect("envelope");
+    let content: Value =
+        serde_json::from_str(envelope["content"].as_str().expect("content")).expect("tool result");
+    assert_eq!(content["content"], "file contents");
+    assert_eq!(content["taskId"], "child-task");
+    assert_eq!(content["turnId"], "child-turn");
+    assert_eq!(content["completed"], true, "tool-owned status must survive");
+    for key in [
+        "requiresFinalization",
+        "finalizer",
+        "continuationInstruction",
+    ] {
+        assert!(content.get(key).is_none(), "unexpected child field {key}");
+    }
+}
+
+#[test]
+fn runtime_lifecycle_tools_are_filtered_without_hiding_skill_tools() {
+    for name in ["agent_user_message", "agent_turn_complete"] {
+        assert!(is_runtime_owned_tool(name), "expected runtime-owned {name}");
+    }
+    for name in ["skills_list", "skill_read", "fs_read_text_v2"] {
+        assert!(
+            !is_runtime_owned_tool(name),
+            "child-callable tool was hidden: {name}"
+        );
+    }
 }
 
 #[test]

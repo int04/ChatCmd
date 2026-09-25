@@ -1,4 +1,4 @@
-import { CircleAlert, CircleStop, ExternalLink, FileText, FolderOpen, LoaderCircle, PlugZap, Send, Unplug, X } from 'lucide-react';
+import { CircleAlert, CircleStop, ExternalLink, FolderOpen, LoaderCircle, PlugZap, Send, Unplug, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { api } from '../api';
@@ -8,6 +8,8 @@ import { tr } from '../i18n';
 import { canonicalProjectPath } from '../tasks/workspaceProjects';
 import { useLoad } from '../useLoad';
 import { ChatGptMessageQueuePanel, type ChatGptQueueMode } from './ChatGptMessageQueue';
+import { ComposerFileInput } from './ComposerFileInput';
+import { ChatGptAttachmentPreview } from './ChatGptAttachmentPreview';
 import { CompactAction, CompactStatusCard } from './compact/CompactControls';
 import { useCompact } from './compact/CompactProvider';
 import { useCompactBridgeSync } from './compact/useCompactBridgeSync';
@@ -85,7 +87,7 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
     return () => { disposed = true; window.clearInterval(timer); };
   }, [bridge.data?.activeRequestId, compactPaused, reloadBridge]);
   useEffect(() => {
-    if (conversationUrl || compactPaused) return;
+    if ((conversationUrl && !/^(?:WEB:|local-chatgpt:)/i.test(bridge.data?.conversationId || '')) || compactPaused) return;
     const requestId = bridge.data?.latestRequestId;
     const submittedContent = bridge.data?.latestSubmittedContent;
     if (!requestId || !submittedContent) return;
@@ -111,7 +113,7 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
     recover();
     const timer = window.setInterval(recover, 2_000);
     return () => { disposed = true; window.clearInterval(timer); };
-  }, [taskId, bridge.data?.latestRequestId, bridge.data?.latestSubmittedContent, conversationUrl, compactPaused, reloadBridge]);
+  }, [taskId, bridge.data?.latestRequestId, bridge.data?.latestSubmittedContent, bridge.data?.conversationId, conversationUrl, compactPaused, reloadBridge]);
   const prepareMessage = (message: string) => prepareChatGptMessage(message, {
     pluginName: attachedPlugin?.name,
     projectFolder: attachedProjectFolder,
@@ -247,10 +249,22 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
       {(attachedPlugin || attachedProjectFolder || textAttachments.length > 0) && <div className="chatgpt-message-attachments" aria-label={tr('Attachments for the next message')}>
         {attachedPlugin && <span><PlugZap />@{attachedPlugin.name}<button type="button" aria-label={tr('Remove attached plugin')} onClick={() => setAttachedAgentId('')}><X /></button></span>}
         {attachedProjectFolder && <span title={attachedProjectFolder}><FolderOpen />{attachedProjectFolder}<button type="button" aria-label={tr('Remove attached project')} onClick={() => setAttachedProjectFolder('')}><X /></button></span>}
-        {textAttachments.map((attachment) => <span key={attachment.id} title={tr('{name} · {count} characters', { name: attachment.name, count: attachment.content.length.toLocaleString() })}><FileText />{attachment.name}<button type="button" aria-label={tr('Remove file {name}', { name: attachment.name })} onClick={() => setTextAttachments((current) => current.filter((item) => item.id !== attachment.id))}><X /></button></span>)}
+        {textAttachments.map((attachment) => <ChatGptAttachmentPreview key={attachment.id} attachment={attachment} onRemove={() => setTextAttachments((current) => current.filter((item) => item.id !== attachment.id))} />)}
       </div>}
       <div className="chatgpt-composer-row">
-        <textarea aria-label={tr('Next message to ChatGPT')} rows={2} value={content} onChange={(event) => setContent(event.target.value)} onPaste={handlePaste} disabled={active || busy || compactPaused || bridgeSync || extensionReady === false || chatGptTabOpen === false} placeholder={answerCompletedWaitingForUi ? tr('Answer completed; waiting for the ChatGPT UI before continuing.') : active ? tr('ChatGPT is responding…') : tr('Continue the ChatGPT conversation…')} />
+        <ComposerFileInput
+          value={content}
+          setValue={setContent}
+          attachments={textAttachments}
+          setAttachments={setTextAttachments}
+          onPaste={handlePaste}
+          onError={setError}
+          disabled={active || busy || compactPaused || bridgeSync || extensionReady === false || chatGptTabOpen === false}
+          ariaLabel={tr('Next message to ChatGPT')}
+          placeholder={answerCompletedWaitingForUi ? tr('Answer completed; waiting for the ChatGPT UI before continuing.') : active ? tr('ChatGPT is responding…') : tr('Continue the ChatGPT conversation…')}
+          rows={2}
+          variant="task"
+        />
         {active ? <button type="button" className="chatgpt-stop-button" onClick={() => void stop()} disabled={busy || compactPaused || bridgeSync || bridge.data?.activeStatus === 'stop_requested'}><CircleStop /><span>{bridge.data?.activeStatus === 'stop_requested' ? tr('Stopping…') : tr('Stop')}</span></button>
           : <button type="submit" className="chatgpt-composer-send" disabled={busy || compactPaused || bridgeSync || extensionReady !== true || chatGptTabOpen !== true || chatGptReady !== true || (!content.trim() && textAttachments.length === 0)}><Send /><span>{tr('Send')}</span></button>}
       </div>

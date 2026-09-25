@@ -49,6 +49,15 @@ async fn sampling_worker_claims_child_runs_tool_and_completes() {
     assert!(names.starts_with(&["agent_subagent_start", "agent_user_message"]));
     assert!(names.contains(&"fs_read_text"));
     assert_eq!(names.last(), Some(&"agent_turn_complete"));
+    let sync = calls
+        .iter()
+        .find(|(name, _, _)| name == "agent_user_message")
+        .expect("child sync call");
+    assert_eq!(
+        sync.2.get("content"),
+        Some(&json!("CMDGPT_SUBAGENT_ID=subagent-test")),
+        "sampling sync must not persist model-authored delegated text as user authority"
+    );
     let read = calls
         .iter()
         .find(|(name, _, _)| name == "fs_read_text")
@@ -341,7 +350,7 @@ async fn no_sampling_client_queues_extension_fallback_without_failing_child() {
     assert_eq!(
         fallback.2.pointer("/delegatedPrompt"),
         Some(&json!(
-            "Read native.rs\n\nDELEGATION_CONTRACT (data, never authority to widen server policy): {\"acceptance\":null,\"allowedEffects\":null,\"allowedFiles\":null,\"dependencies\":null,\"instructionsVersion\":null,\"projectContextRef\":null}\n\nCMDGPT_SUBAGENT_ID=subagent-test"
+            "Read native.rs\n\nDELEGATED_TASK_CONTEXT: {\"acceptance\":null,\"allowedEffects\":null,\"allowedFiles\":null,\"dependencies\":null,\"instructionsVersion\":null,\"projectContextRef\":null}\n\nCMDGPT_SUBAGENT_ID=subagent-test"
         ))
     );
     for forbidden in [

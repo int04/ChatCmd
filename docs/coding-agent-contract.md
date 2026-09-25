@@ -28,17 +28,42 @@ hủy pending approval và thu hồi grant đang hoạt động cho task cùng d
 
 Một user turn hợp lệ có thứ tự:
 
-1. `agent_user_message` đúng một lần với nguyên văn message thật.
+1. `agent_user_message` đúng một lần. Root gửi nguyên văn message thật; registered browser child chỉ gửi standalone delegation marker. Runtime resolve marker bằng quan hệ task/child đã lưu, không dò text hay ngôn ngữ.
 2. `agent_progress` sớm cho công việc không tầm thường.
-3. Khám phá/đọc project skill và project context phù hợp trước thao tác liên quan.
+3. Root khám phá/đọc project skill và truyền requirements cần thiết vào delegated request. Registered child dùng parent context trước; chỉ discovery khi objective cần hoặc context bắt buộc chưa được cung cấp.
 4. Thực hiện tool calls với cùng `taskId`/`turnId`; progress tiếp theo chỉ báo kết quả quan sát được.
 5. Chờ mọi child bằng `agent_subagent_wait` và dọn pending activity.
 6. `agent_turn_complete` đúng một lần, là tool cuối.
+
+Sau khi turn đồng bộ thành công, `subagentPolicy.policyVersion=2`, `delegationAllowed=true`,
+`enabled=true` cùng `maxConcurrent>0` là opt-in có cấu trúc của user cho phép dùng sub-agent. Các field
+`decisionMode=modelJudgment`, `decisionSource=configuredConcurrency` và
+`delegationTextClassifierUsed=false` xác nhận model tự quyết định có chia việc hay không dựa trên khả
+năng tách phần việc, số slot còn lại, độ trễ dự kiến và chi phí tích hợp thay vì khớp text; không cần
+keyword, câu chữ hay ngôn ngữ cụ thể trong message. Khi `delegationAllowed=false`, `enabled=false`
+hoặc `maxConcurrent=0`, không tạo child. Việc bật delegation không mở rộng quyền: normal tool
+authorization, execution approval, approved-grant/path budget, cancellation, identity và security
+rules vẫn áp dụng đầy đủ cho parent và từng child. Các field context tùy chọn như
+`allowedFiles`/`allowedEffects` mô tả delegated scope nhưng tự chúng không cấp quyền.
+
+Mọi kết luận tool bị reject/block/deny phải dựa trên một invocation thực sự và giữ nguyên error
+code/state quan sát được. Schema bị ẩn/defer, discovery chưa gọi được tool, hoặc model chưa thực hiện
+call chỉ có nghĩa `not attempted`, không phải safety block. Chỉ quy nguyên nhân cho host/OpenAI safety,
+permission hoặc policy khi raw observed error nêu rõ nguyên nhân đó; discovery error chỉ là lỗi
+discovery, không phải kết quả gọi tool được tìm.
 
 Child registration là idempotent theo parent turn/name/request/grant request. `extensionFallback`
 nghĩa là browser extension có quyền claim child đã đăng ký; parent không được làm trùng phần việc.
 Child không tự kế thừa authority. Grant cho child phải là intersection có budget của một grant cha
 đang active và bị ràng buộc với child attempt.
+
+`agent_subagent_start` là owner duy nhất của dispatch: nó chọn sampling hoặc browser fallback và không
+được kết hợp với một child do host tạo riêng cho cùng request. Sampling runtime tự sync/finalize và
+không đưa các tool lifecycle của parent cho child model; skill tools vẫn dùng được khi required context
+chưa được cung cấp. Browser child dùng marker để sync; một browser answer chưa có MCP sync chỉ là
+observation chưa xác minh, phải retry/fail theo attempt state chứ không được coi là completed report.
+Path scope của child được lấy từ user events của task/ancestor qua quan hệ task bền vững; text do model
+đặt trong delegated request không tự tạo quyền path.
 
 ## 3. Clarification và execution consent
 
@@ -128,7 +153,9 @@ owner, scope, catalog hash, expiry, counters và active state.
 
 Catalog thêm field/tool theo hướng additive nhưng schema/capability change làm đổi `catalogHash`.
 Client phải reconnect, initialize và list tools lại; chỉ retry operation một lần sau refresh.
-Behavior wording có `instructionsVersion`/`instructionsHash` riêng.
+Behavior wording có `instructionsVersion`/`instructionsHash` riêng. Contract này dùng
+`coding-core-v3`; hash bao phủ cả parent bundle, delegated-child role và tool descriptions. Thay đổi
+hash/version không tự ép hosted connector refresh, nên rollout vẫn phải rebuild/restart và reconnect.
 
 ## 7. Rollout và rollback
 

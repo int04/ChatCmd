@@ -230,6 +230,64 @@ async fn started_and_result_callbacks_reach_handlers_through_nested_router() {
 }
 
 #[tokio::test]
+async fn completed_local_chatgpt_identity_upgrades_to_the_real_tab() {
+    let (state, app, _directory) = fixture("running").await;
+    let provisional = json!({
+        "conversationId": "local-chatgpt:temporary",
+        "conversationUrl": "https://chatgpt.com/g/g-p-test/c/local-chatgpt%3Atemporary"
+    });
+    expect_json(
+        extension_request(
+            &app,
+            "POST",
+            "/api/local/chatgpt/bridge/request-a/started",
+            provisional.clone(),
+        )
+        .await,
+        StatusCode::OK,
+    )
+    .await;
+    expect_json(
+        extension_request(
+            &app,
+            "POST",
+            "/api/local/chatgpt/bridge/request-a/result",
+            json!({
+                "status": "completed", "assistantContent": "OK",
+                "conversationId": provisional["conversationId"],
+                "conversationUrl": provisional["conversationUrl"]
+            }),
+        )
+        .await,
+        StatusCode::OK,
+    )
+    .await;
+    let real = json!({
+        "conversationId": "real-conversation",
+        "conversationUrl": "https://chatgpt.com/g/g-p-test/c/real-conversation"
+    });
+    expect_json(
+        extension_request(
+            &app,
+            "POST",
+            "/api/local/chatgpt/bridge/request-a/identity",
+            real.clone(),
+        )
+        .await,
+        StatusCode::OK,
+    )
+    .await;
+    let row: (String, String, String) = sqlx::query_as("SELECT c.conversation_id,c.conversation_url,t.conversation_scope_hash FROM chatgpt_conversations c JOIN tasks t ON t.id=c.task_id WHERE c.task_id='task-a'")
+        .fetch_one(state.repository.pool()).await.expect("upgraded conversation");
+    assert_eq!(row.0, "real-conversation");
+    assert_eq!(row.1, real["conversationUrl"].as_str().expect("real URL"));
+    assert_eq!(
+        row.2,
+        chatcmd_storage::compact::openai_scope("real-conversation")
+    );
+}
+
+#[tokio::test]
 async fn extension_allowlist_still_denies_management_and_wrong_actions() {
     let (_state, app, _directory) = fixture("completed").await;
     for (method, path) in [

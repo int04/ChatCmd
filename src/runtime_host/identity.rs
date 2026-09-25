@@ -1,5 +1,3 @@
-use std::collections::BTreeSet;
-
 use chatcmd_core::{
     AgentId, SessionId, SettingsStore as _, Task, TaskId, TaskSession, TaskStatus, TaskStore as _,
     TerminalSessionStatus, TurnBinding, TurnId,
@@ -9,6 +7,15 @@ use uuid::Uuid;
 
 use super::{RuntimeHost, invalid, now_ms, storage_error};
 
+#[path = "identity_bridge.rs"]
+mod bridge;
+#[path = "identity_routing.rs"]
+mod routing;
+#[path = "identity_scope.rs"]
+mod scope;
+#[cfg(test)]
+use bridge::unique_bridge_task_for_message;
+
 impl RuntimeHost {
     pub(super) async fn ensure_call_identity(
         &self,
@@ -16,37 +23,35 @@ impl RuntimeHost {
         first_user_message: Option<&str>,
     ) -> RuntimeResult<()> {
         let conversation_scope = context.conversation_scope_id.clone();
-        let explicit_task = context
+        let explicit = context
             .task_id
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_owned);
-        let bound_task = if explicit_task.is_none() {
+        let bound = if explicit.is_none() {
             self.bound_task_for_turn(context).await?
         } else {
             None
         };
-        let delegated_task = self
+        let delegated = self
             .delegated_subagent_task_id(context, first_user_message)
             .await?;
-        let chatgpt_bridge_task = if delegated_task.is_none() {
-            if let Some(message) = first_user_message {
-                self.chatgpt_bridge_task_for_message(
-                    &context.agent_id,
-                    context.task_id.as_deref(),
-                    message,
-                )
-                .await?
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        let mapped_scope_task =
-            if explicit_task.is_none() && delegated_task.is_none() && chatgpt_bridge_task.is_none()
-            {
+        let alias = self.mapped_mcp_scope_task(context).await?;
+        if alias.as_deref().is_some_and(|owner| {
+            explicit
+                .as_deref()
+                .or(bound.as_deref())
+                .or(delegated.as_deref())
+                .is_some_and(|expected| expected != owner)
+        }) {
+            return Err(RuntimeError::new(
+                "conversation_identity_conflict",
+                "the supplied task conflicts with the durable MCP conversation binding",
+            ));
+        }
+        let mapped =
+            if explicit.is_none() && bound.is_none() && delegated.is_none() && alias.is_none() {
                 if let Some(scope) = conversation_scope.as_deref() {
                     self.bound_task_for_conversation_scope(&context.agent_id, scope)
                         .await?
@@ -56,77 +61,91 @@ impl RuntimeHost {
             } else {
                 None
             };
-        let pending_chatgpt_bridge_task = if explicit_task.is_none()
-            && bound_task.is_none()
-            && delegated_task.is_none()
-            && chatgpt_bridge_task.is_none()
-            && mapped_scope_task.is_none()
-        {
-            let bound = if first_user_message.is_none() {
-                self.unique_recent_chatgpt_bridge_task(&context.agent_id)
-                    .await?
-            } else {
-                None
-            };
-            match bound {
-                Some(task_id) => Some(task_id),
-                None => {
-                    self.claim_unbound_chatgpt_bridge_task(
-                        &context.agent_id,
-                        conversation_scope.as_deref(),
-                        first_user_message,
-                    )
-                    .await?
-                }
-            }
+        let known = explicit
+            .clone()
+            .or(bound)
+            .or(delegated)
+            .or(alias)
+            .or(mapped);
+        let routed = if first_user_message.is_some() || known.is_none() {
+            self.bridge_task_from_route(context, first_user_message, known.as_deref())
+                .await?
         } else {
             None
         };
-        let unresolved_openai_tool_call = first_user_message.is_none()
-            && explicit_task.is_none()
-            && bound_task.is_none()
-            && delegated_task.is_none()
-            && chatgpt_bridge_task.is_none()
-            && mapped_scope_task.is_none()
-            && pending_chatgpt_bridge_task.is_none()
+        let mut selected = known.or(routed);
+        if selected.is_none()
+            && let Some(message) = first_user_message
+        {
+            selected = self.recover_manual_compact_task(context, message).await?;
+        }
+        if selected.is_none() {
+            selected = if let Some(message) = first_user_message {
+                self.chatgpt_bridge_task_for_message(&context.agent_id, None, message)
+                    .await?
+            } else {
+                self.unique_recent_chatgpt_bridge_task(&context.agent_id)
+                    .await?
+            };
+        }
+        if selected.is_none() {
+            selected = self
+                .claim_unbound_chatgpt_bridge_task(
+                    &context.agent_id,
+                    conversation_scope.as_deref(),
+                    first_user_message,
+                )
+                .await?;
+        }
+        if selected.is_none() {
+            if let Some(message) = first_user_message {
+                self.guard_rewritten_chatui_message(context, message)
+                    .await?;
+            } else if conversation_scope
+                .as_deref()
+                .is_some_and(|scope| scope.starts_with("openai:"))
+            {
+                return Err(RuntimeError::new(
+                    "conversation_identity_unbound",
+                    "this ChatGPT tool call is not bound to an existing local conversation; call agent_user_message with the ChatUI routing turnId and reuse its taskId",
+                ));
+            }
+        }
+        let task = selected.unwrap_or_else(|| {
+            if let (Some(scope), Some(message)) =
+                (conversation_scope.as_deref(), first_user_message)
+            {
+                task_identity_from_first_message(&context.agent_id, scope, message)
+            } else {
+                select_task_identity(
+                    &context.agent_id,
+                    conversation_scope.as_deref(),
+                    None,
+                    None,
+                    &context.request_id,
+                )
+            }
+        });
+        if explicit.is_some()
             && conversation_scope
                 .as_deref()
-                .is_some_and(|scope| scope.starts_with("openai:"));
-        if unresolved_openai_tool_call {
-            return Err(RuntimeError::new(
-                "conversation_identity_unbound",
-                "this ChatGPT tool call is not bound to an existing local conversation. Call agent_user_message first and reuse its taskId/turnId instead of creating a new conversation",
-            ));
+                .is_some_and(|scope| scope.starts_with("openai:"))
+        {
+            let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM tasks WHERE id=?)")
+                .bind(&task)
+                .fetch_one(self.repository.pool())
+                .await
+                .map_err(|_| {
+                    RuntimeError::new("storage_error", "explicit conversation lookup failed")
+                })?;
+            if !exists {
+                return Err(RuntimeError::new(
+                    "conversation_identity_unbound",
+                    "the supplied taskId does not exist; use the ChatUI routing turnId instead of inventing a new conversation",
+                ));
+            }
         }
-        let task = explicit_task.unwrap_or_else(|| {
-            delegated_task.unwrap_or_else(|| {
-                chatgpt_bridge_task.unwrap_or_else(|| {
-                    mapped_scope_task.unwrap_or_else(|| {
-                        bound_task.unwrap_or_else(|| {
-                            pending_chatgpt_bridge_task.unwrap_or_else(|| {
-                                if let (Some(scope), Some(message)) =
-                                    (conversation_scope.as_deref(), first_user_message)
-                                {
-                                    task_identity_from_first_message(
-                                        &context.agent_id,
-                                        scope,
-                                        message,
-                                    )
-                                } else {
-                                    select_task_identity(
-                                        &context.agent_id,
-                                        conversation_scope.as_deref(),
-                                        None,
-                                        None,
-                                        &context.request_id,
-                                    )
-                                }
-                            })
-                        })
-                    })
-                })
-            })
-        });
+        self.validate_resolved_task(context, &task).await?;
         let turn = context.turn_id.clone().unwrap_or_else(|| {
             safe_id(
                 "turn",
@@ -274,7 +293,12 @@ impl RuntimeHost {
                 last_used_at_ms: now,
             })
             .await
-            .map_err(storage_error)
+            .map_err(storage_error)?;
+        // A provisional tool-only match must not become a durable conversation alias.
+        if first_user_message.is_some() {
+            self.persist_mcp_scope_binding(context).await?;
+        }
+        Ok(())
     }
 
     async fn approve_new_conversations_enabled(&self) -> RuntimeResult<bool> {
@@ -313,153 +337,6 @@ impl RuntimeHost {
             }
         }
     }
-
-    async fn bound_task_for_conversation_scope(
-        &self,
-        agent_id: &str,
-        conversation_scope: &str,
-    ) -> RuntimeResult<Option<String>> {
-        sqlx::query_scalar::<_, String>(
-            r#"SELECT t.id
-               FROM tasks t
-               WHERE t.agent_id=? AND t.conversation_scope_hash=?
-                 AND (
-                   t.source='chatgpt_web'
-                   OR EXISTS(
-                     SELECT 1 FROM timeline_events e
-                     WHERE e.task_id=t.id AND e.actor='user' AND e.kind='message'
-                   )
-                 )
-               ORDER BY t.created_at_ms,t.id
-               LIMIT 1"#,
-        )
-        .bind(agent_id)
-        .bind(conversation_scope)
-        .fetch_optional(self.repository.pool())
-        .await
-        .map_err(|_| RuntimeError::new("storage_error", "conversation task binding lookup failed"))
-    }
-
-    async fn chatgpt_bridge_task_for_message(
-        &self,
-        agent_id: &str,
-        preferred_task_id: Option<&str>,
-        message: &str,
-    ) -> RuntimeResult<Option<String>> {
-        let cutoff = now_ms().saturating_sub(5 * 60 * 1000);
-        let rows = sqlx::query_as::<_, (String, String)>(
-            r#"SELECT r.task_id,r.submitted_content
-               FROM chatgpt_bridge_requests r
-               JOIN tasks t ON t.id=r.task_id
-               WHERE r.task_id IS NOT NULL
-                 AND t.agent_id=? AND t.source='chatgpt_web'
-                 AND r.status IN ('queued','running','stop_requested')
-                 AND r.updated_at_ms>=?
-               ORDER BY r.updated_at_ms DESC,r.id DESC
-               LIMIT 32"#,
-        )
-        .bind(agent_id)
-        .bind(cutoff)
-        .fetch_all(self.repository.pool())
-        .await
-        .map_err(|_| {
-            RuntimeError::new("storage_error", "ChatGPT bridge task binding lookup failed")
-        })?;
-        Ok(unique_bridge_task_for_message(
-            &rows,
-            preferred_task_id,
-            message,
-        ))
-    }
-
-    async fn unique_recent_chatgpt_bridge_task(
-        &self,
-        agent_id: &str,
-    ) -> RuntimeResult<Option<String>> {
-        let cutoff = now_ms().saturating_sub(90_000);
-        let rows = sqlx::query_scalar::<_, String>(
-            r#"SELECT r.task_id
-               FROM chatgpt_bridge_requests r
-               JOIN tasks t ON t.id=r.task_id
-               LEFT JOIN chatgpt_conversations c ON c.task_id=r.task_id
-               WHERE r.task_id IS NOT NULL
-                 AND t.agent_id=? AND t.source='chatgpt_web' AND t.status='running'
-                 AND r.status IN ('queued','running','stop_requested')
-                 AND (c.active_request_id=r.id OR r.updated_at_ms>=?)
-               GROUP BY r.task_id
-               ORDER BY MAX(CASE WHEN c.active_request_id=r.id THEN 1 ELSE 0 END) DESC,
-                        MAX(r.updated_at_ms) DESC
-               LIMIT 2"#,
-        )
-        .bind(agent_id)
-        .bind(cutoff)
-        .fetch_all(self.repository.pool())
-        .await
-        .map_err(|_| {
-            RuntimeError::new("storage_error", "active ChatGPT bridge task lookup failed")
-        })?;
-        Ok((rows.len() == 1).then(|| rows[0].clone()))
-    }
-
-    async fn bound_task_for_turn(
-        &self,
-        context: &OperationContext,
-    ) -> RuntimeResult<Option<String>> {
-        let Some(turn_id) = context
-            .turn_id
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-        else {
-            return Ok(None);
-        };
-        let cutoff = now_ms().saturating_sub(2 * 60 * 60 * 1000);
-        sqlx::query_scalar::<_, String>(
-            "SELECT task_id FROM turn_bindings WHERE agent_id=? AND device_id=? AND turn_id=? AND last_used_at_ms>=? LIMIT 1",
-        )
-        .bind(&context.agent_id)
-        .bind(self.device.id.as_str())
-        .bind(turn_id)
-        .bind(cutoff)
-        .fetch_optional(self.repository.pool())
-        .await
-        .map_err(|_| RuntimeError::new("storage_error", "turn binding lookup failed"))
-    }
-}
-
-fn unique_bridge_task_for_message(
-    rows: &[(String, String)],
-    preferred_task_id: Option<&str>,
-    message: &str,
-) -> Option<String> {
-    let exact = rows
-        .iter()
-        .filter(|(_, submitted)| submitted == message)
-        .map(|(task_id, _)| task_id.as_str())
-        .collect::<BTreeSet<_>>();
-    if !exact.is_empty() {
-        return preferred_or_unique_task(exact, preferred_task_id);
-    }
-    let equivalent = rows
-        .iter()
-        .filter(|(_, submitted)| crate::chatgpt_message::equivalent(submitted, message))
-        .map(|(task_id, _)| task_id.as_str())
-        .collect::<BTreeSet<_>>();
-    preferred_or_unique_task(equivalent, preferred_task_id)
-}
-
-fn preferred_or_unique_task(
-    candidates: BTreeSet<&str>,
-    preferred_task_id: Option<&str>,
-) -> Option<String> {
-    if let Some(preferred) = preferred_task_id
-        && candidates.contains(preferred)
-    {
-        return Some(preferred.to_owned());
-    }
-    (candidates.len() == 1)
-        .then(|| candidates.into_iter().next())
-        .flatten()
-        .map(str::to_owned)
 }
 
 fn conversation_approval_denied() -> RuntimeError {
@@ -507,3 +384,19 @@ fn safe_id(prefix: &str, agent_id: &str, scope: &str) -> String {
 #[cfg(test)]
 #[path = "identity_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "identity_regression_tests.rs"]
+mod regression_tests;
+
+#[cfg(test)]
+#[path = "identity_routing_tests.rs"]
+mod routing_tests;
+
+#[cfg(test)]
+#[path = "identity_delegation_regression_tests.rs"]
+mod delegation_regression_tests;
+
+#[cfg(test)]
+#[path = "identity_routing_guard_tests.rs"]
+mod routing_guard_tests;

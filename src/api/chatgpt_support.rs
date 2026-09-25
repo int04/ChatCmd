@@ -281,7 +281,12 @@ pub(super) fn validate_conversation(id: &str, url: &str) -> Result<(), Problem> 
 }
 
 pub(super) fn is_provisional_conversation_id(id: &str) -> bool {
-    id.trim().to_ascii_uppercase().starts_with("WEB:")
+    let id = id.trim();
+    id.get(..4)
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("WEB:"))
+        || id
+            .get(..14)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("local-chatgpt:"))
 }
 
 pub(super) fn normalize_model(value: Option<&str>) -> String {
@@ -319,9 +324,11 @@ mod tests {
     use super::{is_provisional_conversation_id, wrapped_message};
 
     #[test]
-    fn detects_provisional_web_conversation_ids() {
+    fn detects_provisional_conversation_ids() {
         assert!(is_provisional_conversation_id("WEB:abc"));
         assert!(is_provisional_conversation_id(" web:abc "));
+        assert!(is_provisional_conversation_id("local-chatgpt:abc"));
+        assert!(is_provisional_conversation_id(" LOCAL-CHATGPT:abc "));
         assert!(!is_provisional_conversation_id(
             "6a961d4f-a928-83ec-a645-298e743e207f"
         ));

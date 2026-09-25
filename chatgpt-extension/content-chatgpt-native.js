@@ -7,7 +7,7 @@
   const clock = globalThis.ChatCmdCaptureClock;
   const later = (fn, ms, options) => clock ? clock.later(fn, ms, options) : setTimeout(fn, ms);
   const cancel = (id) => clock ? clock.cancel(id) : clearTimeout(id);
-  const USER_SELECTOR = '[data-message-author-role="user"],[data-turn="user"]';
+  const USER_SELECTOR = '[data-message-author-role="user"],[data-turn="user"],[data-chatgpt-search-unit-key$=":user"]';
   const NATIVE_FALLBACK_POLL_MS = 4_000;
   const seen = new Set();
   let stopped = false;
@@ -56,7 +56,7 @@
       if (!response?.ok || !response.request) throw new Error(response?.error || 'ChatCMD did not acknowledge the browser turn.');
       report('recording');
       remember(key);
-      if (response.request.status === 'completed' && response.request.hasFinalResponse) return;
+      if (response.request.status === 'completed' && response.request.hasFinalResponse && !response.chatCmdTurn) return;
       void controller.adopt(response.request, user).then(() => {
         if (stopped || !controller.current()) return;
         if (keyFor(dom.latestUser()) === key && document.documentElement.dataset.chatcmdCaptureState === 'error') {

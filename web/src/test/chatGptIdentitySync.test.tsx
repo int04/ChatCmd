@@ -22,6 +22,11 @@ const syncedIdentity: ChatGptBridge = {
   conversationId: 'conversation-a',
   conversationUrl: 'https://chatgpt.com/g/g-p-test/c/conversation-a',
 };
+const provisionalIdentity: ChatGptBridge = {
+  ...missingIdentity,
+  conversationId: 'local-chatgpt:temporary',
+  conversationUrl: 'https://chatgpt.com/c/local-chatgpt%3Atemporary',
+};
 
 beforeEach(() => {
   vi.mocked(recoverChatGptIdentity).mockReset();
@@ -32,6 +37,13 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('ChatGPT identity synchronization', () => {
+  it('recovers a completed conversation still bound to a local-chatgpt URL', async () => {
+    vi.spyOn(api, 'chatGptBridge').mockResolvedValueOnce(provisionalIdentity).mockResolvedValue(syncedIdentity);
+    vi.mocked(recoverChatGptIdentity).mockResolvedValue({ nonce: 'n', ok: true, recovered: true });
+    render(<ChatGptTaskComposer taskId="task-a" />);
+    await waitFor(() => expect(recoverChatGptIdentity).toHaveBeenCalledWith('request-a', 'xin chào'));
+    await waitFor(() => expect(chatGptExtensionStatus).toHaveBeenCalledWith(syncedIdentity.conversationUrl));
+  });
   it('shows the actual API rejection instead of silently spinning', async () => {
     const load = vi.spyOn(api, 'chatGptBridge').mockResolvedValue(missingIdentity);
     vi.mocked(recoverChatGptIdentity).mockRejectedValue(new Error('the ChatGPT extension cannot access this management endpoint'));

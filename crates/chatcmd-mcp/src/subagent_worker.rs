@@ -14,7 +14,7 @@ use crate::{
     RuntimeApi,
     subagent_protocol::{
         TextAction, child_completion_arguments, child_system_prompt, enrich_registration,
-        is_internal_tool, limit_text, message_text, parse_text_action, required_child_task_id,
+        is_runtime_owned_tool, limit_text, message_text, parse_text_action, required_child_task_id,
         required_string, sanitize_arguments, text_protocol_tool_names, tool_result_text,
     },
 };
@@ -96,7 +96,7 @@ pub(super) async fn dispatch_registered_subagent(
         .call(
             "agent_user_message",
             child_user_context,
-            json!({ "content": delegated_prompt }),
+            json!({ "content": marker }),
         )
         .await
     {
@@ -126,7 +126,7 @@ pub(super) async fn dispatch_registered_subagent(
 
     let tools = tools
         .into_iter()
-        .filter(|tool| !is_internal_tool(tool.name.as_ref()))
+        .filter(|tool| !is_runtime_owned_tool(tool.name.as_ref()))
         .collect::<Vec<_>>();
     if tools.is_empty() {
         let error = RuntimeError::new(

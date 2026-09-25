@@ -20,12 +20,14 @@ Phần lớn method đều có các trường correlation chung do ChatCMD bổ 
 
 Luồng agent bắt buộc:
 
-1. `agent_user_message` phải là tool đầu tiên và chỉ gọi đúng một lần cho user turn thật.
+1. `agent_user_message` phải là tool đầu tiên và chỉ gọi đúng một lần. Root gửi nguyên văn user message. Browser child đã đăng ký chỉ gửi dòng `CMDGPT_SUBAGENT_ID=...`; runtime dùng marker để lấy delegated request đã lưu, không phân loại câu chữ hay ngôn ngữ.
 2. Với mọi yêu cầu không-trivial, gọi `agent_progress` ngay sau đó để tóm tắt user yêu cầu gì và agent sẽ làm gì tiếp theo, trước `skills_list` hoặc tool substantive khác.
-3. Với công việc project không tầm thường, gọi `skills_list`; nếu có skill phù hợp thì đọc bằng `skill_read` trước khi thao tác liên quan.
+3. Root coordinator sở hữu skill discovery: với công việc project không tầm thường, gọi `skills_list`, đọc skill phù hợp bằng `skill_read`, rồi truyền yêu cầu liên quan vào delegated context. Child dùng context đó trước; chỉ tự discovery khi objective cần hoặc parent chưa truyền đủ context bắt buộc.
 4. Trong lúc thực hiện, duy trì `agent_progress` theo checkpoint có ý nghĩa: thường sau khoảng 2–4 substantive operation hoặc sau một batch thao tác low-level liên quan chặt. Không cần callback theo từng tool; shell polling nhanh có thể gom cho đến khi trạng thái/output thay đổi đáng kể, còn lỗi/retry nên báo hướng xử lý trước khi đổi cách làm.
 5. Nếu có sub-agent thì phải chờ chúng hoàn tất bằng `agent_subagent_wait`.
 6. `agent_turn_complete` phải là tool cuối cùng, gọi đúng một lần ngay trước khi agent trả lời user.
+
+Quy tắc bằng chứng này áp dụng cho mọi ChatCMD tool: schema đang bị ẩn/defer, discovery chưa đúng query, schema đã tìm thấy nhưng chưa invoke, hoặc model chưa thực hiện tool call không phải là một lần tool bị từ chối. Chỉ được nói một tool bị reject/block/deny sau khi invocation thực sự trả observable error, kèm đúng error code/state. Discovery error chỉ mô tả discovery, không phải kết quả của tool được tìm. Chỉ quy nguyên nhân cho host/OpenAI safety, permission hoặc policy khi raw observed error nêu rõ nguyên nhân đó; nếu không có invocation thì báo `not attempted` và không tự suy diễn.
 
 ---
 
@@ -139,7 +141,7 @@ Git chạy với stdin/pager/credential prompt bị vô hiệu hóa; path luôn 
 
 | Method | Tham số chính | Ý nghĩa |
 |---|---|---|
-| `skills_list` | Không có tham số riêng | Khám phá các skill trong `.agents` và `.codex`. Với project work không tầm thường, method này phải được gọi sau `agent_user_message` và trước khi inspect/code nếu chưa biết skill phù hợp. |
+| `skills_list` | Không có tham số riêng | Khám phá các skill trong `.agents` và `.codex`. Root coordinator gọi trước project work không tầm thường rồi truyền requirements cần thiết cho child. Registered child dùng parent context trước; chỉ discovery khi objective cần hoặc context bắt buộc chưa được cung cấp. |
 | `skill_read` | `skillId` | Đọc đầy đủ instruction của một skill phù hợp. `id` là compatibility alias của `skillId`. |
 
 ---
@@ -162,10 +164,10 @@ Git chạy với stdin/pager/credential prompt bị vô hiệu hóa; path luôn 
 
 | Method | Tham số chính | Ý nghĩa |
 |---|---|---|
-| `agent_user_message` | `content` | **Bắt buộc là MCP call đầu tiên và chỉ gọi đúng một lần trong mỗi user turn.** Đồng bộ nguyên văn user message lên ChatCMD và thiết lập/correlate `taskId` + `turnId`. `content` phải đúng nguyên văn message hiện tại. Không dùng method này cho progress/reflection/finding sau tool result; các cập nhật đó phải dùng `agent_progress`. |
+| `agent_user_message` | `content` | **Bắt buộc là MCP call đầu tiên và chỉ gọi đúng một lần trong mỗi turn.** Root gửi nguyên văn message hiện tại. Registered browser child gửi riêng dòng marker `CMDGPT_SUBAGENT_ID=...`, cùng child `taskId`/`turnId`; runtime resolve delegated request từ state server. Chỉ tiếp tục khi result có `accepted=true` và `userMessageSynced=true`. Không dùng method này cho progress/reflection/finding. |
 | `agent_progress` | `message`, `suggestedTitle?` | **Rule phía AI cho mọi turn project không-trivial.** Ngay sau `agent_user_message` nên gửi progress tóm tắt yêu cầu + hành động kế tiếp. Sau các kết quả `fs_*` có ý nghĩa (đặc biệt `fs_find`, `fs_search`, `fs_read_text`, edit/write/delete), Git/process, `shell_read`/`shell_wait` còn pending, sub-agent wait chưa xong, hoặc failure/non-zero, AI nên gửi progress mô tả kết quả quan sát được và bước tiếp theo trước khi tiếp tục. Đây không phải runtime gate: server không reject tool chỉ vì thiếu progress; các thao tác low-level liên quan chặt có thể gom thành một checkpoint để tránh làm chậm tiến độ và tránh callback MCP không cần thiết. Không gửi private chain-of-thought. |
 | `agent_plan_question` | `question`, `options`, `questionKind?` | `questionKind` mặc định `clarification`; `executionConsent` dùng semantics consent do server định nghĩa. Lifecycle được audit durable; restart/disconnect/timeout/custom answer fail closed. Approved consent không đổi execution mode, không mint grant và mọi side effect vẫn qua C01 tool authorization. |
-| `agent_subagent_start` | `name`, `request` | Tạo hoặc reuse child. `samplingTools`/`samplingText` là worker sampling; `extensionFallback` là child pending để browser extension claim nên parent không làm trùng; `existing` không spawn lại. Startup lỗi sau registration trả structured `status=failed` + `startupError`. |
+| `agent_subagent_start` | `name`, `request` | Tạo/reuse và dispatch một ChatCMD-owned child khi structured `subagentPolicy` cho phép và model đánh giá delegation hữu ích. Đây là dispatch entrypoint duy nhất: không tạo thêm host-native/browser child cho cùng request. Parent đã thực hiện skill discovery và truyền context. `samplingTools`/`samplingText` do runtime chạy; `extensionFallback` là child pending để browser extension claim nên parent chỉ wait, không làm trùng; `existing` không spawn lại. |
 | `agent_subagent_wait` | `timeoutMs?`, `subagentId?`, `reportOffset?`, `reportVersion?` | Chờ toàn bộ cây agent của parent turn và trả báo cáo công khai trong `subagents[].report.content`. `allFinished`/`allCompleted` chỉ là lifecycle; kiểm tra `workOutcome`, các bộ đếm lỗi và báo cáo thiếu. Nếu `allFinished=false` hoặc `reportPendingCount>0` thì tiếp tục gọi lại. Báo cáo dài trả `report.continuation` để truyền lại vào tool, không cần đọc lại repo. Xem [hợp đồng báo cáo sub-agent](subagent-reports.md). |
 | `agent_turn_complete` | `content`, `suggestedTitle?`, `workOutcome?`, `verificationIntent?`, `verificationReason?`, `verificationScope?`, `criteria?`, `evidenceRefs?`, `blockers?`, `limitations?` | **Bắt buộc là MCP call cuối cùng.** Xác nhận turn đã hoàn tất và gửi đúng nội dung cuối cùng agent sẽ trả cho user. `workOutcome` là agent assessment; verification do server resolve từ `command_run` execution IDs. Client cũ chỉ gửi `content` vẫn hợp lệ và được normalize thành legacy completed + `notRun`, không phải verified. |
 
@@ -216,6 +218,19 @@ agent_user_message
 Cadence mặc định là khoảng **2–4 substantive operation hoặc hết một coherent batch**, không phải một progress cho mỗi tool call. Nếu có finding quan trọng, lỗi, hoặc chuyển phase thì có thể báo sớm hơn.
 
 Một turn có sub-agent:
+
+Model chỉ chọn flow này sau khi `agent_user_message` trả
+`subagentPolicy.policyVersion=2`, `delegationAllowed=true`, `enabled=true`, `maxConcurrent>0`,
+`decisionMode=modelJudgment`, `decisionSource=configuredConcurrency` và
+`delegationTextClassifierUsed=false`, dựa trên lợi ích chia việc chứ không dựa vào keyword trong câu
+user.
+
+`agent_subagent_start` sở hữu cả sampling và browser fallback. Quyết định có chia việc dựa trên
+structured policy và model judgment; runtime không dò từ khóa trong message. Browser answer chưa có
+MCP user-message sync không được nâng thành completed report: cùng child sẽ retry theo attempt fence,
+sau attempt cuối sẽ fail/exhausted. Nội dung child tự kể không thay thế tool event có cấu trúc.
+Marker-only không làm mất path user đã cấp: runtime lấy path scope từ user events của task hiện tại và
+ancestor task qua quan hệ `subagent_runs`; delegated request do model tạo không thể tự mint path scope.
 
 ```text
 agent_user_message

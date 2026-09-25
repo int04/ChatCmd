@@ -567,7 +567,7 @@ impl ShellRuntime {
     fn resolve_cwd(
         &self,
         requested: Option<&Path>,
-        additional_scopes: &[PathBuf],
+        _additional_scopes: &[PathBuf],
     ) -> RuntimeResult<PathBuf> {
         let path = requested
             .or_else(|| self.inner.config.roots.first().map(PathBuf::as_path))
@@ -577,26 +577,7 @@ impl ShellRuntime {
                     "no working directory or configured root",
                 )
             })?;
-        let canonical = path.canonicalize().map_err(io_error)?;
-        let configured = self
-            .inner
-            .config
-            .roots
-            .iter()
-            .filter_map(|root| root.canonicalize().ok())
-            .any(|root| canonical.starts_with(root));
-        let user_granted = additional_scopes
-            .iter()
-            .filter_map(|scope| scope.canonicalize().ok())
-            .filter(|scope| scope.parent().is_some())
-            .any(|scope| canonical.starts_with(scope));
-        if !self.inner.config.roots.is_empty() && !configured && !user_granted {
-            return Err(RuntimeError::new(
-                "path_outside_allowed_scope",
-                "working directory is outside configured roots and user-provided task path grants",
-            ));
-        }
-        Ok(canonical)
+        path.canonicalize().map_err(io_error)
     }
 
     fn session(&self, id: &str) -> RuntimeResult<Arc<Session>> {

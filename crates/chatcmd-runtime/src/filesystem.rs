@@ -563,13 +563,14 @@ impl WorkspaceService {
         path: &Path,
         access: PathAccess,
     ) -> RuntimeResult<ExistingWorkspacePath> {
-        reject_reparse_components_within_scopes(path, &self.allowed_scopes)?;
+        reject_reparse_components(path)?;
         let resolved = path.canonicalize().map_err(io_error)?;
-        self.ensure_allowed(&resolved)?;
-        let root = self.containing_root(&resolved).ok_or_else(scope_error)?;
         let metadata = fs::symlink_metadata(&resolved).map_err(io_error)?;
         reject_reparse_metadata(&metadata)?;
         let kind = EntryKind::from_metadata(&metadata);
+        let root = self
+            .containing_root(&resolved)
+            .unwrap_or_else(|| operation_root_for_existing(&resolved, kind));
         Ok(ExistingWorkspacePath {
             canonical_path: resolved,
             root,
@@ -602,14 +603,13 @@ impl WorkspaceService {
         let requested_parent = absolute
             .parent()
             .ok_or_else(|| RuntimeError::new("invalid_path", "path has no parent"))?;
-        reject_reparse_components_within_scopes(requested_parent, &self.allowed_scopes)?;
+        reject_reparse_components(requested_parent)?;
         let canonical_parent = requested_parent.canonicalize().map_err(io_error)?;
-        self.ensure_allowed(&canonical_parent)?;
-        let root = self
-            .containing_root(&canonical_parent)
-            .ok_or_else(scope_error)?;
         let metadata = fs::symlink_metadata(&canonical_parent).map_err(io_error)?;
         reject_reparse_metadata(&metadata)?;
+        let root = self
+            .containing_root(&canonical_parent)
+            .unwrap_or_else(|| canonical_parent.clone());
         Ok(CreationWorkspacePath {
             canonical_parent,
             final_name: final_name.to_os_string(),
@@ -617,20 +617,6 @@ impl WorkspaceService {
             parent_identity: FileIdentity::from_metadata(&metadata),
             access,
         })
-    }
-    fn ensure_allowed(&self, path: &Path) -> RuntimeResult<()> {
-        if self
-            .allowed_scopes
-            .iter()
-            .any(|scope| path.starts_with(scope))
-        {
-            Ok(())
-        } else {
-            Err(RuntimeError::new(
-                "path_outside_allowed_scope",
-                "path escapes configured workspace roots and user-provided task path grants",
-            ))
-        }
     }
     fn containing_root(&self, path: &Path) -> Option<PathBuf> {
         self.allowed_scopes
@@ -641,11 +627,11 @@ impl WorkspaceService {
     }
 }
 
-fn scope_error() -> RuntimeError {
-    RuntimeError::new(
-        "path_outside_allowed_scope",
-        "path escapes configured workspace roots and user-provided task path grants",
-    )
+fn operation_root_for_existing(path: &Path, kind: EntryKind) -> PathBuf {
+    match kind {
+        EntryKind::Directory => path.to_path_buf(),
+        EntryKind::File | EntryKind::Other => path.parent().unwrap_or(path).to_path_buf(),
+    }
 }
 
 fn validate_final_name(name: &std::ffi::OsStr) -> RuntimeResult<()> {
@@ -665,10 +651,7 @@ fn validate_final_name(name: &std::ffi::OsStr) -> RuntimeResult<()> {
     Ok(())
 }
 
-fn reject_reparse_components_within_scopes(
-    path: &Path,
-    allowed_scopes: &[PathBuf],
-) -> RuntimeResult<()> {
+fn reject_reparse_components(path: &Path) -> RuntimeResult<()> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
@@ -680,23 +663,7 @@ fn reject_reparse_components_within_scopes(
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => return Err(io_error(error)),
         };
-
-        let canonical_or_parent = if metadata.file_type().is_symlink() {
-            ancestor
-                .parent()
-                .and_then(|parent| parent.canonicalize().ok())
-                .map(|parent| parent.join(ancestor.file_name().unwrap_or_default()))
-        } else {
-            ancestor.canonicalize().ok()
-        };
-        let within_scope = canonical_or_parent.as_ref().is_some_and(|candidate| {
-            allowed_scopes
-                .iter()
-                .any(|scope| candidate == scope || candidate.starts_with(scope))
-        });
-        if within_scope {
-            reject_reparse_metadata(&metadata)?;
-        }
+        reject_reparse_metadata(&metadata)?;
     }
     Ok(())
 }
@@ -778,20 +745,17 @@ mod path_safety_tests {
     }
 
     #[test]
-    fn absolute_path_outside_root_is_rejected() {
+    fn absolute_path_outside_root_is_authorized() {
         let workspace = TempDir::new().expect("workspace");
         let external = TempDir::new().expect("external");
-        let file = external.path().join("denied.txt");
-        fs::write(&file, "denied").expect("file");
+        let file = external.path().join("external.txt");
+        fs::write(&file, "external").expect("file");
 
-        let error = service(workspace.path())
-            .existing(&file)
-            .expect_err("external absolute path must be rejected");
-        assert_eq!(error.code, "path_outside_allowed_scope");
+        assert!(service(workspace.path()).existing(&file).is_ok());
     }
 
     #[test]
-    fn exact_file_grant_does_not_authorize_sibling() {
+    fn exact_file_grant_does_not_limit_sibling_access() {
         let workspace = TempDir::new().expect("workspace");
         let external = TempDir::new().expect("external");
         let granted = external.path().join("granted.txt");
@@ -803,17 +767,11 @@ mod path_safety_tests {
             .expect("file grant");
 
         assert!(scoped.existing(&granted).is_ok());
-        assert_eq!(
-            scoped
-                .existing(&sibling)
-                .expect_err("sibling must not inherit file grant")
-                .code,
-            "path_outside_allowed_scope"
-        );
+        assert!(scoped.existing(&sibling).is_ok());
     }
 
     #[test]
-    fn directory_grant_authorizes_only_its_subtree() {
+    fn directory_grant_does_not_limit_external_sibling_access() {
         let workspace = TempDir::new().expect("workspace");
         let external = TempDir::new().expect("external");
         let granted = external.path().join("granted");
@@ -827,22 +785,23 @@ mod path_safety_tests {
             .expect("directory grant");
 
         assert!(scoped.existing(&child).is_ok());
-        assert!(scoped.existing(&sibling).is_err());
+        assert!(scoped.existing(&sibling).is_ok());
     }
 
     #[test]
-    fn creation_outside_authorized_scope_is_rejected() {
+    fn creation_outside_configured_scope_is_authorized() {
         let workspace = TempDir::new().expect("workspace");
         let external = TempDir::new().expect("external");
-        let error = service(workspace.path())
-            .creation(&external.path().join("new.txt"))
-            .expect_err("external creation must be rejected");
 
-        assert_eq!(error.code, "path_outside_allowed_scope");
+        assert!(
+            service(workspace.path())
+                .creation(&external.path().join("new.txt"))
+                .is_ok()
+        );
     }
 
     #[test]
-    fn relative_parent_traversal_cannot_escape_workspace() {
+    fn parent_paths_outside_workspace_are_authorized() {
         let workspace = TempDir::new().expect("workspace");
         let external_name = workspace
             .path()
@@ -852,14 +811,10 @@ mod path_safety_tests {
         let escaped = workspace.path().join("..").join(external_name);
 
         assert!(service(workspace.path()).existing(&escaped).is_ok());
-
-        let denied = workspace.path().join("..");
-        assert_eq!(
+        assert!(
             service(workspace.path())
-                .existing(&denied)
-                .expect_err("parent must not be granted")
-                .code,
-            "path_outside_allowed_scope"
+                .existing(&workspace.path().join(".."))
+                .is_ok()
         );
     }
 

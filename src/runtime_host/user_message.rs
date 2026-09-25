@@ -13,7 +13,7 @@ use super::{RuntimeHost, invalid, now_ms, storage_error};
 mod intent;
 #[path = "user_message_paths.rs"]
 mod paths;
-use intent::{intent_hint, is_explicit_multi_agent_request, is_plan_mode_request};
+use intent::is_plan_mode_request;
 use paths::extract_explicit_absolute_paths;
 
 impl RuntimeHost {
@@ -24,7 +24,8 @@ impl RuntimeHost {
         let task_id = required_task_id(context)?;
         let turn_id = required_turn_id(context)?;
         let found = sqlx::query_scalar::<_, i64>(
-            "SELECT EXISTS(SELECT 1 FROM timeline_events WHERE task_id=? AND turn_id=? AND actor='user' AND kind='message' LIMIT 1)",
+            // Browser observations do not acknowledge an MCP user-message synchronization.
+            "SELECT EXISTS(SELECT 1 FROM timeline_events WHERE task_id=? AND turn_id=? AND actor='user' AND kind='message' AND COALESCE(json_extract(payload_json,'$.provider'),'')<>'chatgpt_web' LIMIT 1)",
         )
         .bind(task_id.as_str())
         .bind(turn_id.as_str())
@@ -34,53 +35,13 @@ impl RuntimeHost {
         if found == 1 {
             Ok(())
         } else {
+            tracing::warn!(task_id = %task_id, turn_id = %turn_id, tool = %context.tool_name,
+                "MCP user message synchronization missing; upstream cause is unknown");
             Err(RuntimeError::new(
                 "user_message_sync_required",
                 "call agent_user_message first with the exact current user message and the same turnId before using any other ChatCMD tool",
             ))
         }
-    }
-
-    pub(super) async fn subagent_delegation_explicitly_requested(
-        &self,
-        context: &OperationContext,
-    ) -> RuntimeResult<bool> {
-        let task_id = required_task_id(context)?;
-        let turn_id = required_turn_id(context)?;
-        let root = sqlx::query_as::<_, (String, String)>(
-            r#"WITH RECURSIVE ancestors(parent_task_id,parent_turn_id,child_task_id,depth) AS (
-                SELECT parent_task_id,parent_turn_id,child_task_id,1 FROM subagent_runs WHERE child_task_id=?
-                UNION ALL
-                SELECT r.parent_task_id,r.parent_turn_id,r.child_task_id,ancestors.depth+1
-                FROM subagent_runs r JOIN ancestors ON r.child_task_id=ancestors.parent_task_id
-                WHERE ancestors.depth<32
-            )
-            SELECT parent_task_id,parent_turn_id FROM ancestors ORDER BY depth DESC LIMIT 1"#,
-        )
-        .bind(task_id.as_str())
-        .fetch_optional(self.repository.pool())
-        .await
-        .map_err(|_| RuntimeError::new("storage_error", "sub-agent root intent lookup failed"))?;
-        let (root_task_id, root_turn_id) =
-            root.unwrap_or_else(|| (task_id.as_str().to_owned(), turn_id.as_str().to_owned()));
-        let payload = sqlx::query_scalar::<_, String>(
-            "SELECT payload_json FROM timeline_events WHERE task_id=? AND turn_id=? AND actor='user' AND kind='message' ORDER BY created_at_ms,event_id LIMIT 1",
-        )
-        .bind(&root_task_id)
-        .bind(&root_turn_id)
-        .fetch_optional(self.repository.pool())
-        .await
-        .map_err(|_| RuntimeError::new("storage_error", "sub-agent root user message unavailable"))?;
-        let content = payload
-            .and_then(|payload| serde_json::from_str::<Value>(&payload).ok())
-            .and_then(|payload| {
-                payload
-                    .get("content")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-            })
-            .unwrap_or_default();
-        Ok(is_explicit_multi_agent_request(&content))
     }
 
     pub(super) async fn task_user_path_scopes(
@@ -96,7 +57,7 @@ impl RuntimeHost {
         };
         let task_id = TaskId::new(task_id).map_err(|error| invalid("taskId", error))?;
         let payloads = sqlx::query_scalar::<_, String>(
-            "SELECT payload_json FROM timeline_events WHERE task_id=? AND actor='user' AND kind='message' ORDER BY created_at_ms,event_id",
+            "WITH RECURSIVE task_lineage(task_id,depth) AS (SELECT ?,0 UNION ALL SELECT r.parent_task_id,task_lineage.depth+1 FROM subagent_runs r JOIN task_lineage ON r.child_task_id=task_lineage.task_id WHERE task_lineage.depth<32) SELECT e.payload_json FROM task_lineage JOIN timeline_events e ON e.task_id=task_lineage.task_id WHERE e.actor='user' AND e.kind='message' ORDER BY task_lineage.depth,e.created_at_ms,e.event_id",
         )
         .bind(task_id.as_str())
         .fetch_all(self.repository.pool())
@@ -305,8 +266,32 @@ impl RuntimeHost {
             Value::Null
         };
         let subagent_limit = self.subagent_concurrency_limit().await?;
-        let explicit_subagent_intent = is_explicit_multi_agent_request(content);
-        let intent_hint = intent_hint(content);
+        let delegation_allowed = subagent_limit > 0;
+        let delegated_child = sqlx::query_scalar::<_, i64>(
+            "SELECT EXISTS(SELECT 1 FROM subagent_runs WHERE child_task_id=? LIMIT 1)",
+        )
+        .bind(task_id.as_str())
+        .fetch_one(self.repository.pool())
+        .await
+        .map_err(|_| RuntimeError::new("storage_error", "task role lookup failed"))?
+            == 1;
+        let skill_discovery = if delegated_child {
+            json!({
+                "mode": "parentOwned",
+                "requirementMode": "delegatedContextFirst",
+                "requiredForThisTask": false,
+                "fallbackDiscoveryAllowed": true,
+                "instruction": "Use skill context supplied by the parent. Call skills_list only when the delegated objective requires skill discovery or required context was not supplied."
+            })
+        } else {
+            json!({
+                "mode": "rootDiscovery",
+                "requirementMode": "modelJudgment",
+                "requiredForThisTask": Value::Null,
+                "fallbackDiscoveryAllowed": true,
+                "instruction": "Discover relevant skills before non-trivial project work. Trivial and non-project turns do not require skill discovery."
+            })
+        };
         Ok(json!({
             "accepted": true,
             "duplicate": inserted == 0,
@@ -318,19 +303,28 @@ impl RuntimeHost {
                     "allowedTools": super::approval::subagent_grant_tools(),
                     "instruction": "Eligibility only, not granted permissions. approvalGrant can reserve a subset of an existing approved parent safe-read grant; it is not the child's tool allowlist. Omit it if no such grant is available. Never include Git/process or agent_* lifecycle tools. Normal execution policy and approval still apply."
                 },
+                "policyVersion": 2,
                 "enabled": subagent_limit > 0,
                 "maxConcurrent": subagent_limit,
-                "explicitUserIntent": explicit_subagent_intent,
+                "delegationAllowed": delegation_allowed,
+                "decisionMode": "modelJudgment",
+                "decisionSource": "configuredConcurrency",
+                "languageIndependent": true,
+                "delegationTextClassifierUsed": false,
+                "authorizationBoundary": {
+                    "agent": "authenticated",
+                    "turn": "synchronized",
+                    "subagentsEnabled": subagent_limit > 0
+                },
                 "instruction": if subagent_limit == 0 {
                     "Sub-agents are disabled by the user. Do not call agent_subagent_start or delegate to any child; perform the work in this conversation."
-                } else if explicit_subagent_intent {
-                    "The current root user turn explicitly requested multi-agent work. Use registered children only for that requested delegation scope; all descendants remain attached to the root turn."
                 } else {
-                    "The current root user turn did not explicitly request multi-agent delegation. Do not call agent_subagent_start or open a child conversation; continue in this conversation."
+                    "Delegation is available for this authenticated, synchronized turn. Decide from the user's meaning and task needs whether children are useful; the runtime does not classify user text or require language-specific keywords. This is capability, not a mandate. Use registered children only within the current request and normal execution policy."
                 }
             },
             "planMode": is_plan_mode_request(content),
-            "intentHint": intent_hint,
+            "taskRole": if delegated_child { "delegatedChild" } else { "rootCoordinator" },
+            "skillDiscovery": skill_discovery,
             "isFirstMessage": is_first_message,
             "suggestedTitleRequired": is_first_message,
             "provisionalTitle": is_first_message.then_some(provisional_title),

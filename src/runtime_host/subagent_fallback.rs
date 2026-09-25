@@ -6,6 +6,78 @@ use super::{RuntimeHost, now_ms};
 
 pub(super) const MAX_EXTENSION_FALLBACK_ATTEMPTS: i64 = 3;
 
+/// Browser children own their MCP lifecycle; sampling children use a different protocol.
+/// Shared by first dispatch and API retries so both use the same compact routing contract.
+pub(crate) fn browser_subagent_prompt(
+    agent_name: Option<&str>,
+    request: &str,
+    subagent_id: &str,
+    child_task_id: &str,
+) -> String {
+    let marker = format!("CMDGPT_SUBAGENT_ID={subagent_id}");
+    let request = request
+        .trim()
+        .strip_suffix(&marker)
+        .unwrap_or(request.trim())
+        .trim_end();
+    let delegated = format!(
+        "{request}\n\n{marker}\n\n\
+         CHATCMD CHILD ROUTE:\n\
+         1. Call agent_user_message first with taskId={child_task_id}, turnId=turn-{subagent_id}, and content set exactly to the marker line above.\n\
+         2. Begin task calls after that result has accepted=true and userMessageSynced=true. Reuse its taskId and the same turnId.\n\
+         3. Use skill context supplied by the parent. Call skills_list or skill_read only when the objective requires discovery or required context was not supplied.\n\
+         4. After all task calls have finished, call agent_turn_complete once with the exact response text, then post that text after accepted=true.\n\
+         If a call returns an error, report its exact code and message. Treat it as the result of that call only unless the returned data explicitly says otherwise."
+    );
+    match agent_name.map(str::trim).filter(|name| !name.is_empty()) {
+        Some(name) => format!("Sử dụng plugin @{name} để thực hiện yêu cầu sau:\n\n{delegated}"),
+        None => delegated,
+    }
+}
+
+#[cfg(test)]
+mod prompt_tests {
+    use super::browser_subagent_prompt;
+
+    #[test]
+    fn browser_subagent_prompt_uses_marker_only_sync_and_neutral_lifecycle() {
+        let initial = browser_subagent_prompt(
+            Some("reader"),
+            "Inspect files\n\nCMDGPT_SUBAGENT_ID=child-1",
+            "child-1",
+            "task-child",
+        );
+        let retry =
+            browser_subagent_prompt(Some("reader"), "Inspect files", "child-1", "task-child");
+        assert_eq!(initial, retry);
+        assert_eq!(initial.matches("CMDGPT_SUBAGENT_ID=").count(), 1);
+        assert!(initial.contains("taskId=task-child, turnId=turn-child-1"));
+        assert!(initial.contains("content set exactly to the marker line above"));
+        assert!(initial.contains("accepted=true and userMessageSynced=true"));
+        assert!(initial.contains("Use skill context supplied by the parent"));
+        assert!(initial.contains("required context was not supplied"));
+        assert!(initial.contains("call agent_turn_complete once"));
+        assert!(
+            initial.len() < 1_400,
+            "browser child routing prompt grew unexpectedly"
+        );
+        let lower = initial.to_lowercase();
+        for phrase in [
+            "bypass",
+            "disguise",
+            "host safety",
+            "openai safety",
+            "permission denial",
+            "safety block",
+        ] {
+            assert!(
+                !lower.contains(phrase),
+                "routing prompt contains {phrase:?}"
+            );
+        }
+    }
+}
+
 impl RuntimeHost {
     pub(super) async fn request_subagent_extension_fallback(
         &self,
@@ -94,16 +166,12 @@ impl RuntimeHost {
                 .await
                 .ok()
                 .flatten();
-        let submitted_content = match agent_name
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            Some(agent_name) => format!(
-                "Sử dụng plugin @{agent_name} để thực hiện yêu cầu sau:\n\n{delegated_prompt}"
-            ),
-            None => delegated_prompt.to_owned(),
-        };
+        let submitted_content = browser_subagent_prompt(
+            agent_name.as_deref(),
+            delegated_prompt,
+            subagent_id,
+            child_task_id,
+        );
         self.publish_event(
             format!("subagent-fallback-requested-{subagent_id}-{attempt}"),
             "subagent.fallback_requested",

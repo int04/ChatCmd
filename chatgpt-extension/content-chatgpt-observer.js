@@ -7,9 +7,14 @@
   }
   function create(requestId, submittedContent, { resumed = false, user = null, current = () => true } = {}) {
     const dom = globalThis.ChatCmdTranscript;
-    if (!dom || requestId.startsWith('subagent:')) return null;
+    if (!dom) return null;
+    const localOnly = requestId.startsWith('subagent:');
+    let finalAcknowledged = false;
+    let visibleAnswer = null;
     const prior = resumed ? restore(requestId) : null;
     const baseline = dom.latestUser()?.id;
+    const requestMarker = `[[CHATCMD-REQUEST:${requestId}]]`;
+    const ownsMarkedTurn = submittedContent.includes(requestMarker);
     let userId = prior?.userId || user?.id || null;
     let conversationId = prior?.conversationId || (user ? dom.conversationId() : '');
     let messages = Array.isArray(prior?.messages) ? prior.messages : [];
@@ -33,23 +38,28 @@
     }
     function scan() {
       if (stopped || !current()) return;
+      if (localOnly) visibleAnswer = null;
       const id = dom.conversationId();
       if (conversationId && id && id !== conversationId) {
-        if (/^WEB:/i.test(conversationId) && userId && dom.latestUser()?.id === userId) { conversationId = id; checkpoint(); }
+        if (/^(?:WEB:|local-chatgpt:)/i.test(conversationId) && userId && dom.latestUser()?.id === userId) { conversationId = id; checkpoint(); }
         else { stop(); return; }
       }
       if (!conversationId && id) conversationId = id;
       const user = dom.latestUser();
       if (!user) return;
       if (!userId) {
-        if ((!resumed && user.id === baseline) || user.text !== dom.normalize(submittedContent)) return;
+        if ((!resumed && user.id === baseline)
+          || (user.text !== dom.normalize(submittedContent)
+            && !(ownsMarkedTurn && user.content.includes(requestMarker)))) return;
         userId = user.id;
         checkpoint();
       }
       if (user.id !== userId) { stop(); return; }
       const used = new Set();
       let changed = false;
-      for (const [index, part] of dom.readParts(user).entries()) {
+      const parts = dom.readParts(user);
+      visibleAnswer = null;
+      for (const [index, part] of parts.entries()) {
         let message = ids.get(part.node);
         if (!message) {
           message = messages.find((entry) => !used.has(entry.id) &&
@@ -73,6 +83,9 @@
           changed = true;
         }
       }
+      const last = parts.at(-1);
+      const captured = last && ids.get(last.node);
+      if (last?.kind === 'answer' && captured?.content === last.content) visibleAnswer = captured;
       messages = messages.filter((message) => message.content);
       if (changed) { dirty = true; revision = Math.max(revision + 1, Date.now()); checkpoint(); }
     }
@@ -87,6 +100,8 @@
         return !dirty;
       }
       if (!bound || stopped || !current() || !conversationId || !userId) return false;
+      // Browser children use the dedicated completion endpoint, not parent-chat observations.
+      if (localOnly) { dirty = false; return true; }
       if (!dirty) return true;
       const sentRevision = revision;
       const payload = { type: 'chatcmd-chatgpt-progress', stage: 'observation', requestId,
@@ -134,16 +149,25 @@
     }
     function finish() {
       stop();
-      if (!dirty) { try { sessionStorage.removeItem(STORAGE_PREFIX + requestId); } catch { /* optional checkpoint */ } }
+      if (localOnly ? finalAcknowledged : !dirty) { try { sessionStorage.removeItem(STORAGE_PREFIX + requestId); } catch { /* optional checkpoint */ } }
     }
     return {
       scan, flush, stop, finish,
       bind() { bound = true; return flush(); },
-      get answer() { return [...messages].reverse().find((message) => message.kind === 'answer')?.content || ''; },
+      acknowledgeCompletion() { finalAcknowledged = true; },
+      get answer() { return (localOnly ? visibleAnswer : [...messages].reverse().find((message) => message.kind === 'answer'))?.content || ''; },
+      get completionEvidence() {
+        return localOnly && bound && !stopped && current() && userId && visibleAnswer
+          ? { protocol: 1, userMessageId: userId, assistantMessageId: visibleAnswer.id } : null;
+      },
       get userMessageId() { return userId; },
       get hasTurn() { return Boolean(userId); },
       get active() { return !stopped && current(); },
     };
   }
-  globalThis.ChatCmdObserver = Object.freeze({ create, restore });
+  function matchesCheckpoint(requestId, user) {
+    const saved = restore(requestId);
+    return Boolean(saved && user && saved.userId === user.id && saved.conversationId === globalThis.ChatCmdTranscript.conversationId());
+  }
+  globalThis.ChatCmdObserver = Object.freeze({ create, restore, matchesCheckpoint });
 })();
