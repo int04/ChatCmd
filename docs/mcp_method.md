@@ -67,15 +67,31 @@ sổ bị app khác che. Nó không tự động fallback sang `SendInput`.
 |---|---|---|
 | `desktop_window_list` | Không có tham số riêng | Liệt kê top-level window được phép điều khiển, trả opaque `windowId`; không lộ native handle. |
 | `desktop_window_observe` | `windowId`, `includeScreenshot?`, `includeElements?` | Chụp riêng cửa sổ và/hoặc đọc cây UI Automation; trả `observationId`, `elementId` và MCP `image` PNG khi yêu cầu screenshot. |
-| `desktop_element_act` | `observationId`, `elementId`, `action`, dữ liệu action nếu có | Thực hiện đúng một action semantic: `invoke`, `set_value`, `toggle`, `select`, `expand` hoặc `collapse`, không giành chuột/focus. |
+| `desktop_element_act` | `observationId`, `elementId`, `action`, `observeAfter?`, `includeScreenshot?`, `includeElements?`, dữ liệu action nếu có | Thực hiện đúng một action semantic: `invoke`, `set_value`, `toggle`, `select`, `expand` hoặc `collapse`, không giành chuột/focus; mặc định trả luôn observation mới để xác minh. |
 | `desktop_input_begin` | `windowId` | Bắt đầu chế độ takeover tường minh, đưa đúng target lên foreground và hiển thị viền/banner cảnh báo. |
-| `desktop_input_act` | `inputSessionId`, `actions[]` | Thực thi tối đa batch action input đã giới hạn: `click`, `double_click`, `move`, `drag`, `scroll`, `keypress`, `type`, `wait`. |
+| `desktop_input_act` | `inputSessionId`, `actions[]`, `observeAfter?`, `includeScreenshot?`, `includeElements?` | Thực thi tối đa batch action input đã giới hạn và mặc định trả luôn observation mới: `click`, `double_click`, `move`, `drag`, `scroll`, `keypress`, `type`, `wait`. |
 | `desktop_input_end` | `inputSessionId` | Dừng takeover và gỡ overlay. |
 
 Luồng ưu tiên là `window_list → window_observe → element_act → window_observe ...`. Mỗi
 `observationId` và các `elementId` bên trong chỉ hợp lệ cho snapshot đã sinh ra chúng. Sau một action,
 thay đổi layout/modal, user tương tác xen kẽ, lỗi hoặc retry, caller phải observe lại; runtime từ chối
 observation stale để tránh tác động nhầm control.
+
+Fast loop không cần call observe riêng sau mỗi action: `observeAfter` mặc định `true`,
+`includeScreenshot` mặc định `true`, `includeElements` mặc định `false`; kết quả action có field
+`observation` chứa state sau thao tác và screenshot được promote thành MCP image native. Bật
+`includeElements=true` khi quyết định kế tiếp cần element ID mới, hoặc đặt `observeAfter=false` cho
+action trung gian không cần đọc state. Đây chỉ là tối ưu round-trip, không thay đổi approval/policy.
+Nếu action đã thành công nhưng bước observe gộp bị lỗi, result vẫn trả `completed=true` hoặc
+`active=true`, `observation` rỗng và `verificationWarning.retryAction=false` với recovery
+`observeAgainWithoutRepeatingAction`. Caller chỉ observe lại, không được retry click/type/invoke/Send;
+chỉ lỗi xảy ra trước hoặc trong action mới là tool error.
+Với physical input batch, full success trả `completedActionCount=actions.length`. Nếu bị ngắt sau
+khi input có thể đã xảy ra, result trả active status cùng prefix chắc chắn đã hoàn thành (hoặc bỏ
+`completedActionCount` khi không biết) và `executionWarning` cố định:
+`partialInputExecution`, `retryAction=false`, recovery `observeAgainWithoutRepeatingInput`. Caller
+phải observe state hiện tại và không phát lại batch, đặc biệt với click Send hay action không
+idempotent. Lỗi được phát hiện chắc chắn trước khi input đầu tiên chạy vẫn có thể là tool error.
 
 Chỉ dùng `desktop_input_begin → desktop_input_act → desktop_input_end` khi app không expose UI
 Automation pattern phù hợp và takeover đã qua authorization/approval. Takeover có thể giành chuột và
@@ -90,6 +106,13 @@ ChatGPT/Codex/ChatCMD. Password field không được đọc hoặc điền. C�
 frame mới và sẽ fail rõ ràng thay vì tự restore làm ảnh hưởng desktop user. Với app legacy/canvas mà
 cần cam kết tuyệt đối không tranh chấp input, phải chạy trong Windows session hoặc VM riêng; virtual
 desktop không phải isolation boundary.
+
+Browser app như Brave/Chrome có thể được điều khiển sau khi user tự hoàn tất login/auth. Agent được
+phép điều hướng và soạn nội dung theo yêu cầu, nhưng action cuối gửi email/tin nhắn/form hoặc giao
+tiếp đại diện user phải được tách thành call riêng và đi qua approval đúng thời điểm action. Schema
+không có và không được thêm cờ `userConfirmed` do model tự khai để bypass. Dialog đăng nhập,
+password/OTP, password manager và màn hình security/privacy vẫn là hard deny; approval không mở
+khóa các target này.
 
 ---
 

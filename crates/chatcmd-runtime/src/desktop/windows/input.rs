@@ -51,21 +51,39 @@ pub(super) fn act(
     cancelled: &AtomicBool,
     cancellation: &CancellationToken,
     actions: &[DesktopInputAction],
-) -> RuntimeResult<()> {
+    uia: &super::uia::UiAutomationSession,
+) -> RuntimeResult<NativeInputOutcome> {
+    let mut completed_action_count = 0;
     for action in actions {
-        ensure_active(window, cancelled, cancellation)?;
-        match action {
+        // A previous action may have navigated the same HWND to an authentication or other
+        // denied surface. Re-check the live identity/title before every injected action.
+        let preflight = super::validate_target(window)
+            .and_then(|()| ensure_active(window, cancelled, cancellation))
+            .and_then(|()| match action {
+                DesktopInputAction::Keypress { .. } | DesktopInputAction::Type { .. } => {
+                    ensure_keyboard_target_allowed(window, uia)
+                }
+                _ => Ok(()),
+            });
+        if let Err(error) = preflight {
+            if completed_action_count == 0 {
+                return Err(error);
+            }
+            return Ok(NativeInputOutcome {
+                completed_action_count,
+                interrupted: true,
+            });
+        }
+        let result = match action {
             DesktopInputAction::Click { x, y, button } => {
-                move_to(window, cancelled, cancellation, *x, *y)?;
-                mouse_click(window, cancelled, cancellation, *button, 1)?;
+                move_to(window, cancelled, cancellation, *x, *y)
+                    .and_then(|()| mouse_click(window, cancelled, cancellation, *button, 1))
             }
             DesktopInputAction::DoubleClick { x, y, button } => {
-                move_to(window, cancelled, cancellation, *x, *y)?;
-                mouse_click(window, cancelled, cancellation, *button, 2)?;
+                move_to(window, cancelled, cancellation, *x, *y)
+                    .and_then(|()| mouse_click(window, cancelled, cancellation, *button, 2))
             }
-            DesktopInputAction::Move { x, y } => {
-                move_to(window, cancelled, cancellation, *x, *y)?;
-            }
+            DesktopInputAction::Move { x, y } => move_to(window, cancelled, cancellation, *x, *y),
             DesktopInputAction::Drag {
                 start_x,
                 start_y,
@@ -79,28 +97,51 @@ pub(super) fn act(
                 (*start_x, *start_y),
                 (*end_x, *end_y),
                 *duration_ms,
-            )?,
+            ),
             DesktopInputAction::Scroll {
                 x,
                 y,
                 delta_x,
                 delta_y,
-            } => {
-                move_to(window, cancelled, cancellation, *x, *y)?;
-                scroll(window, cancelled, cancellation, *delta_x, *delta_y)?;
-            }
+            } => move_to(window, cancelled, cancellation, *x, *y)
+                .and_then(|()| scroll(window, cancelled, cancellation, *delta_x, *delta_y)),
             DesktopInputAction::Keypress { keys } => {
-                keypress(window, cancelled, cancellation, keys)?;
+                keypress(window, cancelled, cancellation, keys)
             }
-            DesktopInputAction::Type { text } => {
-                type_text(window, cancelled, cancellation, text)?;
-            }
+            DesktopInputAction::Type { text } => type_text(window, cancelled, cancellation, text),
             DesktopInputAction::Wait { duration_ms } => {
-                wait(window, cancelled, cancellation, *duration_ms)?;
+                wait(window, cancelled, cancellation, *duration_ms)
             }
+        };
+        if result.is_err() {
+            return Ok(NativeInputOutcome {
+                completed_action_count,
+                interrupted: true,
+            });
         }
+        completed_action_count += 1;
     }
-    Ok(())
+    Ok(NativeInputOutcome {
+        completed_action_count,
+        interrupted: false,
+    })
+}
+
+fn ensure_keyboard_target_allowed(
+    window: &NativeWindow,
+    uia: &super::uia::UiAutomationSession,
+) -> RuntimeResult<()> {
+    if uia
+        .focused_element_safety(window.handle)?
+        .denies_keyboard_input()
+    {
+        Err(RuntimeError::new(
+            "desktop_sensitive_input_denied",
+            "keyboard input into password, authentication, credential, or security controls is not allowed",
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 fn ensure_active(

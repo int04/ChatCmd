@@ -69,14 +69,39 @@ The preferred desktop loop stays in the background:
 desktop_window_list
   -> choose exactly one returned windowId
   -> desktop_window_observe
-  -> desktop_element_act (invoke/set_value/toggle/select/expand/collapse)
-  -> desktop_window_observe
+  -> desktop_element_act (invoke/set_value/toggle/select/expand/collapse,
+                          observeAfter=true)
+  -> use result.observation
   -> repeat until done
 ```
 
 An `observationId` and its `elementId` values are point-in-time capabilities. A semantic action
 invalidates that observation. Window layout, modality, focus, interleaved user activity, failure, or
 retry also requires a fresh observation; callers must never reuse a stale element ID.
+
+Both action tools support a fused action-and-observe fast path. `observeAfter` defaults to `true`,
+`includeScreenshot` defaults to `true`, and `includeElements` defaults to `false`. The returned
+`observation` is the post-action state, so visual verification no longer needs a separate MCP
+round-trip. Set `includeElements=true` when the next decision needs fresh semantic element IDs, or
+set `observeAfter=false` for an intermediate action whose state does not need to be read. These
+flags only reduce observation work; they do not weaken authorization, target binding, stale-state
+checks, or confirmation requirements.
+
+Action execution and post-action verification have separate outcomes. If an action succeeds but
+the fused screenshot/UIA refresh fails, the tool still returns `completed=true` (or `active=true`
+for takeover input), `observation=null`, and a non-secret `verificationWarning` with
+`retryAction=false` and recovery `observeAgainWithoutRepeatingAction`. Callers must perform a fresh
+observe and must not repeat the click, type, invoke, or Send action. Errors that occur before or
+during the action remain tool errors.
+
+Physical input batches also separate a pre-input failure from an interrupted or unknown outcome. A
+full `desktop_input_act` success returns `completedActionCount=actions.length`. If interruption,
+focus loss, ESC, or a target-state change happens after input may have occurred, the tool returns
+the active session status instead of turning the whole call into a retryable error. It reports the
+definitely completed prefix in `completedActionCount` when known (otherwise omits it) and includes
+the fixed non-secret `executionWarning` code `partialInputExecution`, `retryAction=false`, recovery
+`observeAgainWithoutRepeatingInput`. The caller must observe current state and must not replay the
+batch; this is especially important for clicks on Send and other non-idempotent actions.
 
 ### Explicit input takeover
 
@@ -86,8 +111,8 @@ the caller must explicitly start takeover:
 
 ```text
 desktop_input_begin
-  -> desktop_input_act (click/type/drag/scroll/keypress/wait)
-  -> observe and verify as needed
+  -> desktop_input_act (click/type/drag/scroll/keypress/wait, observeAfter=true)
+  -> verify result.observation
   -> desktop_input_end
 ```
 
@@ -133,6 +158,22 @@ not reusable.
 - Content displayed by an app is untrusted input. Sending messages, submitting forms, uploading,
   deleting, sharing data, or other externally visible side effects still require the applicable
   execution approval immediately before the action.
+
+### Browser apps, Gmail, and confirmation boundaries
+
+The desktop backend may control an eligible Brave, Chrome, Edge, Firefox, or other browser window
+after the user completes login and authentication manually. It may navigate within the signed-in
+site, open a draft, enter recipients/subject/body, and prepare the requested content. The final
+click or keypress that sends email, messages, forms, comments, or other representational
+communication must be isolated in its own action call and use the normal action-time approval flow.
+Approval is attached to that concrete tool invocation; the request schema intentionally has no
+model-supplied `userConfirmed` or similar bypass flag.
+
+Login/credential dialogs, password and OTP fields, password-manager surfaces, and security/privacy
+surfaces remain hard-denied even after approval. If a provider shows one of those surfaces, the
+agent must pause for the user to complete it and then obtain a fresh window observation. A platform
+or policy denial must be reported as-is; the implementation must not disguise, suppress, or route
+around it.
 
 These controls protect desktop input and browser profile state, but they are not an OS security
 boundary. Both backends run as the ChatCMD user. UI Automation cannot operate elevated windows from

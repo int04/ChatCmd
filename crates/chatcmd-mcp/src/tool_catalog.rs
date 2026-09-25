@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::sync::LazyLock;
 
 pub const PROTOCOL_VERSION: u32 = 2;
-pub const CATALOG_VERSION: u32 = 10;
+pub const CATALOG_VERSION: u32 = 11;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

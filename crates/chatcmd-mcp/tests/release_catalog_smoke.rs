@@ -118,7 +118,7 @@ async fn packaged_process_advertises_exact_manifest_contract_deterministically()
     assert!(names.iter().any(|name| name == "desktop_input_begin"));
     assert!(names.iter().any(|name| name == "desktop_input_act"));
     assert!(names.iter().any(|name| name == "desktop_input_end"));
-    assert_eq!(first_metadata.catalog_version, 10);
+    assert_eq!(first_metadata.catalog_version, 11);
     let project_context = first
         .iter()
         .find(|tool| tool["name"] == "project_context")

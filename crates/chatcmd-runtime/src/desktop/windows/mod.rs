@@ -9,11 +9,150 @@ use ::windows::Win32::{
     Foundation::HWND,
     UI::WindowsAndMessaging::{GetClassNameW, IsIconic, IsWindow},
 };
-use std::sync::{Arc, atomic::AtomicBool};
+use std::{
+    sync::{Arc, Mutex, atomic::AtomicBool},
+    thread,
+    time::Duration,
+};
 use tokio_util::sync::CancellationToken;
 use windows_capture::window::Window;
 
 pub(super) use overlay::InputGuard;
+
+const POST_ACTION_FRAME_TIMEOUT: Duration = Duration::from_millis(200);
+
+/// Reusable, window-bound platform state for the fast observe/action loop.
+pub(super) struct WindowSession {
+    window: NativeWindow,
+    capture: Mutex<Option<capture::CaptureSession>>,
+    uia: uia::UiAutomationSession,
+}
+
+impl WindowSession {
+    pub(super) fn new(window: &NativeWindow) -> RuntimeResult<Self> {
+        validate_target(window)?;
+        Ok(Self {
+            window: window.clone(),
+            capture: Mutex::new(None),
+            uia: uia::UiAutomationSession::new(),
+        })
+    }
+
+    pub(super) fn prewarm_capture(&self) -> RuntimeResult<()> {
+        let mut capture = self.capture_lock()?;
+        if capture.is_none() {
+            *capture = Some(capture::CaptureSession::start(self.window.handle)?);
+        }
+        Ok(())
+    }
+
+    pub(super) fn observe(
+        &self,
+        include_screenshot: bool,
+        include_elements: bool,
+    ) -> RuntimeResult<NativeObservation> {
+        self.observe_after(include_screenshot, include_elements, None)
+    }
+
+    pub(super) fn observe_after(
+        &self,
+        include_screenshot: bool,
+        include_elements: bool,
+        after_sequence: Option<u64>,
+    ) -> RuntimeResult<NativeObservation> {
+        validate_target(&self.window)?;
+        if include_screenshot {
+            // SAFETY: querying minimized state of a validated HWND has no side effects.
+            if unsafe { IsIconic(hwnd(self.window.handle)) }.as_bool() {
+                return Err(RuntimeError::new(
+                    "desktop_window_minimized",
+                    "the target window is minimized; restore it before requesting a screenshot",
+                ));
+            }
+        }
+
+        let (screenshot_png, element_result) = if include_screenshot && include_elements {
+            thread::scope(|scope| {
+                let capture = scope.spawn(|| self.capture_png(after_sequence));
+                let elements = scope.spawn(|| self.uia.snapshot(self.window.handle));
+                let screenshot = capture.join().map_err(worker_panicked)??;
+                let elements = elements.join().map_err(worker_panicked)??;
+                Ok::<_, RuntimeError>((Some(screenshot), elements))
+            })?
+        } else {
+            let screenshot = include_screenshot
+                .then(|| self.capture_png(after_sequence))
+                .transpose()?;
+            let elements = if include_elements {
+                self.uia.snapshot(self.window.handle)?
+            } else {
+                (Vec::new(), false)
+            };
+            (screenshot, elements)
+        };
+        Ok(NativeObservation {
+            elements: element_result.0,
+            elements_truncated: element_result.1,
+            screenshot_png,
+        })
+    }
+
+    pub(super) fn element_act(
+        &self,
+        element: &NativeElement,
+        action: &DesktopElementAction,
+    ) -> RuntimeResult<()> {
+        validate_target(&self.window)?;
+        self.uia.act(self.window.handle, element, action)
+    }
+
+    pub(super) fn input_act(
+        &self,
+        cancelled: &AtomicBool,
+        cancellation: &CancellationToken,
+        actions: &[DesktopInputAction],
+    ) -> RuntimeResult<NativeInputOutcome> {
+        validate_target(&self.window)?;
+        input::act(&self.window, cancelled, cancellation, actions, &self.uia)
+    }
+
+    pub(super) fn current_capture_sequence(&self) -> RuntimeResult<u64> {
+        self.prewarm_capture()?;
+        let capture = self.capture_lock()?;
+        let session = capture.as_ref().ok_or_else(|| {
+            RuntimeError::new(
+                "desktop_capture_start_failed",
+                "desktop capture session was not initialized",
+            )
+        })?;
+        session.wait_for_sequence(capture::CAPTURE_TIMEOUT)
+    }
+
+    fn capture_png(&self, after_sequence: Option<u64>) -> RuntimeResult<Vec<u8>> {
+        self.prewarm_capture()?;
+        let capture = self.capture_lock()?;
+        let session = capture.as_ref().ok_or_else(|| {
+            RuntimeError::new(
+                "desktop_capture_start_failed",
+                "desktop capture session was not initialized",
+            )
+        })?;
+        let result = after_sequence.map_or_else(
+            || session.latest_png(capture::CAPTURE_TIMEOUT),
+            |sequence| session.png_after(sequence, POST_ACTION_FRAME_TIMEOUT),
+        );
+        let (_, png) = result?;
+        Ok(png)
+    }
+
+    fn capture_lock(
+        &self,
+    ) -> RuntimeResult<std::sync::MutexGuard<'_, Option<capture::CaptureSession>>> {
+        self.capture
+            .lock()
+            .map_err(|error| backend_error(error.to_string()))
+    }
+}
 
 pub(super) fn list_windows() -> RuntimeResult<NativeWindowList> {
     let mut allowed = Vec::new();
@@ -66,43 +205,6 @@ pub(super) fn list_windows() -> RuntimeResult<NativeWindowList> {
     })
 }
 
-pub(super) fn observe(
-    window: &NativeWindow,
-    include_screenshot: bool,
-    include_elements: bool,
-) -> RuntimeResult<NativeObservation> {
-    validate_target(window)?;
-    // SAFETY: querying minimized state of a validated HWND has no side effects.
-    if include_screenshot && unsafe { IsIconic(hwnd(window.handle)) }.as_bool() {
-        return Err(RuntimeError::new(
-            "desktop_window_minimized",
-            "the target window is minimized; restore it before requesting a screenshot",
-        ));
-    }
-    let screenshot_png = include_screenshot
-        .then(|| capture::capture_png(window.handle))
-        .transpose()?;
-    let (elements, elements_truncated) = if include_elements {
-        uia::snapshot(window.handle)?
-    } else {
-        (Vec::new(), false)
-    };
-    Ok(NativeObservation {
-        elements,
-        elements_truncated,
-        screenshot_png,
-    })
-}
-
-pub(super) fn element_act(
-    window: &NativeWindow,
-    element: &NativeElement,
-    action: &DesktopElementAction,
-) -> RuntimeResult<()> {
-    validate_target(window)?;
-    uia::act(window.handle, element, action)
-}
-
 pub(super) fn start_input(window: &NativeWindow) -> RuntimeResult<(InputGuard, Arc<AtomicBool>)> {
     validate_target(window)?;
     let cancelled = Arc::new(AtomicBool::new(false));
@@ -116,16 +218,6 @@ pub(super) fn start_input(window: &NativeWindow) -> RuntimeResult<(InputGuard, A
         return Err(error);
     }
     Ok((guard, cancelled))
-}
-
-pub(super) fn input_act(
-    window: &NativeWindow,
-    cancelled: &AtomicBool,
-    cancellation: &CancellationToken,
-    actions: &[DesktopInputAction],
-) -> RuntimeResult<()> {
-    validate_target(window)?;
-    input::act(window, cancelled, cancellation, actions)
 }
 
 fn validate_target(window: &NativeWindow) -> RuntimeResult<()> {
@@ -253,6 +345,13 @@ pub(super) fn backend_error(error: impl std::fmt::Display) -> RuntimeError {
     let mut runtime = RuntimeError::new("desktop_backend_error", error.to_string());
     runtime.retryable = true;
     runtime
+}
+
+fn worker_panicked(_: Box<dyn std::any::Any + Send>) -> RuntimeError {
+    RuntimeError::new(
+        "desktop_worker_panicked",
+        "a desktop observation worker stopped unexpectedly",
+    )
 }
 
 #[cfg(test)]

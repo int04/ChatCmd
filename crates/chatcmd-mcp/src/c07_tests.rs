@@ -132,14 +132,14 @@ async fn project_rule_digest_changes_without_requiring_catalog_reconnect() {
 }
 
 #[test]
-fn catalog_v10_mismatch_has_reconnect_metadata_and_bounded_recovery() {
+fn catalog_v11_mismatch_has_reconnect_metadata_and_bounded_recovery() {
     let arguments = ToolArguments {
         client_catalog_hash: Some("sha256:v7-cached".to_owned()),
         ..ToolArguments::default()
     };
     let result = catalog_mismatch(&arguments).expect("cached v7 must mismatch");
     let value = result.structured_content.expect("structured mismatch");
-    assert_eq!(value["catalogVersion"], 10);
+    assert_eq!(value["catalogVersion"], 11);
     assert_eq!(value["error"]["recovery"], "refreshAndRetry");
     assert_eq!(value["reconnect"]["maxAttempts"], 1);
 }

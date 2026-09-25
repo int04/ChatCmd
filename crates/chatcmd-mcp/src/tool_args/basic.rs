@@ -72,6 +72,12 @@ struct DesktopElementActArgs {
     common: CommonToolArgs,
     observation_id: String,
     element_id: String,
+    #[serde(default = "default_true")]
+    observe_after: bool,
+    #[serde(default = "default_true")]
+    include_screenshot: bool,
+    #[serde(default)]
+    include_elements: bool,
     #[serde(flatten)]
     action: chatcmd_runtime::DesktopElementAction,
 }
@@ -79,7 +85,13 @@ struct DesktopElementActArgs {
 tool_args!(DesktopInputBeginArgs { window_id: String });
 tool_args!(DesktopInputActArgs {
     input_session_id: String,
-    actions: Vec<chatcmd_runtime::DesktopInputAction>
+    actions: Vec<chatcmd_runtime::DesktopInputAction>,
+    #[serde(default = "default_true")]
+    observe_after: bool,
+    #[serde(default = "default_true")]
+    include_screenshot: bool,
+    #[serde(default)]
+    include_elements: bool
 });
 tool_args!(DesktopInputEndArgs {
     input_session_id: String

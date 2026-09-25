@@ -135,15 +135,35 @@ impl McpServer {
 }
 
 fn tool_result_with_image(mut value: Value) -> CallToolResult {
-    let screenshot = value
-        .as_object_mut()
-        .and_then(|object| object.remove("screenshotBase64"))
-        .and_then(|value| value.as_str().map(str::to_owned));
+    let mut screenshots = Vec::new();
+    take_screenshot_images(&mut value, &mut screenshots);
     let mut result = CallToolResult::structured(value);
-    if let Some(data) = screenshot {
+    for data in screenshots {
         result.content.push(ContentBlock::image(data, "image/png"));
     }
     result
+}
+
+fn take_screenshot_images(value: &mut Value, screenshots: &mut Vec<String>) {
+    match value {
+        Value::Object(object) => {
+            if let Some(data) = object
+                .remove("screenshotBase64")
+                .and_then(|value| value.as_str().map(str::to_owned))
+            {
+                screenshots.push(data);
+            }
+            for child in object.values_mut() {
+                take_screenshot_images(child, screenshots);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                take_screenshot_images(item, screenshots);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+    }
 }
 
 fn missing_authenticated_context() -> CallToolResult {

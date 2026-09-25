@@ -75,6 +75,12 @@ pub struct DesktopRect {
 pub struct DesktopElementActRequest {
     pub observation_id: String,
     pub element_id: String,
+    #[serde(default = "default_true")]
+    pub observe_after: bool,
+    #[serde(default = "default_true")]
+    pub include_screenshot: bool,
+    #[serde(default)]
+    pub include_elements: bool,
     #[serde(flatten)]
     pub action: DesktopElementAction,
 }
@@ -89,50 +95,86 @@ impl<'de> Deserialize<'de> for DesktopElementActRequest {
             DesktopElementActWire::Invoke {
                 observation_id,
                 element_id,
+                observe_after,
+                include_screenshot,
+                include_elements,
             } => Self {
                 observation_id,
                 element_id,
+                observe_after,
+                include_screenshot,
+                include_elements,
                 action: DesktopElementAction::Invoke,
             },
             DesktopElementActWire::SetValue {
                 observation_id,
                 element_id,
+                observe_after,
+                include_screenshot,
+                include_elements,
                 text,
             } => Self {
                 observation_id,
                 element_id,
+                observe_after,
+                include_screenshot,
+                include_elements,
                 action: DesktopElementAction::SetValue { text },
             },
             DesktopElementActWire::Toggle {
                 observation_id,
                 element_id,
+                observe_after,
+                include_screenshot,
+                include_elements,
             } => Self {
                 observation_id,
                 element_id,
+                observe_after,
+                include_screenshot,
+                include_elements,
                 action: DesktopElementAction::Toggle,
             },
             DesktopElementActWire::Select {
                 observation_id,
                 element_id,
+                observe_after,
+                include_screenshot,
+                include_elements,
             } => Self {
                 observation_id,
                 element_id,
+                observe_after,
+                include_screenshot,
+                include_elements,
                 action: DesktopElementAction::Select,
             },
             DesktopElementActWire::Expand {
                 observation_id,
                 element_id,
+                observe_after,
+                include_screenshot,
+                include_elements,
             } => Self {
                 observation_id,
                 element_id,
+                observe_after,
+                include_screenshot,
+                include_elements,
                 action: DesktopElementAction::Expand,
             },
             DesktopElementActWire::Collapse {
                 observation_id,
                 element_id,
+                observe_after,
+                include_screenshot,
+                include_elements,
             } => Self {
                 observation_id,
                 element_id,
+                observe_after,
+                include_screenshot,
+                include_elements,
                 action: DesktopElementAction::Collapse,
             },
         })
@@ -150,27 +192,63 @@ enum DesktopElementActWire {
     Invoke {
         observation_id: String,
         element_id: String,
+        #[serde(default = "default_true")]
+        observe_after: bool,
+        #[serde(default = "default_true")]
+        include_screenshot: bool,
+        #[serde(default)]
+        include_elements: bool,
     },
     SetValue {
         observation_id: String,
         element_id: String,
+        #[serde(default = "default_true")]
+        observe_after: bool,
+        #[serde(default = "default_true")]
+        include_screenshot: bool,
+        #[serde(default)]
+        include_elements: bool,
         text: String,
     },
     Toggle {
         observation_id: String,
         element_id: String,
+        #[serde(default = "default_true")]
+        observe_after: bool,
+        #[serde(default = "default_true")]
+        include_screenshot: bool,
+        #[serde(default)]
+        include_elements: bool,
     },
     Select {
         observation_id: String,
         element_id: String,
+        #[serde(default = "default_true")]
+        observe_after: bool,
+        #[serde(default = "default_true")]
+        include_screenshot: bool,
+        #[serde(default)]
+        include_elements: bool,
     },
     Expand {
         observation_id: String,
         element_id: String,
+        #[serde(default = "default_true")]
+        observe_after: bool,
+        #[serde(default = "default_true")]
+        include_screenshot: bool,
+        #[serde(default)]
+        include_elements: bool,
     },
     Collapse {
         observation_id: String,
         element_id: String,
+        #[serde(default = "default_true")]
+        observe_after: bool,
+        #[serde(default = "default_true")]
+        include_screenshot: bool,
+        #[serde(default)]
+        include_elements: bool,
     },
 }
 
@@ -187,9 +265,83 @@ pub enum DesktopElementAction {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct DesktopVerificationWarning {
+    code: DesktopVerificationWarningCode,
+    message: String,
+    action_completed: bool,
+    retry_action: bool,
+    recovery: DesktopVerificationRecovery,
+}
+
+impl DesktopVerificationWarning {
+    #[must_use]
+    pub fn post_action_observation_failed() -> Self {
+        Self {
+            code: DesktopVerificationWarningCode::PostActionObservationFailed,
+            message: "action completed, but post-action observation failed; observe again without repeating the action".to_owned(),
+            action_completed: true,
+            retry_action: false,
+            recovery: DesktopVerificationRecovery::ObserveAgainWithoutRepeatingAction,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+enum DesktopVerificationWarningCode {
+    PostActionObservationFailed,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+enum DesktopVerificationRecovery {
+    ObserveAgainWithoutRepeatingAction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DesktopInputExecutionWarning {
+    code: DesktopInputExecutionWarningCode,
+    message: String,
+    retry_action: bool,
+    recovery: DesktopInputExecutionRecovery,
+}
+
+impl DesktopInputExecutionWarning {
+    #[must_use]
+    pub fn partial_input_execution() -> Self {
+        Self {
+            code: DesktopInputExecutionWarningCode::PartialInputExecution,
+            message:
+                "input batch may have executed partially; observe again without repeating input"
+                    .to_owned(),
+            retry_action: false,
+            recovery: DesktopInputExecutionRecovery::ObserveAgainWithoutRepeatingInput,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+enum DesktopInputExecutionWarningCode {
+    PartialInputExecution,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+enum DesktopInputExecutionRecovery {
+    ObserveAgainWithoutRepeatingInput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct DesktopActionResult {
     pub completed: bool,
     pub observation_invalidated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observation: Option<DesktopObservation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verification_warning: Option<DesktopVerificationWarning>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -206,6 +358,14 @@ pub struct DesktopInputSessionInfo {
     pub active: bool,
     pub escape_to_stop: bool,
     pub overlay_visible: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub observation: Option<DesktopObservation>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verification_warning: Option<DesktopVerificationWarning>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub completed_action_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution_warning: Option<DesktopInputExecutionWarning>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -213,6 +373,12 @@ pub struct DesktopInputSessionInfo {
 pub struct DesktopInputActRequest {
     pub input_session_id: String,
     pub actions: Vec<DesktopInputAction>,
+    #[serde(default = "default_true")]
+    pub observe_after: bool,
+    #[serde(default = "default_true")]
+    pub include_screenshot: bool,
+    #[serde(default)]
+    pub include_elements: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

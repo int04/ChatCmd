@@ -37,6 +37,9 @@ fn semantic_action_uses_flattened_snake_case_contract() {
 
     assert_eq!(request.observation_id, "observation-1");
     assert_eq!(request.element_id, "element-7");
+    assert!(request.observe_after);
+    assert!(request.include_screenshot);
+    assert!(!request.include_elements);
     assert!(matches!(
         request.action,
         DesktopElementAction::SetValue { ref text } if text == "hello"
@@ -61,6 +64,9 @@ fn takeover_actions_use_camel_case_fields_and_default_left_button() {
     .expect("bounded takeover actions should deserialize");
 
     assert_eq!(request.input_session_id, "input-1");
+    assert!(request.observe_after);
+    assert!(request.include_screenshot);
+    assert!(!request.include_elements);
     assert!(matches!(
         request.actions.first(),
         Some(DesktopInputAction::Click {

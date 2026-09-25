@@ -68,17 +68,17 @@ tool_methods!(
     (
         desktop_window_list,
         NoArgs,
-        "List eligible top-level Windows application windows without taking focus. Returns opaque owner-scoped windowId values. Security, authentication, terminal, password-manager, ChatGPT, Codex, and ChatCMD windows are excluded."
+        "List eligible top-level Windows application windows, including supported browser windows, without taking focus. Returns opaque owner-scoped windowId values. The user must complete login and authentication manually before browser content is controlled. Authentication dialogs, password fields, security apps, terminals, password managers, ChatGPT, Codex, and ChatCMD remain hard-denied and cannot be enabled by approval."
     ),
     (
         desktop_window_observe,
         DesktopObserveArgs,
-        "Observe one eligible Windows application window by opaque windowId. By default returns a Windows.Graphics.Capture screenshot as native MCP image content plus structured UI Automation elements and an observationId. Optional includeScreenshot and includeElements can disable either channel. Capture does not move the pointer or take keyboard focus; minimized windows must be restored by the user."
+        "Observe one eligible Windows application window by opaque windowId. By default returns a Windows.Graphics.Capture screenshot as native MCP image content plus structured UI Automation elements and an observationId. Optional includeScreenshot and includeElements can disable either channel. Capture does not move the pointer or take keyboard focus; minimized windows must be restored by the user. Browser pages may be observed after the user completes login/authentication manually; authentication, password, and security surfaces remain hard-denied."
     ),
     (
         desktop_element_act,
         DesktopElementActArgs,
-        "Perform one background UI Automation action against an element from a fresh desktop_window_observe snapshot without moving the pointer or taking focus. Required observationId, elementId, and action. Supported actions: invoke, set_value, toggle, select, expand, collapse. Every attempt invalidates the observation; observe again before the next action. This tool never silently falls back to physical input."
+        "Perform one background UI Automation action against an element from a fresh desktop_window_observe snapshot without moving the pointer or taking focus. Required observationId, elementId, and action. Supported actions: invoke, set_value, toggle, select, expand, collapse. Optional observeAfter (default true) returns a fresh observation in the same result; includeScreenshot defaults true and includeElements defaults false. Every attempt invalidates the input observation. If the action succeeds but its fused observation fails, completed remains true and verificationWarning says to observe again without repeating the action; never retry the action from that warning. This tool never silently falls back to physical input. In browser apps, navigation and drafting may proceed after the user handles login/authentication manually, but the final action that sends email, messages, forms, or other representational communication must be isolated in its own call and requires normal action-time user approval. Authentication dialogs, passwords, password managers, and security surfaces remain hard-denied even after approval."
     ),
     (
         desktop_input_begin,
@@ -88,7 +88,7 @@ tool_methods!(
     (
         desktop_input_act,
         DesktopInputActArgs,
-        "Execute 1-32 ordered physical mouse/keyboard actions in an active desktop takeover. Required inputSessionId and actions. Supported types: click, double_click, move, drag, scroll, keypress, type, wait. Coordinates are relative to the target window. The session cancels instead of typing if ESC is pressed, the target closes, or another app receives focus."
+        "Execute 1-32 ordered physical mouse/keyboard actions in an active desktop takeover. Required inputSessionId and actions. Supported types: click, double_click, move, drag, scroll, keypress, type, wait. Optional observeAfter (default true) returns a fresh observation in the same result; includeScreenshot defaults true and includeElements defaults false. Full success returns completedActionCount equal to actions.length. If execution is interrupted after input may have occurred, the result returns the definitely completed prefix when known plus executionWarning with retryAction=false; observe again and never replay the batch. If the actions succeed but fused observation fails, active remains true and verificationWarning says to observe again without repeating the actions; never retry input from that warning. Coordinates are relative to the target window. The session cancels instead of typing if ESC is pressed, the target closes, or another app receives focus. In browser apps, navigation and drafting may proceed after the user handles login/authentication manually, but the final action that sends email, messages, forms, or other representational communication must be isolated in its own call and requires normal action-time user approval. Approval never bypasses authentication, password, password-manager, or security hard denies."
     ),
     (
         desktop_input_end,
