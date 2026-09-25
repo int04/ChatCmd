@@ -349,6 +349,44 @@ test('identity recovery binds by request id before falling back to prompt text',
   assert.match(recoverySource, /chrome\.storage\.local\.set/);
 });
 
+test('local-chatgpt URLs remain provisional until ChatGPT assigns a real ID', () => {
+  const background = { URL };
+  vm.createContext(background);
+  vm.runInContext(backgroundIoSource, background, { filename: 'background-io.js' });
+  assert.equal(vm.runInContext("isProvisionalConversationId('local-chatgpt:temporary')", background), true);
+  const content = loadBridge();
+  assert.equal(vm.runInContext("isProvisionalConversationId('local-chatgpt:temporary')", content), true);
+});
+
+test('identity probe reads the current user turn from the new transcript layout', () => {
+  const context = loadBridge();
+  context.ChatCmdTranscript = { latestUser: () => ({ content: 'hello [[CHATCMD-REQUEST:request-1]]' }) };
+  context.document.body = { innerText: 'hello [[CHATCMD-REQUEST:11111111-1111-1111-1111-111111111111]]' };
+  let response;
+  context.__messageListener({ type: 'chatcmd-chatgpt-identity-probe' }, null, (value) => { response = value; });
+  assert.equal(response.userText, 'hello [[CHATCMD-REQUEST:request-1]]');
+  assert.equal(response.conversationId, 'test-conversation');
+  assert.equal(response.requestMarkers[0], '11111111-1111-1111-1111-111111111111');
+});
+
+test('identity recovery recognizes the request marker after a ChatGPT tab reload', async () => {
+  const recovery = recoverySource.slice(recoverySource.indexOf('async function recoverRequestIdentity'), recoverySource.indexOf('async function recoverIdentityFromTab'));
+  const context = {
+    localOrigin: () => 'http://127.0.0.1:8080',
+    normalizeIdentityText: (value) => String(value || '').replace(/\s+/g, ' ').trim(),
+    recoveryRequestContext: async () => null,
+    chatGptTabs: async () => [{ id: 12, url: 'https://chatgpt.com/c/real-id' }],
+    conversationIdFromUrl: () => 'real-id',
+    sendToChatGpt: async () => ({ conversationId: 'real-id', conversationUrl: 'https://chatgpt.com/c/real-id', requestMarkers: ['request-1'], userText: '' }),
+    persistRecoveredIdentity: async () => ({ recovered: true }),
+    logExtension: async () => {},
+  };
+  vm.createContext(context);
+  vm.runInContext(recovery, context);
+  const result = await vm.runInContext("recoverRequestIdentity({ requestId: 'request-1', submittedContent: 'Hello [[CHATCMD-REQUEST:request-1]] routing footer' })", context);
+  assert.equal(result.recovered, true);
+});
+
 test('terminal bridge paths release durable recovery state', () => {
   const terminalProgress = backgroundIoSource.slice(backgroundIoSource.indexOf("if (message.stage === 'browser-completed')"), backgroundIoSource.indexOf('async function requestContext'));
   assert.match(terminalProgress, /releaseRequest\(message\.requestId\);\s*await forgetRecoveryRequest\(message\.requestId\);/);

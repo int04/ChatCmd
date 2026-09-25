@@ -156,20 +156,22 @@ test('caps Unicode transcript size and ignores invalidated owners', async (t) =>
   assert.equal(env.sent.length, 1);
 });
 
-test('a provisional WEB identity may become canonical only within the owned user turn', async (t) => {
-  const env = setup(t);
-  env.window.history.replaceState({}, '', '/c/WEB%3Atest');
-  const capture = recorder(t, env);
-  env.add(user('u') + assistant('a', '<div class="markdown">Before promotion</div>'));
-  await capture.bind();
-  assert.equal(env.sent.at(-1).conversationId, 'WEB:test');
-  env.window.history.replaceState({}, '', '/c/canonical-chat');
-  env.window.document.querySelector('.markdown').textContent = 'After promotion';
-  await capture.flush();
-  assert.equal(capture.active, true);
-  assert.equal(env.sent.at(-1).conversationId, 'canonical-chat');
-  assert.equal(env.sent.at(-1).messages.length, 1);
-});
+for (const provisionalId of ['WEB:test', 'local-chatgpt:test']) {
+  test(`${provisionalId} may become canonical only within the owned user turn`, async (t) => {
+    const env = setup(t);
+    env.window.history.replaceState({}, '', `/c/${encodeURIComponent(provisionalId)}`);
+    const capture = recorder(t, env);
+    env.add(user('u') + assistant('a', '<div class="markdown">Before promotion</div>'));
+    await capture.bind();
+    assert.equal(env.sent.at(-1).conversationId, provisionalId);
+    env.window.history.replaceState({}, '', '/c/canonical-chat');
+    env.window.document.querySelector('.markdown').textContent = 'After promotion';
+    await capture.flush();
+    assert.equal(capture.active, true);
+    assert.equal(env.sent.at(-1).conversationId, 'canonical-chat');
+    assert.equal(env.sent.at(-1).messages.length, 1);
+  });
+}
 
 test('flush can publish an already scanned revision without rescanning the DOM', async (t) => {
   const env = setup(t);

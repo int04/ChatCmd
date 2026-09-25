@@ -330,7 +330,7 @@ function isChatGptUrl(value) {
 }
 
 function isProvisionalConversationId(value) {
-  return /^WEB:/i.test(String(value || ''));
+  return /^(?:WEB:|local-chatgpt:)/i.test(String(value || ''));
 }
 
 function localOrigin(value) {

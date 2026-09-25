@@ -39,7 +39,7 @@
       if (localOnly) visibleAnswer = null;
       const id = dom.conversationId();
       if (conversationId && id && id !== conversationId) {
-        if (/^WEB:/i.test(conversationId) && userId && dom.latestUser()?.id === userId) { conversationId = id; checkpoint(); }
+        if (/^(?:WEB:|local-chatgpt:)/i.test(conversationId) && userId && dom.latestUser()?.id === userId) { conversationId = id; checkpoint(); }
         else { stop(); return; }
       }
       if (!conversationId && id) conversationId = id;

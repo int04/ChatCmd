@@ -87,7 +87,7 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
     return () => { disposed = true; window.clearInterval(timer); };
   }, [bridge.data?.activeRequestId, compactPaused, reloadBridge]);
   useEffect(() => {
-    if (conversationUrl || compactPaused) return;
+    if ((conversationUrl && !/^(?:WEB:|local-chatgpt:)/i.test(bridge.data?.conversationId || '')) || compactPaused) return;
     const requestId = bridge.data?.latestRequestId;
     const submittedContent = bridge.data?.latestSubmittedContent;
     if (!requestId || !submittedContent) return;
@@ -113,7 +113,7 @@ export function ChatGptTaskComposer({ taskId }: { taskId: string }) {
     recover();
     const timer = window.setInterval(recover, 2_000);
     return () => { disposed = true; window.clearInterval(timer); };
-  }, [taskId, bridge.data?.latestRequestId, bridge.data?.latestSubmittedContent, conversationUrl, compactPaused, reloadBridge]);
+  }, [taskId, bridge.data?.latestRequestId, bridge.data?.latestSubmittedContent, bridge.data?.conversationId, conversationUrl, compactPaused, reloadBridge]);
   const prepareMessage = (message: string) => prepareChatGptMessage(message, {
     pluginName: attachedPlugin?.name,
     projectFolder: attachedProjectFolder,

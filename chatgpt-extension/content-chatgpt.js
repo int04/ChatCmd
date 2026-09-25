@@ -85,7 +85,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (message?.type === 'chatcmd-chatgpt-identity-probe') {
     const identity = currentConversationIdentity();
-    sendResponse({ ok: true, requestId: document.documentElement?.dataset?.chatcmdRequestId, conversationId: identity?.conversationId, conversationUrl: identity?.conversationUrl, userText: latestMessageText('user') });
+    const requestMarkers = [...(document.body?.innerText || '').matchAll(/\[\[CHATCMD-REQUEST:([a-f\d-]{36})\]\]/gi)].map((match) => match[1]);
+    sendResponse({ ok: true, requestId: document.documentElement?.dataset?.chatcmdRequestId, requestMarkers, conversationId: identity?.conversationId, conversationUrl: identity?.conversationUrl, userText: globalThis.ChatCmdTranscript?.latestUser()?.content || latestMessageText('user') });
     return false;
   }
   return false;
@@ -374,7 +375,7 @@ function currentConversationIdentity() {
 }
 
 function isProvisionalConversationId(value) {
-  return /^WEB:/i.test(String(value || ''));
+  return /^(?:WEB:|local-chatgpt:)/i.test(String(value || ''));
 }
 
 async function requestState(requestId) {

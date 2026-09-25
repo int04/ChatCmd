@@ -348,7 +348,7 @@ pub(super) async fn bridge_identity(
         return Err(Problem::new(
             StatusCode::BAD_REQUEST,
             "Provisional ChatGPT conversation",
-            "A provisional WEB conversation ID cannot replace the durable ChatGPT conversation ID.",
+            "A provisional ChatGPT conversation ID cannot replace the durable ChatGPT conversation ID.",
         ));
     }
     let request_id = request_id.trim();
@@ -396,6 +396,13 @@ pub(super) async fn bridge_identity(
         .bind(&model)
         .bind(now)
         .bind(now)
+        .execute(&mut *transaction)
+        .await
+        .map_err(db_problem)?;
+    sqlx::query("UPDATE tasks SET conversation_scope_hash=?,updated_at_ms=? WHERE id=?")
+        .bind(openai_scope(input.conversation_id.trim()))
+        .bind(now)
+        .bind(&task_id)
         .execute(&mut *transaction)
         .await
         .map_err(db_problem)?;
