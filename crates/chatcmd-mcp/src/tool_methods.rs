@@ -83,7 +83,7 @@ tool_methods!(
     (
         desktop_input_begin,
         DesktopInputBeginArgs,
-        "Begin an explicit interactive desktop takeover for one eligible window when UI Automation cannot complete the task. Required windowId. This takes foreground keyboard/mouse control, displays a blinking click-through border and the banner 'Computer control active - Press ESC to stop', and installs global ESC cancellation. Only one takeover may be active."
+        "Begin an explicit interactive desktop takeover for one eligible window when UI Automation cannot complete the task. Required windowId. This takes foreground keyboard/mouse control, displays blinking click-through borders around both the target and its monitor plus the banner 'Computer control active - Press ESC to stop', and installs global ESC cancellation. Only one takeover may be active."
     ),
     (
         desktop_input_act,

@@ -1,6 +1,7 @@
 mod capture;
 mod input;
 mod overlay;
+mod overlay_paint;
 mod uia;
 
 use super::*;

@@ -92,9 +92,10 @@ desktop_input_begin
 ```
 
 Takeover brings the selected target to the foreground and can therefore contend with the user for
-the shared mouse and keyboard. While it is active, ChatCMD displays a click-through, always-on-top,
-blinking border around the target and a banner reading **Computer control active — Press ESC to
-stop**. ESC is a global emergency stop: it cancels the takeover and removes the overlay. If the user
+the shared mouse and keyboard. While it is active, ChatCMD displays click-through, always-on-top,
+blinking borders around both the target window and the monitor containing it, plus a banner reading
+**Computer control active — Press ESC to stop**. ESC is a global emergency stop: it cancels the
+takeover and removes the overlay. If the user
 switches focus away from the exact target window, ChatCMD fails closed and cancels before sending the next input;
 it never continues typing into the newly focused app. Only one takeover may be active at a time.
 

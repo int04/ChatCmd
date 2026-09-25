@@ -1,26 +1,25 @@
-use super::{backend_error, hwnd};
+use super::{backend_error, hwnd, overlay_paint};
 use crate::{RuntimeError, RuntimeResult};
 use ::windows::{
     Win32::{
         Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM},
         Graphics::Gdi::{
-            BACKGROUND_MODE, BeginPaint, CreateSolidBrush, DT_CENTER, DT_END_ELLIPSIS,
-            DT_SINGLELINE, DT_VCENTER, DeleteObject, DrawTextW, EndPaint, FillRect, HBRUSH, HDC,
-            HGDIOBJ, InvalidateRect, PAINTSTRUCT, SetBkMode, SetTextColor, TRANSPARENT,
+            GetMonitorInfoW, InvalidateRect, MONITOR_DEFAULTTONEAREST, MONITORINFO,
+            MonitorFromWindow,
         },
         System::LibraryLoader::GetModuleHandleW,
         UI::{
             Input::KeyboardAndMouse::{MOD_NOREPEAT, RegisterHotKey, UnregisterHotKey, VK_ESCAPE},
             WindowsAndMessaging::{
                 CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-                GWLP_USERDATA, GetClientRect, GetForegroundWindow, GetMessageW, GetWindowLongPtrW,
-                GetWindowRect, HTTRANSPARENT, HWND_TOPMOST, IsIconic, IsWindow, KillTimer,
-                LWA_COLORKEY, MSG, PostQuitMessage, RegisterClassW, SW_HIDE, SWP_NOACTIVATE,
-                SWP_SHOWWINDOW, SetLayeredWindowAttributes, SetTimer, SetWindowLongPtrW,
-                SetWindowPos, ShowWindow, TranslateMessage, UnregisterClassW, WINDOW_EX_STYLE,
-                WM_CLOSE, WM_DESTROY, WM_ERASEBKGND, WM_HOTKEY, WM_NCCREATE, WM_NCHITTEST,
-                WM_PAINT, WM_TIMER, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-                WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+                GWLP_USERDATA, GetForegroundWindow, GetMessageW, GetWindowLongPtrW, GetWindowRect,
+                HTTRANSPARENT, HWND_TOPMOST, IsIconic, IsWindow, KillTimer, LWA_COLORKEY, MSG,
+                PostQuitMessage, RegisterClassW, SW_HIDE, SWP_NOACTIVATE, SWP_SHOWWINDOW,
+                SetLayeredWindowAttributes, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+                TranslateMessage, UnregisterClassW, WINDOW_EX_STYLE, WM_CLOSE, WM_DESTROY,
+                WM_ERASEBKGND, WM_HOTKEY, WM_NCCREATE, WM_NCHITTEST, WM_PAINT, WM_TIMER, WNDCLASSW,
+                WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+                WS_EX_TRANSPARENT, WS_POPUP,
             },
         },
     },
@@ -40,7 +39,6 @@ use std::{
 const FOLLOW_TIMER: usize = 1;
 const BLINK_TIMER: usize = 2;
 const HOTKEY_ID: i32 = 1;
-const BANNER_TEXT: &str = "Computer control active — Press ESC to stop";
 const STAGED: u8 = 0;
 const ARM_REQUESTED: u8 = 1;
 const ARMED: u8 = 2;
@@ -93,6 +91,8 @@ impl Drop for InputGuard {
 
 struct OverlayState {
     target: HWND,
+    target_rect: RECT,
+    monitor_rect: RECT,
     cancelled: Arc<AtomicBool>,
     lifecycle: Arc<AtomicU8>,
     bright: bool,
@@ -135,6 +135,7 @@ fn overlay_thread(
         let _ = ready.send(Err(error.clone()));
         return Err(error);
     }
+    let monitor_rect = monitor_rect(target)?;
     // SAFETY: a null module name requests the current process module without borrowing memory.
     let module = unsafe { GetModuleHandleW(None) }.map_err(backend_error)?;
     let instance = HINSTANCE(module.0);
@@ -154,11 +155,13 @@ fn overlay_thread(
 
     let mut state = OverlayState {
         target,
+        target_rect,
+        monitor_rect,
         cancelled,
         lifecycle,
         bright: true,
     };
-    let result = create_and_run(instance, class_name, target_rect, &mut state, &ready);
+    let result = create_and_run(instance, class_name, monitor_rect, &mut state, &ready);
     // SAFETY: the overlay window has been destroyed before its unique class is unregistered.
     let unregister = unsafe { UnregisterClassW(class_name, Some(instance)) };
     result.and_then(|()| unregister.map_err(backend_error))
@@ -287,7 +290,9 @@ unsafe extern "system" fn window_proc(
         WM_ERASEBKGND => LRESULT(1),
         WM_NCHITTEST => LRESULT(HTTRANSPARENT as isize),
         WM_PAINT => {
-            paint(window, state_mut(window).as_deref());
+            if let Some(state) = state_mut(window) {
+                overlay_paint::paint(window, state.bright, state.target_rect, state.monitor_rect);
+            }
             LRESULT(0)
         }
         WM_TIMER => {
@@ -368,29 +373,65 @@ fn on_timer(window: HWND, timer: usize) {
         let _ = unsafe { ShowWindow(window, SW_HIDE) };
         return;
     }
-    let mut rect = RECT::default();
+    let mut target_rect = RECT::default();
     // SAFETY: the target is live and `rect` is writable.
-    if unsafe { GetWindowRect(state.target, &mut rect) }.is_err() {
+    if unsafe { GetWindowRect(state.target, &mut target_rect) }.is_err() {
         cancel_and_destroy(window, state);
         return;
     }
+    let Ok(monitor_rect) = monitor_rect(state.target) else {
+        cancel_and_destroy(window, state);
+        return;
+    };
+    let changed =
+        !same_rect(state.target_rect, target_rect) || !same_rect(state.monitor_rect, monitor_rect);
+    state.target_rect = target_rect;
+    state.monitor_rect = monitor_rect;
     // SAFETY: repositioning the live overlay topmost without activation follows the target.
     let positioned = unsafe {
         SetWindowPos(
             window,
             Some(HWND_TOPMOST),
-            rect.left,
-            rect.top,
-            (rect.right - rect.left).max(1),
-            (rect.bottom - rect.top).max(1),
+            monitor_rect.left,
+            monitor_rect.top,
+            (monitor_rect.right - monitor_rect.left).max(1),
+            (monitor_rect.bottom - monitor_rect.top).max(1),
             SWP_NOACTIVATE | SWP_SHOWWINDOW,
         )
     };
     if positioned.is_err() {
         cancel_and_destroy(window, state);
-    } else if lifecycle == ARM_REQUESTED {
-        state.lifecycle.store(ARMED, Ordering::Release);
+    } else {
+        if changed {
+            // SAFETY: repainting the transparent overlay reflects the latest window/monitor bounds.
+            let _ = unsafe { InvalidateRect(Some(window), None, false) };
+        }
+        if lifecycle == ARM_REQUESTED {
+            state.lifecycle.store(ARMED, Ordering::Release);
+        }
     }
+}
+
+fn monitor_rect(target: HWND) -> RuntimeResult<RECT> {
+    // SAFETY: querying the nearest monitor for a validated HWND has no side effects.
+    let monitor = unsafe { MonitorFromWindow(target, MONITOR_DEFAULTTONEAREST) };
+    let mut info = MONITORINFO {
+        cbSize: u32::try_from(std::mem::size_of::<MONITORINFO>()).unwrap_or_default(),
+        ..Default::default()
+    };
+    // SAFETY: `info` is writable and has the required structure size initialized.
+    if unsafe { GetMonitorInfoW(monitor, &mut info) }.as_bool() {
+        Ok(info.rcMonitor)
+    } else {
+        Err(backend_error(::windows::core::Error::from_thread()))
+    }
+}
+
+fn same_rect(left: RECT, right: RECT) -> bool {
+    left.left == right.left
+        && left.top == right.top
+        && left.right == right.right
+        && left.bottom == right.bottom
 }
 
 fn cancel_and_destroy(window: HWND, state: &OverlayState) {
@@ -408,93 +449,4 @@ fn state_mut(window: HWND) -> Option<&'static mut OverlayState> {
     // SAFETY: user data is null before WM_NCCREATE or the live pointer installed there; the
     // OverlayState remains on the window thread's stack until the message loop exits.
     unsafe { (GetWindowLongPtrW(window, GWLP_USERDATA) as *mut OverlayState).as_mut() }
-}
-
-fn paint(window: HWND, state: Option<&OverlayState>) {
-    let Some(state) = state else {
-        return;
-    };
-    let mut paint = PAINTSTRUCT::default();
-    // SAFETY: called during WM_PAINT with writable paint storage.
-    let dc = unsafe { BeginPaint(window, &mut paint) };
-    let mut client = RECT::default();
-    // SAFETY: the overlay is live and `client` is writable.
-    let _ = unsafe { GetClientRect(window, &mut client) };
-    let black = create_brush(rgb(0, 0, 0));
-    let accent = create_brush(if state.bright {
-        rgb(239, 68, 68)
-    } else {
-        rgb(249, 115, 22)
-    });
-    fill(dc, &client, black);
-    let width = (client.right - client.left).max(0);
-    let height = (client.bottom - client.top).max(0);
-    if width > 0 && height > 0 {
-        let border = 8.min(width).min(height);
-        fill_box(dc, accent, 0, 0, width, border);
-        fill_box(dc, accent, 0, height - border, width, height);
-        fill_box(dc, accent, 0, 0, border, height);
-        fill_box(dc, accent, width - border, 0, width, height);
-        let mut banner = RECT {
-            left: border,
-            top: border,
-            right: width - border,
-            bottom: 42.min(height - border),
-        };
-        if banner.right > banner.left && banner.bottom > banner.top {
-            fill(dc, &banner, accent);
-            draw_banner(dc, &mut banner);
-        }
-    }
-    delete_brush(black);
-    delete_brush(accent);
-    // SAFETY: matches the BeginPaint call above using the same live window and PAINTSTRUCT.
-    let _ = unsafe { EndPaint(window, &paint) };
-}
-
-fn create_brush(color: COLORREF) -> HBRUSH {
-    // SAFETY: creating a solid brush from a concrete COLORREF has no borrowed lifetime.
-    unsafe { CreateSolidBrush(color) }
-}
-
-fn fill(dc: HDC, rect: &RECT, brush: HBRUSH) {
-    // SAFETY: the HDC, rectangle, and brush are valid for the active paint operation.
-    unsafe { FillRect(dc, rect, brush) };
-}
-
-fn fill_box(dc: HDC, brush: HBRUSH, left: i32, top: i32, right: i32, bottom: i32) {
-    fill(
-        dc,
-        &RECT {
-            left,
-            top,
-            right,
-            bottom,
-        },
-        brush,
-    );
-}
-
-fn delete_brush(brush: HBRUSH) {
-    // SAFETY: each locally created brush is deleted once after the paint operation.
-    let _ = unsafe { DeleteObject(HGDIOBJ(brush.0)) };
-}
-
-fn draw_banner(dc: HDC, rect: &mut RECT) {
-    let mut text: Vec<u16> = BANNER_TEXT.encode_utf16().collect();
-    // SAFETY: the HDC is active; the text buffer and rectangle remain valid for these calls.
-    unsafe {
-        SetBkMode(dc, BACKGROUND_MODE(TRANSPARENT.0));
-        SetTextColor(dc, rgb(255, 255, 255));
-        DrawTextW(
-            dc,
-            &mut text,
-            rect,
-            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
-        );
-    }
-}
-
-const fn rgb(red: u8, green: u8, blue: u8) -> COLORREF {
-    COLORREF((red as u32) | ((green as u32) << 8) | ((blue as u32) << 16))
 }

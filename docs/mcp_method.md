@@ -80,7 +80,7 @@ observation stale để tránh tác động nhầm control.
 Chỉ dùng `desktop_input_begin → desktop_input_act → desktop_input_end` khi app không expose UI
 Automation pattern phù hợp và takeover đã qua authorization/approval. Takeover có thể giành chuột và
 bàn phím nên trong suốt session ChatCMD hiển thị viền nhấp nháy, click-through, luôn ở trên quanh
-target và banner **Computer control active — Press ESC to stop**. ESC hoạt động như global emergency
+cả target window lẫn toàn monitor chứa target, cùng banner **Computer control active — Press ESC to stop**. ESC hoạt động như global emergency
 stop. Nếu user chuyển focus khỏi đúng target window, runtime fail closed và hủy session trước input kế tiếp,
 không tiếp tục gõ vào app mới. Chỉ cho phép một takeover đồng thời; phím Windows/Meta bị từ chối.
 
